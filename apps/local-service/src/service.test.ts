@@ -1,22 +1,38 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { PersistentEvent } from '@paldock/contracts';
+import type { PersistentEvent, RuntimeAdapter } from '@paldock/contracts';
 import { IpcClient, createIpcPath, createToken, readFrames, writeFrame } from '@paldock/platform';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DataRootLockedError, LocalService } from './service.js';
 
 let dir: string;
+let repo: string;
 let token: string;
 let ipcPath: string;
 let service: LocalService | undefined;
 
+/** 不启动任何执行器：start 直接失败，用于只测 IPC 的场景。 */
+const offlineRuntime: RuntimeAdapter = {
+  name: 'offline',
+  discover: async () => ({ runtime: 'offline', available: false, capabilities: {} as never }),
+  start: async () => {
+    throw new Error('offline');
+  },
+  checkTurn: async () => ({ status: 'not_found' }),
+};
+
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'paldock-svc-'));
+  repo = join(dir, 'repo');
+  mkdirSync(repo);
+  execFileSync('git', ['init', '-q', repo]);
   token = createToken();
-  ipcPath = createIpcPath(dir);
-  service = await LocalService.start({ dataRoot: dir, ipcPath, token });
+  ipcPath = createIpcPath(join(dir, 'data'));
+  mkdirSync(join(dir, 'data'));
+  service = await LocalService.start({ dataRoot: join(dir, 'data'), ipcPath, token, runtime: offlineRuntime });
 });
 afterEach(async () => {
   await service?.stop();
@@ -28,6 +44,9 @@ async function connectClient(events: PersistentEvent[] = []) {
   await client.connect(ipcPath, token);
   return client;
 }
+
+const newTask = (client: IpcClient, key: string) =>
+  client.request('task.create', { rootPath: repo, goal: '样例任务', idempotencyKey: key }) as Promise<{ task: { id: string } }>;
 
 describe('本地服务 IPC', () => {
   it('错误令牌被断开，收不到 welcome', async () => {
@@ -42,18 +61,19 @@ describe('本地服务 IPC', () => {
   it('命令执行并广播事件；断线重连按序号补发', async () => {
     const seen: PersistentEvent[] = [];
     const a = await connectClient(seen);
-    const ws = (await a.request('workspace.create', { name: 'demo', rootPath: join(dir, 'proj') })) as { id: string };
-    const task = (await a.request('task.create', { workspaceId: ws.id, title: '样例任务' })) as { id: string };
+    await newTask(a, 'key-aaaaaaaa');
     await a.close();
+    const before = seen.length;
+    expect(seen[0]?.type).toBe('task.created');
 
-    // 离线期间由另一个客户端推进状态
+    // 离线期间由另一个客户端再建一个任务
     const b = await connectClient();
-    await b.request('task.transition', { taskId: task.id, expectedVersion: 0, to: 'queued' });
+    await newTask(b, 'key-bbbbbbbb');
     await b.close();
 
     // 同一个客户端重连：connect 返回时已补齐断线期间的事件
     await a.connect(ipcPath, token);
-    expect(seen.map((e) => e.type)).toEqual(['task.created', 'task.status_changed']);
+    expect(seen.slice(before).map((e) => e.type)).toContain('task.created');
     await a.close();
 
     // 全新客户端不补发历史
@@ -66,25 +86,34 @@ describe('本地服务 IPC', () => {
     await expect(new IpcClient(() => {}).connect(ipcPath, createToken())).rejects.toThrow();
   });
 
-  it('外键与唯一约束映射为 not_found / conflict', async () => {
+  it('业务错误带错误码返回，参数错误为 bad_request', async () => {
     const client = await connectClient();
-    await expect(client.request('task.create', { workspaceId: 'ws_missing', title: 't' })).rejects.toMatchObject({ code: 'not_found' });
-    await client.request('workspace.create', { name: 'a', rootPath: 'same' });
-    await expect(client.request('workspace.create', { name: 'b', rootPath: 'same' })).rejects.toMatchObject({ code: 'conflict' });
+    await expect(client.request('task.get', { taskId: 'nope' })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(client.request('task.create', { rootPath: '', goal: '', idempotencyKey: 'x' })).rejects.toMatchObject({
+      code: 'bad_request',
+    });
+    await expect(client.request('task.create', { rootPath: join(dir, 'missing'), goal: 'g', idempotencyKey: 'key-cccccccc' })).rejects.toMatchObject({
+      code: 'bad_request',
+    });
     await client.close();
   });
 
-  it('业务错误带错误码返回，参数错误为 bad_request', async () => {
+  it('执行器启动失败时任务进入阻塞并带原因', async () => {
     const client = await connectClient();
-    await expect(client.request('task.transition', { taskId: 'nope', expectedVersion: 0, to: 'queued' })).rejects.toMatchObject({
-      code: 'not_found',
-    });
-    await expect(client.request('task.create', { workspaceId: '', title: '' })).rejects.toMatchObject({ code: 'bad_request' });
-    await client.close();
+    const { task } = await newTask(client, 'key-dddddddd');
+    for (let i = 0; i < 100; i++) {
+      const detail = (await client.request('task.get', { taskId: task.id })) as { subtask: { status: string; statusReason: string } };
+      if (detail.subtask.status === 'blocked') {
+        expect(detail.subtask.statusReason).toMatch(/启动失败/);
+        return client.close();
+      }
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    throw new Error('任务没有进入阻塞');
   });
 
   it('同一数据根不能启动第二个服务', async () => {
-    await expect(LocalService.start({ dataRoot: dir, ipcPath: createIpcPath(dir), token })).rejects.toBeInstanceOf(
+    await expect(LocalService.start({ dataRoot: join(dir, 'data'), ipcPath: createIpcPath(dir), token })).rejects.toBeInstanceOf(
       DataRootLockedError,
     );
   });

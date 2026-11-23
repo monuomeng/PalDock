@@ -5,6 +5,7 @@ import {
   ServerFrame,
   type CommandArgsOf,
   type CommandName,
+  type EphemeralEvent,
   type PersistentEvent,
 } from '@paldock/contracts';
 import { readFrames, writeFrame } from './ipc.js';
@@ -20,7 +21,11 @@ export class IpcClient {
   private readonly pending = new PendingRequests();
   private lastSeq: number | undefined;
 
-  constructor(private readonly onEvent: (event: PersistentEvent) => void) {}
+  constructor(
+    private readonly onEvent: (event: PersistentEvent) => void,
+    /** 临时事件（流式输出片段），断线期间的不补发。 */
+    private readonly onEphemeral: (event: EphemeralEvent) => void = () => {},
+  ) {}
 
   /** 握手完成且补发结束后 resolve；握手前连接被关闭（令牌错误、超时、版本不符）则 reject。 */
   connect(path: string, token: string): Promise<void> {
@@ -53,6 +58,8 @@ export class IpcClient {
           } else if (frame.kind === 'event') {
             this.lastSeq = Math.max(this.lastSeq ?? 0, frame.event.seq);
             this.onEvent(frame.event);
+          } else if (frame.kind === 'ephemeral') {
+            this.onEphemeral(frame.event);
           } else if (frame.kind === 'result') {
             if (frame.ok) this.pending.resolve(frame.id, frame.value);
             else this.pending.reject(frame.id, new CodedError(frame.error.code, frame.error.message));

@@ -5,3 +5,4 @@ export * from './records.js';
 export type * from './runtime.js';
 export * from './supervisor.js';
 export * from './errors.js';
+export type * from './storage.js';

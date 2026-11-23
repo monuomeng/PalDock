@@ -16,6 +16,9 @@ import {
 const Id = z.string().min(1);
 const Reason = z.string().max(500).optional();
 
+export const RunNoticeCode = z.enum(['unknown_request', 'resume_failed', 'output_truncated']);
+export type RunNoticeCode = z.infer<typeof RunNoticeCode>;
+
 const transition = <T extends z.ZodType>(status: T) => z.object({ from: status, to: status, reason: Reason });
 
 /**
@@ -57,7 +60,7 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
   /** 需要让用户知道、但不改变状态的情况，例如执行器发来未识别的请求、恢复失败。 */
   z.object({
     type: z.literal('run.notice'),
-    payload: z.object({ code: z.enum(['unknown_request', 'resume_failed', 'output_truncated']), detail: z.string().max(500) }),
+    payload: z.object({ code: RunNoticeCode, detail: z.string().max(500) }),
   }),
 ]);
 export type PersistentEventBody = z.infer<typeof PersistentEventBody>;

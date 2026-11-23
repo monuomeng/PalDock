@@ -39,6 +39,9 @@ importers:
 
   apps/local-service:
     dependencies:
+      '@paldock/application':
+        specifier: workspace:*
+        version: link:../../packages/application
       '@paldock/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -48,12 +51,27 @@ importers:
       '@paldock/platform':
         specifier: workspace:*
         version: link:../../packages/platform
+      '@paldock/runtime-codex':
+        specifier: workspace:*
+        version: link:../../packages/runtime-codex
       '@paldock/storage-sqlite':
         specifier: workspace:*
         version: link:../../packages/storage-sqlite
       zod:
         specifier: 4.6.7
         version: 4.6.7
+
+  packages/application:
+    dependencies:
+      '@paldock/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@paldock/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@paldock/platform':
+        specifier: workspace:*
+        version: link:../platform
 
   packages/channel-feishu:
     dependencies:

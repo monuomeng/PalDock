@@ -4,10 +4,12 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@paldock/application": "workspace:*",
     "@paldock/contracts": "workspace:*",
     "@paldock/domain": "workspace:*",
-    "@paldock/storage-sqlite": "workspace:*",
     "@paldock/platform": "workspace:*",
+    "@paldock/runtime-codex": "workspace:*",
+    "@paldock/storage-sqlite": "workspace:*",
     "zod": "4.6.7"
   },
   "main": "dist/main.js"

@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type {
-  CheckCommand,
+  Change,
+  CreatedTask,
+  NewTask,
   SessionRecord,
   SubtaskRecord,
   SubtaskStatus,
   TaskRecord,
   TaskStatus,
+  TaskStorePort,
   TaskSummary,
   WorkspaceRecord,
 } from '@paldock/contracts';
@@ -14,23 +17,7 @@ import type { Clock } from './clock.js';
 import { COLUMNS, toTask, type TaskRow } from './columns.js';
 import type { Database } from './database.js';
 import type { EventLog } from './event-log.js';
-import { applyTransition, statusChanged, type Change, type TransitionSpec } from './writes.js';
-
-export interface NewTask {
-  workspaceId: string;
-  title: string;
-  goal: string;
-  role: string;
-  checkCommand: CheckCommand | null;
-  checkConfirmed: boolean;
-  idempotencyKey: string;
-}
-
-export interface CreatedTask {
-  task: TaskRecord;
-  subtask: SubtaskRecord;
-  session: SessionRecord;
-}
+import { applyTransition, statusChanged, type TransitionSpec } from './writes.js';
 
 const SQL = {
   // 按项目路径找到或创建；DO UPDATE 让 RETURNING 在已存在时也返回该行
@@ -95,7 +82,7 @@ const newId = (prefix: string) => `${prefix}_${randomUUID()}`;
  * 项目、任务、子任务与助手会话的写入口。每个写方法一个事务，状态表与事件同时提交；
  * 返回值直接来自 RETURNING，不回查。
  */
-export class TaskRepository {
+export class TaskRepository implements TaskStorePort {
   constructor(
     private readonly db: Database,
     private readonly events: EventLog,

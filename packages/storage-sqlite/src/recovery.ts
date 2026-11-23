@@ -1,4 +1,4 @@
-import type { PersistentEvent, RunStatus } from '@paldock/contracts';
+import type { InterruptedRun, RecoveryReport, RunStatus } from '@paldock/contracts';
 import type { Clock } from './clock.js';
 import type { Database } from './database.js';
 import type { EventLog } from './event-log.js';
@@ -32,19 +32,6 @@ const SQL = {
     UPDATE inbox SET status = 'pending', lease_until = NULL
      WHERE status = 'processing'`,
 } as const;
-
-export interface InterruptedRun {
-  id: string;
-  subtaskId: string;
-  /** 可按原生会话 ID 尝试续做；为空则只能重新开始或放弃。 */
-  nativeThreadId: string | null;
-}
-
-export interface RecoveryReport {
-  interruptedRuns: InterruptedRun[];
-  reopenedInbox: number;
-  events: PersistentEvent[];
-}
 
 /**
  * 服务启动时（此时没有任何执行器连接）和正常退出前运行，同一事务：

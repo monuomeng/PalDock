@@ -1,14 +1,10 @@
 import type { SQLInputValue } from 'node:sqlite';
-import type { PersistentEvent, PersistentEventBody } from '@paldock/contracts';
+import type { Change, PersistentEventBody } from '@paldock/contracts';
 import { DomainError, type StateMachine } from '@paldock/domain';
 import type { Database } from './database.js';
 import type { EventLog } from './event-log.js';
 
-/** 写操作的统一返回：最新状态（来自 RETURNING）+ 同事务写入的事件，供调用方广播。 */
-export interface Change<T> {
-  record: T;
-  events: PersistentEvent[];
-}
+export type { Change };
 
 /** 插入一行并追加对应事件，同一事务；记录直接来自 RETURNING，不回查。 */
 export function insertWithEvent<T extends { id: string | number }>(

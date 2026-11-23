@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import type { RecoveryReport, StorePort } from '@paldock/contracts';
 import { AttentionQueries } from './attention.js';
 import { backupDataRoot, type BackupResult } from './backup.js';
 import { Clock } from './clock.js';
@@ -7,7 +8,7 @@ import { EventLog } from './event-log.js';
 import { Inbox } from './inbox.js';
 import { MessageStore } from './messages.js';
 import { migrate, type MigrateResult } from './migrations/index.js';
-import { interruptActiveWork, type RecoveryReport } from './recovery.js';
+import { interruptActiveWork } from './recovery.js';
 import { RunRepository } from './run-repository.js';
 import { TaskRepository } from './task-repository.js';
 
@@ -19,12 +20,11 @@ export type { EventLog } from './event-log.js';
 export type { Inbox, InboxItem } from './inbox.js';
 export type { MessageStore } from './messages.js';
 export { MIGRATIONS, migrate, type MigrateResult, type Migration } from './migrations/index.js';
-export { ACTIVE_RUN_STATUSES, interruptActiveWork, type InterruptedRun, type RecoveryReport } from './recovery.js';
-export type * from './run-repository.js';
-export type * from './task-repository.js';
-export type { Change } from './writes.js';
+export { ACTIVE_RUN_STATUSES, interruptActiveWork } from './recovery.js';
+export type { RunRepository } from './run-repository.js';
+export type { TaskRepository } from './task-repository.js';
 
-export interface Store {
+export interface Store extends StorePort {
   db: Database;
   events: EventLog;
   tasks: TaskRepository;

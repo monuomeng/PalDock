@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type {
   ApprovalChannel,
+  Change,
+  NewApproval,
+  NewRun,
+  NewRunResult,
+  PersistentEvent,
+  RunNoticeCode,
+  RunStorePort,
   ApprovalKind,
   ApprovalRecord,
   ApprovalStatus,
@@ -18,29 +25,7 @@ import type { Clock } from './clock.js';
 import { COLUMNS } from './columns.js';
 import type { Database } from './database.js';
 import type { EventLog } from './event-log.js';
-import { applyTransition, insertWithEvent, statusChanged, type Change, type TransitionSpec } from './writes.js';
-
-export interface NewRun {
-  subtaskId: string;
-  sessionId: string;
-  runtime: string;
-  /** 续做时沿用的原生会话，以及被续做的那次 Run。 */
-  nativeThreadId?: string;
-  resumesRunId?: string;
-}
-
-export interface NewApproval {
-  runId: string;
-  kind: ApprovalKind;
-  riskLevel: RiskLevel;
-  summary: string;
-  detail: string | null;
-  cwd: string | null;
-  nativeRequestId: string | null;
-  ttlMs: number;
-}
-
-export type NewRunResult = Omit<RunResultRecord, 'collectedAt'>;
+import { applyTransition, insertWithEvent, statusChanged, type TransitionSpec } from './writes.js';
 
 const SQL = {
   // 每次 Run 是独立尝试，attempt 在子任务内递增（走 UNIQUE (subtask_id, attempt) 索引）；旧 Run 及其证据保留
@@ -73,6 +58,7 @@ const SQL = {
     INSERT INTO run_results (run_id, final_message, diff_stat, check_status, check_exit_code, check_duration_ms, check_output_ref, collected_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING ${COLUMNS.result()}`,
+  selectResult: `SELECT ${COLUMNS.result()} FROM run_results WHERE run_id = ?`,
   insertReview: `
     INSERT INTO run_reviews (id, run_id, decision, note, decided_at) VALUES (?, ?, ?, ?, ?)
     RETURNING ${COLUMNS.review()}`,
@@ -121,7 +107,7 @@ const groupByRun = <T extends { runId: string | null }>(rows: T[]) => {
 };
 
 /** Run、审批、证据与验收记录的写入口；规则同 TaskRepository。 */
-export class RunRepository {
+export class RunRepository implements RunStorePort {
   constructor(
     private readonly db: Database,
     private readonly events: EventLog,
@@ -236,11 +222,19 @@ export class RunRepository {
     });
   }
 
+  getResult(runId: string): RunResultRecord | undefined {
+    return this.db.get<RunResultRecord>(SQL.selectResult, runId);
+  }
+
   addReview(runId: string, decision: ReviewDecision, note: string | null): Change<RunReviewRecord> {
     return insertWithEvent(this.db, this.events, SQL.insertReview, [newId('rev'), runId, decision, note, this.clock.iso()], () => ({
       type: 'review.decided',
       payload: { decision },
     }));
+  }
+
+  addNotice(runId: string, code: RunNoticeCode, detail: string): PersistentEvent {
+    return this.events.append(runId, { type: 'run.notice', payload: { code, detail: detail.slice(0, 500) } });
   }
 
   /** 子任务的全部 Run 及其证据，按 attempt 升序；共 5 条查询，与 Run 的数量无关。 */
