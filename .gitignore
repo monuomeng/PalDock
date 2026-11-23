@@ -33,3 +33,6 @@ release/
 *.AppImage
 .DS_Store
 Thumbs.db
+
+# IDE
+.idea/
