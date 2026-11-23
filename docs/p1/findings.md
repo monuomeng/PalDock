@@ -1,0 +1,53 @@
+# P1 实测记录
+
+记录时间 2026-11-23，Windows 11（10.0.26200，x64），Node 26.7.0（开发与测试），Electron 45.2.3，Codex 0.166.0，git 2.42。只记录实际跑过的结果。计划见 [P1 开发计划](../plan/p1-local-mvp.md)，变更说明见 [docs/pr/p1-local-mvp.md](../pr/p1-local-mvp.md)。
+
+## 结论一览
+
+| 项 | 结果 |
+|---|---|
+| 离线测试 | `pnpm test` 143 项通过（契约、状态机、存储、平台、服务 IPC、Codex 适配器对模拟执行器、用例层、P1 端到端流程、许可证判定） |
+| 桌面端到端 | `node scripts/p1/e2e-check.mjs` 30 项全部通过（真实 Electron 窗口 + 本地服务 + 离线模拟 Codex + 临时 git 仓库） |
+| 真实 Codex（opt-in） | 建任务→执行→回显→证据→验收、执行中取消通过；越界写入被拦截且不写入（发现并修复一处风险误判，见下） |
+| 许可证 | 54 个生产依赖（含传递依赖）与随包分发的 electron 均为允许闭源分发的许可证 |
+| CI | 工作流已写好（Windows 必过、macOS 同跑），**尚未在 GitHub 上运行**，以第一次运行结果为准 |
+| 安装包 | Windows NSIS 安装包已打出，免安装目录实机跑通；安装程序本身未运行（见文末） |
+
+## 真实 Codex（`PALDOCK_LIVE_CODEX=1 pnpm exec vitest run tests/live`）
+
+经用户同意消耗少量额度，共 5 次短对话（计划 2–3 次，多出的 2 次用于定位下面的风险误判）。
+
+| 场景 | 结果 |
+|---|---|
+| 建任务 → worktree → 执行 → 回显 → 证据 → 验收 | 通过：Codex 在 worktree 内写入 `hello.txt`，无需审批；改动统计含该文件；验收后提交到 `paldock/<编号>` 分支 |
+| 执行中取消 | 通过：等 `turn/started` 后中断，Run、子任务、任务均为已取消 |
+| 写 worktree 之外的文件 | 文件没有被写入。Codex 的 `workspace-write` 沙箱在 Windows 上直接拒绝了越界写入（「访问被拒绝」）；让它申请提权时，它以**命令审批**（PowerShell 写文件命令，而不是文件改动审批）发来请求，拒绝后正常结束 |
+
+**发现的问题（已修复）**：上面那条越界写文件的 PowerShell 命令，路径里恰好含 `tests` 目录名，被风险分级当成「运行测试」判为**低风险**。修复后命令审批不再按命令名降级；命令里出现 worktree 以外的绝对路径、或用 `..` 跳出，即按「写 worktree 以外」判为高风险。`/code-review` 又发现这个判断会把网址、`cmd /c` 开关、开头的 `powershell.exe` 路径误判为越界，一并修正并加了测试。复跑：唯一一次审批为高风险，拒绝后文件不存在。
+
+**沙箱注意点**：Codex 的 `workspace-write` 沙箱默认允许写系统临时目录（第一次测试把目标文件放在 `%TEMP%` 下时没有触发任何审批）。所以「worktree 以外不可写」只对非临时目录成立；P1 的风险说明与文档按此表述。
+
+## 模拟执行器
+
+`packages/runtime-codex/mock/mock-app-server.mjs` 按行 JSON-RPC 实现 PalDock 用到的 Codex 方法，thread 状态存在 `CODEX_HOME`（或 `MOCK_CODEX_HOME`）下，跨进程可续做与核对。提示词里的指令决定行为：文件审批、命令审批、权限扩展、未识别请求、收回请求、早到的审批、缓慢输出、失败、turn 中途崩溃、完成落盘后崩溃。它与真实 Codex 一致地在 `turn/started` 之前拒绝中断。
+
+## 桌面端到端（`scripts/p1/e2e-check.mjs`）
+
+覆盖：连上服务；渲染进程拿不到 Node；preload 白名单；未登记命令被拒；页面经 `paldock://` 自定义协议加载；表单建任务→执行→流式回显→待验收→证据（改动统计、检查通过、检查输出已脱敏）→验收完成；「待我处理」列出 A 的审批和 B 的待验收；点开只记已读；窗口重载后审批仍在；拒绝 A 只移除 A；退回 B 后旧证据与意见可查；执行中取消；强杀服务后倒计时重启、被中断任务显示阻塞与原因、「恢复」后续做完成；第二实例退出；禁止跳转外部网址；关闭窗口后正常退出并清理锁；重新打开后任务仍在。macOS 上另检查套接字权限为 600。截图写到 `p1-e2e-*.png`（不入库）。
+
+## 其他实测结论
+
+- **file:// 不能加载 ES 模块**：管理界面改为经 `protocol.handle` 注册的 `paldock://app/` 加载，只返回打包目录内的静态文件。
+- **`.cmd` 文件按系统代码页读取**：检查命令里 Windows `.cmd` 外壳（如 `pnpm.cmd`）内部的非 ASCII 路径会乱码；参数本身经命令行（UTF-16）传递不受影响。
+- **执行器进程与服务进程**：服务被强杀时，Windows 不会连带结束它启动的执行器进程（没有 Job Object）；执行器的 stdin 随之关闭，模拟执行器会自行退出，真实 Codex 是否在 stdin 关闭后退出未单独验证。
+
+## 安装包
+
+`pnpm build` 后在 `apps/desktop` 运行 `pnpm dist`（electron-builder 26.18.0，MIT，仅开发依赖）。本机经 npmmirror 下载打包所需的 NSIS 等工具；`electronDist` 指向已下载的 Electron，避免再下载一次。
+
+| 项 | 结果 |
+|---|---|
+| 产物 | `release/desktop/PalDock-Setup-0.1.0.exe`（约 117 MB，未签名），NSIS：非一键安装、可选安装目录（可选 D 盘）、按当前用户安装、卸载不删数据 |
+| 免安装目录 `win-unpacked` 实机 | 启动后连上本地服务；管理界面从 asar 内经 `paldock://` 加载；用模拟执行器建任务跑到待验收，证明本地服务在 asar 里由 `utilityProcess` 正常启动，执行器经打包后的 `PalDock.exe` + `ELECTRON_RUN_AS_NODE=1` 启动（P0 未实测的一项） |
+| 安装程序本身 | **未运行**：安装会写开始菜单和注册表，留给用户在自己的机器上试；卸载行为按 electron-builder 的 NSIS 默认（删除安装目录，不删 `%APPDATA%\PalDock` 与数据目录） |
+| 未做 | 代码签名（SmartScreen 会提示未知发布者）、应用图标（用的是 Electron 默认图标）、自动更新 |

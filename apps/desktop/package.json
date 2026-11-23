@@ -1,19 +1,56 @@
 {
   "name": "@paldock/desktop",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --publish never"
   },
   "dependencies": {
     "@paldock/contracts": "workspace:*",
-    "@paldock/platform": "workspace:*",
     "@paldock/local-service": "workspace:*",
+    "@paldock/platform": "workspace:*",
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "electron": "45.2.3"
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0"
+  },
+  "description": "PalDock 开发预览",
+  "author": "PalDock",
+  "build": {
+    "appId": "dev.paldock.desktop",
+    "productName": "PalDock",
+    "directories": {
+      "output": "../../release/desktop"
+    },
+    "files": [
+      "dist/**",
+      "static/**",
+      "!static/app/**/*.map",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "PalDock-Setup-${version}.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "electronDist": "node_modules/electron/dist"
   }
 }
