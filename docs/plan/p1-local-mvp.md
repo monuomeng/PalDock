@@ -1,6 +1,6 @@
 # P1 开发计划：本地最小产品
 
-状态：**草案第二版，待用户审阅**（2026-11-23；已按 Codex 的审阅意见修订，见文末「修订记录」）。负责人：Claude；分支 `claude/project-thread-8azrof`，基于已合入 master 的 P0（`d0d9cd0`）。设计依据见 [架构](../02-architecture.md)、[ADR 0002](../adr/0002-process-topology-and-task-board.md)、[路线图](../03-roadmap.md) 和 [P0 实测记录](../p0/findings.md)；完成后的前因后果写在 `docs/pr/p1-local-mvp.md`。
+状态：**草案第三版，待用户审阅**（2026-11-23；已按 Codex 的审阅意见修订，见文末「修订记录」）。负责人：Claude；分支 `claude/project-thread-8azrof`，基于已合入 master 的 P0（`d0d9cd0`）。设计依据见 [架构](../02-architecture.md)、[ADR 0002](../adr/0002-process-topology-and-task-board.md)、[路线图](../03-roadmap.md) 和 [P0 实测记录](../p0/findings.md)；完成后的前因后果写在 `docs/pr/p1-local-mvp.md`。
 
 ## 目标
 
@@ -45,10 +45,10 @@
 
 | 表 / 变更 | 用途 |
 |---|---|
-| `tasks` 加 `goal`、`check_command`（可空）、`idempotency_key`（可空，唯一部分索引） | 任务目标和可选检查命令；重复提交同一请求只建一次任务 |
+| `tasks` 加 `goal`、`check_command`（可空，JSON：`{ executable, args[] }`）、`idempotency_key`（可空，唯一部分索引） | 任务目标和可选检查命令；重复提交同一请求只建一次任务 |
 | `sessions`（`kind` main/agent、`parent_id`、`workspace_id`、`role`） | PalDock 助手会话；P1 每个子任务一个 agent 会话 |
 | `runtime_sessions`（`session_id`、`runtime`、`native_id`） | 原生会话 ID（Codex thread），与 PalDock 会话分开存 |
-| `runs` 加 `session_id`、`native_turn_id`、`worktree_path`、`branch`、`failure_reason` | 每次 Run 的执行位置与失败原因；`runId → thread ID → turn ID` 一一对应，恢复时只认这次 Run 自己的 turn |
+| `runs` 加 `session_id`、`native_thread_id`、`native_turn_id`、`resumes_run_id`（可空）、`worktree_path`、`branch`、`failure_reason` | 每次 Run 的执行位置与失败原因。一次 Run 只对应一个 turn，`native_turn_id` 写入后不再修改；续做时新建 Run 并用 `resumes_run_id` 指向被续做的那次，原 Run 的记录原样保留 |
 | `run_results`（`run_id` 主键、`final_message`、`diff_stat`、`check_exit_code`、`check_duration_ms`、`check_output_ref`、`collected_at`） | 每次 Run 的证据；退回重做后旧 Run 的证据保留。检查命令的完整输出脱敏后存为 `artifacts/` 下的文件，库里只存引用 |
 | `approvals` 加 `native_request_id`、`kind`（command / file_change / permissions / other）、`cwd`、`detail` | 回复执行器时要原样带回的请求 ID 和展示用的命令/改动摘要 |
 | `run_reviews`（`run_id`、`decision` accept/rework、`note`、`decided_at`） | 验收或退回的意见绑定到产生证据的那次 Run |
@@ -56,13 +56,15 @@
 要点：
 
 - 流式输出只走临时事件；Run 结束或每 N 秒的检查点合并成一条 `messages` 记录（`session_id` 为该 agent 会话），中途崩溃最多丢最后一段未落库的片段。
-- 「待我处理」视图更新：`review` 条目直达最新 Run 的证据；新增 `interrupted_run`（服务重启后被中断、等用户选择恢复或放弃的 Run）。视图改动在新迁移里 `DROP VIEW` 后重建。
+- 「待我处理」视图更新：`review` 和 `blocked` 条目都直达该子任务最新那次 Run（证据或中断原因）；被中断的 Run 不单设条目类型，经子任务 `blocked` 出现。视图改动在新迁移里 `DROP VIEW` 后重建。
 - 所有新查询都配条件逐字一致的部分索引，并在测试里用 `EXPLAIN QUERY PLAN` 断言；写入用 `RETURNING`。
 - **幂等**：`task.create` 带客户端生成的 `idempotencyKey`，重复请求返回已建任务；审批决定、验收决定靠 `version` 防重放。
-- **备份**：新增命令 `maintenance.backup`，用 online backup 写到 `<数据根>/backups/manual-<时间>.db`；恢复方法写进运维说明（停服务，复制回 `paldock.db`）。测试覆盖备份后可打开、数据一致。
+- **备份**：新增命令 `maintenance.backup`，写到 `<数据根>/backups/manual-<时间>/`，内含数据库（online backup）和 `artifacts/` 的完整副本，另附 `manifest.json`（时间、库版本、文件清单与大小）。先复制产物、再备份数据库，保证库里引用的文件都在备份中。测试覆盖：备份可打开、数据一致、库中引用的每个产物文件都在备份里。
+  - **不在备份范围内**：worktree（未提交的改动不备份；已提交的内容在用户仓库的 `paldock/` 分支里）、Codex 原生会话（在 Codex 自己的历史目录里，恢复后旧 Run 可能无法再 resume）、凭据（在系统凭据库）。迁移前的自动备份只含数据库，这一点在说明里写明。
+  - **恢复**：停服务后用备份中的数据库和 `artifacts/` 整体替换。服务启动时若发现库中引用的产物文件不存在，在证据处显示「证据文件缺失」，不报错退出。
 - **审批在什么情况下保留**：只关闭或重建窗口、服务一直存活时，挂起的审批原样保留，重新打开后仍待审批。服务重启或执行器进程重启后，执行器侧的请求已经失效，旧审批一律置为 `cancelled`（原因写明「服务重启」或「执行器重启」）；Run 恢复执行后，执行器若仍要做那个操作，会重新发起请求，生成一条新的审批。
-- **恢复程序扩展**：服务启动时 `running` 等活动 Run 置为 `interrupted`（已有），同时把对应子任务置为 `blocked` 并附原因，于是出现在「待我处理」里，用户可选择：
-  - 「恢复」：同一个 Run，按 thread ID `thread/resume` 后发一条续做的 turn，新 turn ID 记到这次 Run 上；
+- **恢复程序扩展**：服务启动时 `running` 等活动 Run 置为 `interrupted`（已有），同时把对应子任务置为 `blocked` 并附原因，于是出现在「待我处理」里（作为阻塞条目，直达该子任务最新的那次 Run），用户可选择：
+  - 「恢复」：新建一次 Run，`resumes_run_id` 指向被中断的 Run，按同一 thread ID `thread/resume` 后发一条续做的 turn；被中断的 Run 保持 `interrupted`，它的 turn 和证据都不改；
   - 「重新开始」：新建一次 Run 和新的 thread，旧 Run 的会话和证据保留；
   - 「放弃」：子任务为 `failed`。
 - **恢复失败不静默新建**：`thread/resume` 失败时 Run 保持 `interrupted`，界面明确提示恢复失败的原因，只给「重新开始」和「放弃」两个选项。不自动换成新 thread，避免上下文和审批边界在用户不知情时改变。`contracts/runtime.ts` 里「恢复失败再新建」的注释同步改掉。
@@ -90,7 +92,9 @@ packages/application/src/   新包：用例层，不依赖 Electron/SQLite 具�
 
 - **谁授权**：命令只能由用户在桌面新建任务时亲手填写，执行器和模型不能设置或修改它。每次 Run 结束后不自动运行，先生成一条「运行检查」审批（风险为中，显示完整命令和目录），用户批准后才执行；拒绝则证据里记「未运行检查」。
 - **工作目录**：固定为这次 Run 的 worktree，路径经规范化后必须位于数据根的 `worktrees/` 下。
-- **启动方式**：参数数组启动，不经 shell 拼接。命令按空白拆成可执行文件和参数，不支持管道、重定向等 shell 语法（需要时由用户写成项目里的脚本）。Windows 上 `.cmd` 外壳（如 `pnpm.cmd`）只能经 `cmd.exe /d /s /c` 启动，此时对参数做严格转义。
+- **命令格式**：结构化存储为「可执行文件 + 参数数组」，不做任何字符串拆分。新建任务时界面分两栏填写：可执行文件一栏，参数每行一个。不支持管道、重定向、环境变量展开等 shell 语法，需要时由用户写成项目里的脚本。
+- **支持范围**：可执行文件可以是绝对路径，或在 PATH（白名单环境里的 PATH）上按名字查找。`.exe` 及 macOS 上的可执行文件直接以 `spawn(file, args, { shell: false })` 启动，参数原样传入。Windows 上的 `.cmd` / `.bat`（如 `pnpm.cmd`）Node 不允许直接启动，经 `cmd.exe /d /s /c` 并按 cmd 的规则给每个参数加引号转义；cmd 无法安全转义 `%`、`!`、`"` 和换行，含这些字符的参数直接拒绝并提示原因。
+- **测试**：带空格的可执行文件路径和参数、中文路径、`&|<>^()` 等 cmd 元字符、被拒绝的 `%` 与 `"`，在 Windows 上逐项验证参数原样到达。
 - **环境变量**：与执行器同一份白名单，另加 `CI=1`；不传 PalDock 自身的令牌、管道名和任何凭据。
 - **权限的限度**：P1 没有操作系统级沙箱，检查命令以当前用户身份运行，可以联网、可以访问用户能访问的文件。这一点在审批卡片和文档里写明，由用户决定是否运行。
 - **取消与超时**：任务取消或超时（占位 10 分钟）时结束整个进程树（Windows `taskkill /T /F`，macOS 进程组）；服务退出时同样清理。
@@ -115,10 +119,10 @@ P0 发现的问题在这里落实：
 
 渲染进程继续不用框架：TypeScript 编译成浏览器 ES 模块，按页面分文件（`views/attention.ts`、`views/tasks.ts`、`views/task-detail.ts`、`views/new-task.ts`），一个很小的 `store.ts` 负责事件订阅和按需刷新。不引入 React 等依赖，保持 CSP 严格。
 
-- **首页「待我处理」**：审批、待验收、阻塞、执行状态待确认、被中断的 Run，按时间排序；未读加粗，点开记已读但不移除；每条点击直达对应对象。
+- **首页「待我处理」**：审批、待验收、阻塞（含服务重启后被中断、等你选择的任务）、执行状态待确认，按时间排序；未读加粗，点开记已读但不移除；每条点击直达对应对象。
 - **任务列表**：按状态分组，显示项目、最新 Run 状态、更新时间。
-- **任务详情**：目标、分支与 worktree 路径、按时间列出各次 Run（执行器、原生会话 ID、状态、用时）；当前 Run 流式输出；审批卡片（命令/改动摘要、目录、风险、过期时间，允许/拒绝）；证据（改动统计、最终回复、检查结果）；操作：取消、验收、退回重做（填原因）、恢复/放弃被中断的 Run。
-- **新建任务**：选项目文件夹（主进程 `dialog`，校验是 git 仓库且不在系统目录）、写目标、可选检查命令。
+- **任务详情**：目标、分支与 worktree 路径、按时间列出各次 Run（执行器、原生会话 ID、状态、用时）；当前 Run 流式输出；审批卡片（命令/改动摘要、目录、风险、过期时间，允许/拒绝）；证据（改动统计、最终回复、检查结果）；操作：取消、验收、退回重做（填原因）、对被中断的 Run 选择恢复、重新开始或放弃。
+- **新建任务**：选项目文件夹（主进程 `dialog`，校验是 git 仓库且不在系统目录）、写目标、可选检查命令（可执行文件和参数分栏填写）。
 - **连接状态**：服务断线、重启中、执行器断线（「执行状态待确认」）在页头常驻提示，用 `aria-live` 播报。
 - **可访问性**：语义化标签、可全键盘操作、焦点可见、颜色不是唯一的状态提示。
 - preload 仍只暴露少量方法；新增命令都在 `contracts` 的命令登记表里登记，主进程照旧只转发登记过的命令。选文件夹由主进程弹窗，渲染进程拿不到任意路径读写能力。
@@ -138,10 +142,10 @@ P0 发现的问题在这里落实：
 | 权限扩展与未知请求 | `permissions` 请求显示为高风险、只能拒绝；未知请求立即收到错误回复，turn 不挂起 |
 | 检查命令 | 需审批后才运行；工作目录在 worktree 内；取消时进程树全部退出；输出里的模拟令牌被脱敏，库和日志中不出现 |
 | 执行器崩溃 | Run → `unconfirmed`，挂起审批被取消；当前 turn 有明确终态才更新；mock 里同一 thread 的上一个 turn 已完成、当前 turn 查不到时，Run 不被误判为完成 |
-| 服务崩溃重启 | 活动 Run → `interrupted`，挂起审批 → `cancelled`，子任务进入「待我处理」；「恢复」续做同一 Run，「重新开始」新建 Run 且旧证据保留，「放弃」为 `failed`；恢复失败时只给后两个选项，不静默新建 |
+| 服务崩溃重启 | 活动 Run → `interrupted`，挂起审批 → `cancelled`，子任务进入「待我处理」；「恢复」新建一次 Run 续做同一 thread、旧 Run 的 turn 与证据不变，「重新开始」新建 Run 和新 thread 且旧证据保留，「放弃」为 `failed`；恢复失败时只给后两个选项，不静默新建 |
 | 重复启动 | 第二个服务 `fatal/locked` 退出（已有）；同一 `idempotencyKey` 的建任务只建一次 |
-| A/B 场景（02「待我处理」） | A 停在审批、B 交付。打开 A 后关闭并重开窗口（服务存活），A 仍待审批；拒绝 A 只移除 A 的审批。重启服务后，A 的旧审批为已取消，A 改以「被中断的 Run」出现，仍定位到同一任务，B 的待验收不变；退回 B 重跑后旧证据可查，新 Run 成为当前验收对象 |
-| 备份 | 手动备份可打开、与原库一致；迁移前自动备份（已有） |
+| A/B 场景（02「待我处理」） | A 停在审批、B 交付。打开 A 后关闭并重开窗口（服务存活），A 仍待审批；拒绝 A 只移除 A 的审批。重启服务后，A 的旧审批为已取消，A 改以阻塞条目（原因为服务重启）出现，仍定位到同一任务，B 的待验收不变；退回 B 重跑后旧证据可查，新 Run 成为当前验收对象 |
+| 备份 | 手动备份含数据库与产物，可打开且与原库一致，库中引用的产物都在；从备份恢复后证据可查；删掉一个产物文件后界面显示「证据文件缺失」；迁移前自动备份（已有，只含数据库） |
 
 ### Electron 实机（本机脚本，扩展 `scripts/p0/electron-check.mjs` 为 `scripts/p1/e2e-check.mjs`）
 
@@ -188,3 +192,9 @@ P0 发现的问题在这里落实：
 4. 审批补上 `item/permissions/requestApproval`（高风险、P1 只能拒绝）和未知请求（立即错误回复），保证执行器不会一直等待。
 5. 恢复失败不再静默新建 thread：提示用户，由用户选择「重新开始」（新 Run，旧证据保留）或「放弃」。
 6. CI 表述改为「安装需联网，测试不访问真实模型和 IM」；许可证检查覆盖传递依赖并按 SPDX 表达式判定。
+
+**第三版（2026-11-23）**，按 Codex 的第二轮意见修订：
+
+1. 续做不再覆盖原 Run 的 turn ID：「恢复」新建一次 Run，用 `resumes_run_id` 关联被中断的那次，每次 Run 只对应一个 turn。「待我处理」不再单设「被中断的 Run」类型，统一作为阻塞的子任务出现。
+2. 手动备份包含数据库和 `artifacts/`，附文件清单；写明 worktree、Codex 原生会话和凭据不在备份范围内，迁移前自动备份只含数据库；恢复后缺失的证据文件如实显示。
+3. 检查命令改为结构化的「可执行文件 + 参数数组」，不按空白拆分；写明 `.exe` 与 Windows `.cmd` 的支持范围和拒绝的字符，并列出带空格路径与特殊字符的测试。
