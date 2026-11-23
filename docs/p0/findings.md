@@ -14,7 +14,7 @@
 | P0-06 | 许可证与素材 | 待用户决定 |
 | P0-07 | Codex / Claude / ACP 子代理对比 | 未开始：P0-02 已通过，可以开始 |
 
-自动化测试：`pnpm test` 共 45 项通过，`pnpm build`（`tsc -b` 严格模式）通过。
+自动化测试：`pnpm test` 共 44 项通过，`pnpm build`（`tsc -b` 严格模式）通过。
 
 ## P0-01 Codex app-server
 
