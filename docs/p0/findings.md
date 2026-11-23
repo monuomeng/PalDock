@@ -9,12 +9,12 @@
 | P0-01 | Codex app-server 能力 | 通过：发现、initialize、账号、thread、流式、中断、审批请求、跨进程恢复均已实测（2026-11-23 经用户同意跑了计费项）；app-server 在 turn 中途崩溃的恢复未测 |
 | P0-02 | Claude Code SDK/CLI | 通过（CLI stream-json）：流式、中断、权限请求、跨进程恢复均已实测；Agent SDK 未单独评估。桌面版自带 Claude Code 2.1.325（`%LOCALAPPDATA%\Claude-Data\…\claude-code\2.1.325\…\claude.exe`）），需单独登录 |
 | P0-03 | 飞书长连接 | 阻塞：无测试租户；P0 只完成 inbox 去重、租约与会话串行的存储侧实现 |
-| P0-04 | Electron + SQLite + 受限 IPC | 存储与服务进程已实测；Electron 窗口实机运行见下文「Electron」 |
+| P0-04 | Electron + SQLite + 受限 IPC | 通过（Windows）：存储、服务进程、Electron 窗口、看护重启、单实例与正常退出已实测；电源事件、长路径、macOS 未测 |
 | P0-05 | 版本化事件与状态机 | 通过：契约与状态机测试见 `packages/contracts`、`packages/domain` |
 | P0-06 | 许可证与素材 | 待用户决定 |
 | P0-07 | Codex / Claude / ACP 子代理对比 | 未开始：P0-02 已通过，可以开始 |
 
-自动化测试：`pnpm test` 共 44 项通过，`pnpm build`（`tsc -b` 严格模式）通过。
+自动化测试：`pnpm test` 共 45 项通过，`pnpm build`（`tsc -b` 严格模式）通过。
 
 ## P0-01 Codex app-server
 
@@ -95,9 +95,24 @@
 
 ## Electron
 
-代码已完成（单实例、数据根选择、utilityProcess 看护、受限 preload、白名单命令转发、导航与新窗口禁止、CSP）。Electron 45 改为首次运行时下载二进制，经 npmmirror 下载速度约 30–40 KiB/s（150 MB 约需 1.5 小时），本记录写作时尚未完成，窗口实机运行待补。
+Electron 45.2.3（内置 Node 24.22.2）。其 `node:sqlite` 为 SQLite 3.53.4，FTS5 trigram 与 online backup 均可用，与开发环境的 Node 26 一致。Electron 45 改为首次运行时下载二进制，经 npmmirror 约 30 KiB/s 且中途断开过一次，最终用 `curl -C -` 续传、按 `checksums.json` 校验后手动解压。
 
-未验证：utilityProcess 下的看护与重启、powerMonitor 锁屏/空闲事件、worktree 长路径与杀毒扫描、macOS 文件夹授权。
+实机验证（`PALDOCK_DATA_ROOT` 指向临时目录，带 `--remote-debugging-port` 以 `scripts/p0/cdp-eval.mjs` 驱动页面）：
+
+| 场景 | 结果 |
+|---|---|
+| 启动 → utilityProcess 服务就绪 → 主进程经命名管道握手 | 通过，页面显示「已连接」 |
+| 渲染进程隔离 | `window.paldock` 只有 4 个方法；`require`、`process` 均为 undefined |
+| 命令白名单 | 未登记的命令被主进程拒绝；外键错误以 `not_found` 返回 |
+| 新建任务、改状态 | 持久事件 #1、#2 推送到页面 |
+| 强杀服务 | **发现问题**：Windows 上被结束的 utilityProcess 退出码为 0，原策略当成正常退出而不重启。已改为只有主进程主动要求的退出才算正常；修复后显示「服务已退出，3 秒后重启」，随后自动重连，新事件序号接续为 #3 |
+| 遗留 PID 锁 | 服务被强杀留下的锁在下次启动时被识别为失效并接管 |
+| 跨启动持久化 | 重新打开应用后历史事件仍在 |
+| 第二个实例 | 立即退出（Electron 单实例锁），不会启动第二个服务 |
+| 禁止导航 | 页面内跳转外部网址被阻止，仍停留在 `file:` |
+| 正常退出 | 关闭窗口后服务收尾退出，PID 锁删除，WAL 已合并只剩 `paldock.db` |
+
+未验证：powerMonitor 锁屏 / 空闲事件、开机自启、worktree 长路径与杀毒扫描、macOS 文件夹授权、35 秒强制结束路径（服务没有卡住的场景）。
 
 ## 阻塞项与所需条件
 

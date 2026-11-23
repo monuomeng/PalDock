@@ -50,8 +50,8 @@ export class ServiceHost {
 
   private onExit(code: number): void {
     this.child = undefined;
+    const decision = this.policy.onExit(code, Date.now(), this.stopping);
     if (this.stopping) return;
-    const decision = this.policy.onExit(code, Date.now());
     if (decision.action === 'stop') return this.onStatus({ state: 'stopped', reason: decision.reason });
     this.onStatus({ state: 'restarting', inMs: decision.delayMs });
     this.restartTimer = setTimeout(() => this.start(), decision.delayMs);
