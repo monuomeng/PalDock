@@ -1,0 +1,35 @@
+# Credentials and local state
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm
+*.log
+data/
+logs/
+secrets/
+.paldock/
+
+# Tooling and builds
+node_modules/
+dist/
+build/
+coverage/
+.turbo/
+.cache/
+*.tsbuildinfo
+release/
+*.exe
+*.dmg
+*.AppImage
+.DS_Store
+Thumbs.db
