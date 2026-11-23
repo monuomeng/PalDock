@@ -2,15 +2,14 @@ import type {
   RunStartRequest,
   RuntimeAdapter,
   RuntimeApprovalDecision,
-  RuntimeApprovalRequest,
   RuntimeDiscovery,
   RuntimeEvent,
   RuntimeRun,
   TurnCheck,
 } from '@paldock/contracts';
 import { childEnv, nodeRuntimeEnv } from '@paldock/platform';
-import { codexVersion, resolveCodexCommand, type CodexCommand } from './discover.js';
-import { RpcError, JsonRpcStdioClient } from './json-rpc.js';
+import { codexVersion, resolveCodexCommand } from './discover.js';
+import { JsonRpcStdioClient, RpcError, type RpcHandlers } from './json-rpc.js';
 import { approvalResponse, finalTurnEvent, toApprovalRequest, toTurnCheck, type CodexTurn } from './event-mapping.js';
 
 export interface CodexAdapterOptions {
@@ -43,20 +42,16 @@ const CLIENT_INFO = { name: 'paldock', title: 'PalDock', version: '0.1.0' };
 /** Codex app-server 适配器：每次 Run 一个 app-server 进程，Run 结束即结束整个进程树。 */
 export class CodexAdapter implements RuntimeAdapter {
   readonly name = 'codex';
-  private readonly options: Required<Omit<CodexAdapterOptions, 'configuredPath'>> & Pick<CodexAdapterOptions, 'configuredPath'>;
+  private readonly options: ResolvedOptions;
+  private readonly configuredPath: string | undefined;
 
-  constructor(options: CodexAdapterOptions = {}) {
-    this.options = {
-      cancelWaitMs: 10_000,
-      interruptWaitMs: 10_000,
-      requestTimeoutMs: 60_000,
-      extraEnv: {},
-      ...options,
-    };
+  constructor({ configuredPath, ...options }: CodexAdapterOptions = {}) {
+    this.configuredPath = configuredPath;
+    this.options = { cancelWaitMs: 10_000, interruptWaitMs: 10_000, requestTimeoutMs: 60_000, extraEnv: {}, ...options };
   }
 
   async discover(): Promise<RuntimeDiscovery> {
-    const cmd = this.command();
+    const cmd = resolveCodexCommand(this.configuredPath);
     if (!cmd) return { runtime: this.name, available: false, reason: '未找到 codex 可执行文件', capabilities: CAPABILITIES };
     const version = await codexVersion(cmd);
     return version
@@ -88,13 +83,9 @@ export class CodexAdapter implements RuntimeAdapter {
     }
   }
 
-  private command(): CodexCommand | undefined {
-    return resolveCodexCommand(this.options.configuredPath);
-  }
-
   /** 启动 app-server 并完成 initialize 握手。 */
-  private async open(handlers: ConstructorParameters<typeof JsonRpcStdioClient>[2]): Promise<JsonRpcStdioClient> {
-    const cmd = this.command();
+  private async open(handlers: RpcHandlers): Promise<JsonRpcStdioClient> {
+    const cmd = resolveCodexCommand(this.configuredPath);
     if (!cmd) throw new Error('未找到 codex 可执行文件');
     const env = childEnv({ ...nodeRuntimeEnv(cmd.command), ...this.options.extraEnv });
     const rpc = new JsonRpcStdioClient(cmd.command, [...cmd.prefixArgs, 'app-server', '--listen', 'stdio://'], handlers, env);
@@ -109,7 +100,8 @@ export class CodexAdapter implements RuntimeAdapter {
   }
 }
 
-type Opener = (handlers: ConstructorParameters<typeof JsonRpcStdioClient>[2]) => Promise<JsonRpcStdioClient>;
+type ResolvedOptions = Required<Omit<CodexAdapterOptions, 'configuredPath'>>;
+type Opener = (handlers: RpcHandlers) => Promise<JsonRpcStdioClient>;
 
 /** 一次 Run 的状态：thread / turn 身份、挂起的审批、取消请求。 */
 class CodexRun implements RuntimeRun {
@@ -122,14 +114,15 @@ class CodexRun implements RuntimeRun {
   private lastAgentMessage: string | null = null;
   /** fileChange 条目的路径（审批请求本身不带路径，要从 item/started 里取）。 */
   private readonly fileChanges = new Map<string, string[]>();
-  private readonly approvals = new Map<string, { kind: RuntimeApprovalRequest['kind']; resolve: (decision: RuntimeApprovalDecision) => void }>();
+  /** 执行器请求 ID → 回复函数。 */
+  private readonly approvals = new Map<string, (decision: RuntimeApprovalDecision) => void>();
   private readonly earlyCompletions = new Map<string, CodexTurn>();
   private readonly startedWaiters: (() => void)[] = [];
   private readonly completedWaiters: (() => void)[] = [];
 
   constructor(
     private readonly open: Opener,
-    private readonly options: Required<Pick<CodexAdapterOptions, 'cancelWaitMs' | 'interruptWaitMs' | 'requestTimeoutMs'>>,
+    private readonly options: ResolvedOptions,
     private readonly emit: (event: RuntimeEvent) => void,
   ) {}
 
@@ -171,10 +164,10 @@ class CodexRun implements RuntimeRun {
   }
 
   respondApproval(nativeRequestId: string, decision: RuntimeApprovalDecision): void {
-    const pending = this.approvals.get(nativeRequestId);
-    if (!pending) return;
+    const reply = this.approvals.get(nativeRequestId);
+    if (!reply) return;
     this.approvals.delete(nativeRequestId);
-    pending.resolve(decision);
+    reply(decision);
   }
 
   async dispose(): Promise<void> {
@@ -254,7 +247,7 @@ class CodexRun implements RuntimeRun {
       return Promise.reject(new Error(`PalDock 不处理 ${method}`));
     }
     return new Promise((resolve) => {
-      this.approvals.set(nativeRequestId, { kind: request.kind, resolve: (decision) => resolve(approvalResponse(request.kind, decision)) });
+      this.approvals.set(nativeRequestId, (decision) => resolve(approvalResponse(request.kind, decision)));
       this.emit({ type: 'approval_request', request });
     });
   }

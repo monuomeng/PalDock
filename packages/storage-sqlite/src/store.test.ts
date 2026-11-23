@@ -177,7 +177,8 @@ describe('审批', () => {
     expect(store.runs.expiredApprovals()).toEqual([]);
     advance(60_000);
     expect(store.runs.expiredApprovals().map((a) => a.id)).toEqual([approval.id]);
-    expect(store.runs.pendingApprovals(run.id)).toHaveLength(1);
+    expect(plan(`UPDATE approvals SET status = 'cancelled' WHERE run_id = 'r' AND status = 'pending'`)).toContain('approvals_by_run');
+    expect(store.runs.cancelPendingApprovals(run.id).record.map((a) => a.status)).toEqual(['cancelled']);
     expect(plan(`SELECT id FROM approvals WHERE status = 'pending' AND expires_at <= ''`)).toContain('approvals_pending');
     expect(plan(`SELECT id FROM approvals WHERE run_id = 'r' AND status = 'pending'`)).toContain('approvals_by_run');
   });

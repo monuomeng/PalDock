@@ -6,15 +6,19 @@ import {
   type CheckCommand,
   type PersistentEvent,
   type ReviewDecision,
+  type RunRecord,
   type StorePort,
+  type SubtaskRecord,
+  type TaskActions,
   type TaskDetail,
   type TaskSummary,
 } from '@paldock/contracts';
+import { subtaskMachine } from '@paldock/domain';
+import { isInside, samePath } from '@paldock/platform';
 import { commitStaged, repositoryRoot } from './git.js';
 import { firstRunPrompt, resumePrompt, reworkPrompt, titleOf } from './prompts.js';
-import { isInside } from './risk.js';
 import type { RunSupervisor } from './run-supervisor.js';
-import { moveSubtask, moveTask } from './transitions.js';
+import { moveTask, requireSubtask } from './transitions.js';
 
 export interface CreateTaskInput {
   rootPath: string;
@@ -41,6 +45,23 @@ function systemDirectories(): string[] {
   return process.platform === 'win32' ? windows : ['/System', '/Library', '/usr', '/bin', '/sbin', '/etc', '/private'];
 }
 
+/** 被中断且有原生会话的 Run 才能续做（新 Run 指回它、沿用同一 thread）。 */
+function resumePlan(latest: RunRecord | undefined): { threadId: string; resumesRunId: string } | undefined {
+  return latest?.status === 'interrupted' && latest.nativeThreadId ? { threadId: latest.nativeThreadId, resumesRunId: latest.id } : undefined;
+}
+
+/** 当前允许的用户操作；界面只按它显示按钮，规则只在这里一处。 */
+function actionsOf(subtask: SubtaskRecord, latest: RunRecord | undefined): TaskActions {
+  const blocked = subtask.status === 'blocked';
+  return {
+    cancel: !subtaskMachine.isTerminal(subtask.status),
+    review: subtask.status === 'review',
+    resume: blocked && resumePlan(latest) !== undefined,
+    restart: blocked,
+    abandon: blocked,
+  };
+}
+
 /**
  * 管理窗口命令对应的用例。规则：用户操作都带客户端看到的版本号（先到者为准）；
  * 状态变更与事件同事务写入后立即广播；需要执行器参与的部分交给 RunSupervisor。
@@ -65,7 +86,7 @@ export class TaskService {
     const raced = this.store.tasks.findTaskByIdempotencyKey(input.idempotencyKey);
     if (raced) return this.getTask(raced.id);
     const workspace = this.store.tasks.ensureWorkspace(basename(rootPath), rootPath);
-    const created = this.store.tasks.createTask({
+    const { record, events } = this.store.tasks.createTask({
       workspaceId: workspace.id,
       title: titleOf(input.goal),
       goal: input.goal,
@@ -74,9 +95,10 @@ export class TaskService {
       checkConfirmed: input.checkConfirmed,
       idempotencyKey: input.idempotencyKey,
     });
-    this.publish(created.events);
-    this.deps.supervisor.enqueue(created.record.subtask.id, { prompt: firstRunPrompt(input.goal) });
-    return this.getTask(created.record.task.id);
+    this.publish(events);
+    this.deps.supervisor.enqueue(record.subtask.id, { prompt: firstRunPrompt(input.goal) });
+    // 刚写入的记录都在手里（RETURNING），不回查；Run 由监管器异步创建
+    return { task: record.task, workspace, subtask: record.subtask, runs: [], actions: actionsOf(record.subtask, undefined) };
   }
 
   /** 项目必须是 git 仓库根目录，不能是系统目录或 PalDock 自己的数据根。 */
@@ -92,9 +114,7 @@ export class TaskService {
     const root = await repositoryRoot(full).catch(() => {
       throw new CodedError('bad_request', '所选目录不是 git 仓库');
     });
-    if (resolve(root) !== full && resolve(root).toLowerCase() !== full.toLowerCase()) {
-      throw new CodedError('bad_request', `请选择仓库根目录：${root}`);
-    }
+    if (!samePath(root, full)) throw new CodedError('bad_request', `请选择仓库根目录：${root}`);
     return full;
   }
 
@@ -107,25 +127,15 @@ export class TaskService {
     const subtask = task && this.store.tasks.getSubtaskOfTask(task.id);
     const workspace = task && this.store.tasks.getWorkspace(task.workspaceId);
     if (!task || !subtask || !workspace) throw new CodedError('not_found', '任务不存在');
-    return { task, workspace, subtask, runs: this.store.runs.runDetails(subtask.id) };
+    const runs = this.store.runs.runDetails(subtask.id);
+    return { task, workspace, subtask, runs, actions: actionsOf(subtask, runs.at(-1)?.run) };
   }
 
   /** 执行中的 Run 由监管器中断，收尾时置为 cancelled；其余状态直接取消。 */
-  cancelTask(taskId: string): TaskDetail {
+  cancelTask(taskId: string): void {
     const subtask = this.store.tasks.getSubtaskOfTask(taskId);
     if (!subtask) throw new CodedError('not_found', '任务不存在');
-    if (this.deps.supervisor.cancel(subtask.id)) return this.getTask(taskId);
-    this.publish(
-      this.store.transaction(() => {
-        const events: PersistentEvent[] = [];
-        const latest = this.store.runs.latestRun(subtask.id);
-        if (latest?.status === 'interrupted') events.push(...this.store.runs.transitionRun(latest.id, latest.version, 'cancelled', '用户取消').events);
-        events.push(...moveSubtask(this.store, subtask.id, 'cancelled', '用户取消').events);
-        events.push(...moveTask(this.store, taskId, 'cancelled', '用户取消'));
-        return events;
-      }),
-    );
-    return this.getTask(taskId);
+    if (!this.deps.supervisor.cancel(subtask.id)) this.close(subtask, 'cancelled', '用户取消');
   }
 
   /** 先到者为准（版本号）；权限扩展在 P1 只能拒绝。 */
@@ -145,9 +155,7 @@ export class TaskService {
    * 退回时新开一次 Run，沿用原生会话并带上意见，旧 Run 的证据保留。
    */
   async decideReview(subtaskId: string, expectedVersion: number, decision: ReviewDecision, note?: string): Promise<void> {
-    const subtask = this.store.tasks.getSubtask(subtaskId);
-    if (!subtask) throw new CodedError('not_found', '子任务不存在');
-    if (subtask.status !== 'review' || subtask.version !== expectedVersion) throw new CodedError('conflict', '子任务状态已变化，请刷新');
+    const subtask = requireSubtask(this.store, subtaskId, 'review', expectedVersion);
     const run = this.store.runs.latestRun(subtaskId)!;
     const task = this.store.tasks.getTask(subtask.taskId)!;
 
@@ -157,7 +165,7 @@ export class TaskService {
         this.store.transaction(() => [
           ...this.store.runs.addReview(run.id, 'accept', note ?? null).events,
           ...this.store.tasks.transitionSubtask(subtaskId, expectedVersion, 'succeeded').events,
-          ...moveTask(this.store, task.id, 'succeeded'),
+          ...this.store.tasks.transitionTask(task.id, task.version, 'succeeded').events,
         ]),
       );
       return;
@@ -180,34 +188,32 @@ export class TaskService {
    * 放弃 = 失败。恢复失败不会静默新建会话，由用户再选。
    */
   recover(subtaskId: string, expectedVersion: number, action: 'resume' | 'restart' | 'abandon'): void {
-    const subtask = this.store.tasks.getSubtask(subtaskId);
-    if (!subtask) throw new CodedError('not_found', '子任务不存在');
-    if (subtask.status !== 'blocked' || subtask.version !== expectedVersion) throw new CodedError('conflict', '子任务状态已变化，请刷新');
-    const latest = this.store.runs.latestRun(subtaskId);
-    const task = this.store.tasks.getTask(subtask.taskId)!;
+    const subtask = requireSubtask(this.store, subtaskId, 'blocked', expectedVersion);
+    if (action === 'abandon') return this.close(subtask, 'failed', '用户放弃');
 
-    if (action === 'abandon') {
-      this.publish(
-        this.store.transaction(() => [
-          ...(latest?.status === 'interrupted' ? this.store.runs.transitionRun(latest.id, latest.version, 'failed', '用户放弃').events : []),
-          ...this.store.tasks.transitionSubtask(subtaskId, expectedVersion, 'failed', '用户放弃').events,
-          ...moveTask(this.store, task.id, 'failed', '用户放弃'),
-        ]),
-      );
-      return;
-    }
-    if (action === 'resume' && !(latest?.status === 'interrupted' && latest.nativeThreadId)) {
-      throw new CodedError('bad_request', '这次执行无法续做，请选择重新开始或放弃');
-    }
+    const plan = action === 'resume' ? resumePlan(this.store.runs.latestRun(subtaskId)) : {};
+    if (!plan) throw new CodedError('bad_request', '这次执行无法续做，请选择重新开始或放弃');
+    const task = this.store.tasks.getTask(subtask.taskId)!;
     this.publish(
       this.store.transaction(() => [
         ...this.store.tasks.transitionSubtask(subtaskId, expectedVersion, 'queued').events,
-        ...moveTask(this.store, task.id, 'queued'),
+        ...this.store.tasks.transitionTask(task.id, task.version, 'queued').events,
       ]),
     );
-    this.deps.supervisor.enqueue(
-      subtaskId,
-      action === 'resume' ? { prompt: resumePrompt(task.goal), threadId: latest!.nativeThreadId!, resumesRunId: latest!.id } : { prompt: firstRunPrompt(task.goal) },
+    this.deps.supervisor.enqueue(subtaskId, { prompt: action === 'resume' ? resumePrompt(task.goal) : firstRunPrompt(task.goal), ...plan });
+  }
+
+  /** 取消或放弃：被中断的最新 Run、子任务、任务同一事务进入终态。 */
+  private close(subtask: SubtaskRecord, status: 'cancelled' | 'failed', reason: string): void {
+    this.publish(
+      this.store.transaction(() => {
+        const latest = this.store.runs.latestRun(subtask.id);
+        return [
+          ...(latest?.status === 'interrupted' ? this.store.runs.transitionRun(latest.id, latest.version, status, reason).events : []),
+          ...this.store.tasks.transitionSubtask(subtask.id, subtask.version, status, reason).events,
+          ...moveTask(this.store, subtask.taskId, status, reason),
+        ];
+      }),
     );
   }
 

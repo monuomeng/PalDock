@@ -1,18 +1,6 @@
-import { resolve, sep } from 'node:path';
 import type { RiskLevel, RuntimeApprovalRequest } from '@paldock/contracts';
 import { classifyRisk, type OperationKind } from '@paldock/domain';
-
-/** Windows 与 macOS 默认文件系统都不区分大小写，路径比较统一转小写。 */
-const normalize = (path: string) => {
-  const full = resolve(path);
-  return process.platform === 'linux' ? full : full.toLowerCase();
-};
-
-export function isInside(root: string, path: string): boolean {
-  const base = normalize(root);
-  const target = normalize(resolve(root, path));
-  return target === base || target.startsWith(base.endsWith(sep) ? base : base + sep);
-}
+import { isInside } from '@paldock/platform';
 
 const INSTALL = /\b(?:npm|pnpm|yarn|bun)\s+(?:i|install|add|ci)\b|\bpip3?\s+install\b|\bcargo\s+(?:add|install)\b|\bgo\s+get\b/i;
 /** 命令文本里的绝对路径：Windows 盘符路径、UNC 路径与 posix 路径。 */

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { EphemeralEvent, PersistentEvent } from './events.js';
-import { CheckCommand } from './records.js';
+import { CheckCommand, type AttentionItem, type MessageRecord, type TaskDetail, type TaskSummary } from './records.js';
 import { ApprovalDecision, AttentionKind, ReviewDecision, SCHEMA_VERSION } from './states.js';
 
 /** 单帧上限；超长帧直接断开，防止本机客户端撑爆内存。 */
@@ -47,6 +47,28 @@ export type CommandName = keyof typeof CommandArgs;
 export const COMMAND_NAMES = Object.keys(CommandArgs) as [CommandName, ...CommandName[]];
 export type CommandArgsOf<N extends CommandName> = z.input<(typeof CommandArgs)[N]>;
 
+/** 各命令的返回值；服务端处理函数与客户端调用共用，返回 void 的命令结果为 null。 */
+export interface CommandResults {
+  'service.status': { version: string; startedAt: string; interruptedRuns: number; runtime: string };
+  'task.create': TaskDetail;
+  'task.list': TaskSummary[];
+  'task.get': TaskDetail;
+  'task.cancel': void;
+  'approval.decide': void;
+  'review.decide': void;
+  'run.recover': void;
+  'run.checkOutput': string;
+  'events.since': PersistentEvent[];
+  'attention.list': AttentionItem[];
+  'attention.markRead': void;
+  'messages.search': MessageRecord[];
+  'maintenance.backup': { path: string };
+}
+export type CommandResultOf<N extends CommandName> = CommandResults[N];
+
+/** 桌面主进程转给渲染进程的命令结果（跨 contextBridge 的异常会丢掉错误码，所以用结果对象）。 */
+export type RendererResult<T = unknown> = { ok: true; value: T } | { ok: false; code: ErrorCode; message: string };
+
 export const ClientFrame = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('hello'),
@@ -67,6 +89,8 @@ export const ErrorCode = z.enum([
   'conflict',
   'invalid_transition',
   'internal',
+  /** 桌面端：本地服务未连接。 */
+  'unavailable',
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 

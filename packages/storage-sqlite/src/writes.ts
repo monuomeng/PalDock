@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { SQLInputValue } from 'node:sqlite';
 import type { Change, PersistentEventBody } from '@paldock/contracts';
 import { DomainError, type StateMachine } from '@paldock/domain';
@@ -6,17 +7,21 @@ import type { EventLog } from './event-log.js';
 
 export type { Change };
 
-/** 插入一行并追加对应事件，同一事务；记录直接来自 RETURNING，不回查。 */
-export function insertWithEvent<T extends { id: string | number }>(
+/** 实体 ID：类型前缀 + UUID，例如 task_…、run_…。 */
+export const newId = (prefix: string) => `${prefix}_${randomUUID()}`;
+
+/** 插入一行并追加对应事件，同一事务；记录直接来自 RETURNING，不回查。事件的聚合 ID 缺省取 record.id。 */
+export function insertWithEvent<T>(
   db: Database,
   events: EventLog,
   sql: string,
   params: SQLInputValue[],
   toEvent: (record: T) => PersistentEventBody,
+  aggregateOf: (record: T) => string = (record) => String((record as { id: string | number }).id),
 ): Change<T> {
   return db.transaction(() => {
     const record = db.get<T>(sql, ...params)!;
-    return { record, events: [events.append(String(record.id), toEvent(record))] };
+    return { record, events: [events.append(aggregateOf(record), toEvent(record))] };
   });
 }
 

@@ -1,6 +1,7 @@
-import { extname, join, normalize, sep } from 'node:path';
+import { extname, join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { protocol } from 'electron';
+import { isInside } from '@paldock/platform';
 
 /**
  * 管理界面经自定义协议 `paldock://app/` 加载，而不是 file://：
@@ -23,12 +24,11 @@ export function registerAppScheme(): void {
 }
 
 export function serveRenderer(staticDir: string): void {
-  const base = normalize(staticDir + sep);
   protocol.handle(SCHEME, async (request) => {
     const url = new URL(request.url);
-    const file = normalize(join(staticDir, decodeURIComponent(url.pathname)));
+    const file = join(staticDir, decodeURIComponent(url.pathname));
     const type = TYPES[extname(file)];
-    if (url.host !== 'app' || !file.startsWith(base) || !type) return new Response('not found', { status: 404 });
+    if (url.host !== 'app' || !isInside(staticDir, file) || !type) return new Response('not found', { status: 404 });
     try {
       return new Response(await readFile(file), { headers: { 'content-type': type } });
     } catch {

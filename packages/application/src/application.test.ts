@@ -5,7 +5,8 @@ import { childEnv } from '@paldock/platform';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { planSpawn, runCheck } from './check-runner.js';
 import { redact } from './redact.js';
-import { isInside, operationOf } from './risk.js';
+import { isInside } from '@paldock/platform';
+import { operationOf } from './risk.js';
 import { titleOf } from './prompts.js';
 
 const windows = process.platform === 'win32';

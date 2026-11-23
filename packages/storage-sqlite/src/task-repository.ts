@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type {
   Change,
   CreatedTask,
@@ -17,7 +16,7 @@ import type { Clock } from './clock.js';
 import { COLUMNS, toTask, type TaskRow } from './columns.js';
 import type { Database } from './database.js';
 import type { EventLog } from './event-log.js';
-import { applyTransition, statusChanged, type TransitionSpec } from './writes.js';
+import { applyTransition, newId, statusChanged, type TransitionSpec } from './writes.js';
 
 const SQL = {
   // 按项目路径找到或创建；DO UPDATE 让 RETURNING 在已存在时也返回该行
@@ -75,8 +74,6 @@ const TRANSITIONS = {
       RETURNING ${COLUMNS.subtask()}`,
   },
 } satisfies { task: TransitionSpec<TaskStatus>; subtask: TransitionSpec<SubtaskStatus> };
-
-const newId = (prefix: string) => `${prefix}_${randomUUID()}`;
 
 /**
  * 项目、任务、子任务与助手会话的写入口。每个写方法一个事务，状态表与事件同时提交；

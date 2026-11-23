@@ -2,6 +2,7 @@ import type { InterruptedRun, RecoveryReport, RunStatus } from '@paldock/contrac
 import type { Clock } from './clock.js';
 import type { Database } from './database.js';
 import type { EventLog } from './event-log.js';
+import { statusChanged } from './writes.js';
 
 /**
  * 「未结束且未中断」的 Run 状态。必须与部分索引 runs_active 的条件逐字一致（SQLite 按文本匹配部分索引），
@@ -46,7 +47,7 @@ export function interruptActiveWork(db: Database, events: EventLog, clock: Clock
     const active = db.all<InterruptedRun & { status: RunStatus }>(SQL.activeRuns);
     db.run(SQL.markRunsInterrupted, reason);
     const emitted = active.map((run) =>
-      events.append(run.id, { type: 'run.status_changed', payload: { from: run.status, to: 'interrupted', reason } }),
+      events.append(run.id, { type: 'run.status_changed', payload: statusChanged(run.status, 'interrupted', reason) }),
     );
     for (const { id } of db.all<{ id: string }>(SQL.cancelPendingApprovals, at)) {
       emitted.push(events.append(id, { type: 'approval.decided', payload: { status: 'cancelled', via: 'policy' } }));
@@ -54,9 +55,9 @@ export function interruptActiveWork(db: Database, events: EventLog, clock: Clock
     for (const subtaskId of new Set(active.map((run) => run.subtaskId))) {
       const blocked = db.get<{ taskId: string }>(SQL.blockSubtask, reason, at, subtaskId);
       if (!blocked) continue;
-      emitted.push(events.append(subtaskId, { type: 'subtask.status_changed', payload: { from: 'running', to: 'blocked', reason } }));
+      emitted.push(events.append(subtaskId, { type: 'subtask.status_changed', payload: statusChanged('running', 'blocked', reason) }));
       if (db.get(SQL.blockTask, at, blocked.taskId)) {
-        emitted.push(events.append(blocked.taskId, { type: 'task.status_changed', payload: { from: 'running', to: 'blocked', reason } }));
+        emitted.push(events.append(blocked.taskId, { type: 'task.status_changed', payload: statusChanged('running', 'blocked', reason) }));
       }
     }
     return {

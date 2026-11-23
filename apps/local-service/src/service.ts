@@ -13,6 +13,7 @@ import {
   type ServerFrame,
 } from '@paldock/contracts';
 import { acquirePidLock, listenIpc, readFrames, serializeFrame, tokensEqual, writeFrame } from '@paldock/platform';
+import { P1_DEFAULTS } from '@paldock/domain';
 import { CodexAdapter } from '@paldock/runtime-codex';
 import { openStore, type Store } from '@paldock/storage-sqlite';
 import { createHandlers, type Handlers } from './commands.js';
@@ -39,12 +40,6 @@ export interface ServiceOptions {
 }
 
 type Outcome = { value: unknown } | { error: { code: ErrorCode; message: string } };
-
-/** 模拟执行器的调试变量；只在设置时传给子进程，真实 Codex 不读取它们。 */
-function mockEnv(): Record<string, string> {
-  const keys = ['MOCK_CODEX_HOME', 'MOCK_CODEX_START_DELAY_MS'] as const;
-  return Object.fromEntries(keys.flatMap((k) => (process.env[k] ? [[k, process.env[k]!]] : [])));
-}
 
 const eventFrames = (events: PersistentEvent[]) =>
   events.map((event) => serializeFrame({ kind: 'event', event } satisfies ServerFrame)).join('');
@@ -78,7 +73,11 @@ export class LocalService {
       const interruptedRuns = store.interruptActiveWork('服务重启').interruptedRuns.length;
       const service = new LocalService(store, token, lock.release, interruptedRuns, log);
       const runtime =
-        options.runtime ?? new CodexAdapter({ ...(process.env.PALDOCK_CODEX_PATH ? { configuredPath: process.env.PALDOCK_CODEX_PATH } : {}), extraEnv: mockEnv() });
+        options.runtime ??
+        new CodexAdapter({
+          ...(process.env.PALDOCK_CODEX_PATH ? { configuredPath: process.env.PALDOCK_CODEX_PATH } : {}),
+          cancelWaitMs: P1_DEFAULTS.cancelWaitForTurnMs,
+        });
       const publish = (events: PersistentEvent[]) => service.broadcast(events);
       service.supervisor = new RunSupervisor({
         store,

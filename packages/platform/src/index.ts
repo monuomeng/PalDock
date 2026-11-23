@@ -5,3 +5,4 @@ export * from './pid-lock.js';
 export * from './process-tree.js';
 export * from './credentials.js';
 export * from './child-env.js';
+export * from './paths.js';

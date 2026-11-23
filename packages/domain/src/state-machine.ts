@@ -64,8 +64,7 @@ export const subtaskMachine = defineMachine<SubtaskStatus>('subtask', {
 export const runMachine = defineMachine<RunStatus>('run', {
   starting: ['running', 'unconfirmed', 'interrupted', 'failed', 'cancelled'],
   running: ['waiting_approval', 'unconfirmed', 'interrupted', 'succeeded', 'failed', 'cancelled'],
-  // 审批挂起时 turn 也可能直接结束（执行器自己收回了请求）
-  waiting_approval: ['running', 'unconfirmed', 'interrupted', 'succeeded', 'failed', 'cancelled'],
+  waiting_approval: ['running', 'unconfirmed', 'interrupted', 'failed', 'cancelled'],
   unconfirmed: ['running', 'waiting_approval', 'interrupted', 'succeeded', 'failed', 'cancelled'],
   interrupted: ['running', 'failed', 'cancelled'],
   succeeded: [],

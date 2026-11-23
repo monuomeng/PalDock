@@ -1,4 +1,4 @@
-import type { ApprovalStatus, AttentionKind, CheckStatus, RiskLevel, RunStatus, SubtaskStatus, TaskStatus } from '@paldock/contracts';
+import type { ApprovalStatus, AttentionKind, CheckStatus, RiskLevel, RunStatus, SubtaskStatus, TaskRecord } from '@paldock/contracts';
 
 /** 状态与类别的中文名。颜色不是唯一提示：界面上同时显示文字。 */
 export const SUBTASK_LABEL: Record<SubtaskStatus, string> = {
@@ -13,8 +13,6 @@ export const SUBTASK_LABEL: Record<SubtaskStatus, string> = {
   failed: '失败',
   cancelled: '已取消',
 };
-
-export const TASK_LABEL: Record<TaskStatus, string> = SUBTASK_LABEL;
 
 export const RUN_LABEL: Record<RunStatus, string> = {
   starting: '启动中',
@@ -53,6 +51,13 @@ export const CHECK_LABEL: Record<CheckStatus, string> = {
   cancelled: '已取消',
   error: '无法运行',
 };
+
+/** 任务详情里显示的检查命令（参数按空格拼接，仅供阅读）。 */
+export function checkCommandText({ checkCommand, checkConfirmedAt }: TaskRecord): string {
+  if (!checkCommand) return '未设置';
+  const text = [checkCommand.executable, ...checkCommand.args].join(' ');
+  return checkConfirmedAt ? text : `${text}（未确认，不会运行）`;
+}
 
 const timeFormat = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 

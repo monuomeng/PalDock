@@ -1,8 +1,6 @@
 import { spawn } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
-import { delimiter, extname, isAbsolute, join } from 'node:path';
 import type { CheckCommand, CheckStatus } from '@paldock/contracts';
-import { childEnv, killProcessTree } from '@paldock/platform';
+import { childEnv, killProcessTree, resolveExecutable } from '@paldock/platform';
 
 /**
  * 受控运行用户填写的检查命令（例如 `pnpm test`）。它由服务直接启动、不经执行器沙箱，所以：
@@ -33,23 +31,6 @@ const CMD_UNSAFE = /[%!"\r\n]/;
 
 export class CheckCommandError extends Error {
   override readonly name = 'CheckCommandError';
-}
-
-/** 在白名单环境的 PATH 上查找；Windows 按 PATHEXT 补扩展名。 */
-export function resolveExecutable(executable: string, env: NodeJS.ProcessEnv): string | undefined {
-  const isFile = (p: string) => existsSync(p) && statSync(p).isFile();
-  const extensions =
-    process.platform === 'win32' && extname(executable) === ''
-      ? (env.PATHEXT ?? env.Pathext ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
-      : [''];
-  if (isAbsolute(executable)) return extensions.map((ext) => executable + ext).find(isFile);
-  const path = env.PATH ?? env.Path ?? '';
-  for (const dir of path.split(delimiter)) {
-    if (!dir) continue;
-    const found = extensions.map((ext) => join(dir, executable + ext)).find(isFile);
-    if (found) return found;
-  }
-  return undefined;
 }
 
 /** cmd 的引号规则：每个参数整体加引号；在引号内 & | < > ^ ( ) 都是字面字符。 */

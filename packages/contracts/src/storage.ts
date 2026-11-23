@@ -112,7 +112,7 @@ export interface RunStorePort {
   transitionRun(id: string, expectedVersion: number, to: RunStatus, reason?: string): Change<RunRecord>;
   requestApproval(input: NewApproval): Change<ApprovalRecord>;
   getApproval(id: string): ApprovalRecord | undefined;
-  pendingApprovals(runId: string): ApprovalRecord[];
+  cancelPendingApprovals(runId: string): Change<ApprovalRecord[]>;
   expiredApprovals(): ApprovalRecord[];
   decideApproval(id: string, expectedVersion: number, status: Exclude<ApprovalStatus, 'pending'>, via: ApprovalChannel): Change<ApprovalRecord>;
   saveResult(result: NewRunResult): Change<RunResultRecord>;

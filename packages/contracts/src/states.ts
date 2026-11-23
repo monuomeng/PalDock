@@ -60,8 +60,11 @@ export type MessageRole = z.infer<typeof MessageRole>;
 export const AttentionKind = z.enum(['approval', 'blocked', 'review', 'unconfirmed_run']);
 export type AttentionKind = z.infer<typeof AttentionKind>;
 
-/** 执行器审批请求的类别；`permissions` 是权限扩展（放开沙箱、联网），P1 一律只能拒绝。 */
-export const APPROVAL_KINDS = ['command', 'file_change', 'permissions', 'check_command', 'other'] as const;
+/**
+ * 执行器审批请求的类别；`permissions` 是权限扩展（放开沙箱、联网），P1 一律只能拒绝。
+ * `other` 只用于迁移前（P0）已有的审批行。
+ */
+export const APPROVAL_KINDS = ['command', 'file_change', 'permissions', 'other'] as const;
 export const ApprovalKind = z.enum(APPROVAL_KINDS);
 export type ApprovalKind = z.infer<typeof ApprovalKind>;
 

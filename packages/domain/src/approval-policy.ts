@@ -39,7 +39,6 @@ export type OperationKind =
   | 'write_in_worktree'
   | 'run_tests'
   | 'run_command_in_worktree'
-  | 'run_check_command'
   | 'install_dependencies'
   | 'network_in_worktree'
   | 'push_remote'
@@ -55,8 +54,6 @@ const RISK_BY_OPERATION: Readonly<Record<OperationKind, RiskLevel>> = {
   run_tests: 'low',
   // 沙箱之外的命令（on-request 下才会来审批），无法从命令文本判断副作用，按中风险
   run_command_in_worktree: 'medium',
-  // 用户填写的检查命令由服务直接启动，不经执行器沙箱
-  run_check_command: 'medium',
   install_dependencies: 'medium',
   network_in_worktree: 'medium',
   push_remote: 'high',

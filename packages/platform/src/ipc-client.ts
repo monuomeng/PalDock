@@ -5,6 +5,7 @@ import {
   ServerFrame,
   type CommandArgsOf,
   type CommandName,
+  type CommandResultOf,
   type EphemeralEvent,
   type PersistentEvent,
 } from '@paldock/contracts';
@@ -70,10 +71,10 @@ export class IpcClient {
     });
   }
 
-  request<N extends CommandName>(name: N, args: CommandArgsOf<N>): Promise<unknown> {
+  request<N extends CommandName>(name: N, args: CommandArgsOf<N>): Promise<CommandResultOf<N>> {
     const socket = this.socket;
-    if (!socket || socket.destroyed) return Promise.reject(new Error('IPC 未连接'));
-    return this.pending.add((id) => writeFrame(socket, { kind: 'command', id, name, args }));
+    if (!socket || socket.destroyed) return Promise.reject(new CodedError('unavailable', 'IPC 未连接'));
+    return this.pending.add((id) => writeFrame(socket, { kind: 'command', id, name, args })) as Promise<CommandResultOf<N>>;
   }
 
   /** 等连接真正关闭后再返回，之后不会再收到任何事件。 */

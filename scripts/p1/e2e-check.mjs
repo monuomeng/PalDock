@@ -18,7 +18,8 @@ const env = {
   ...process.env,
   PALDOCK_DATA_ROOT: dataRoot,
   PALDOCK_CODEX_PATH: join(root, 'packages', 'runtime-codex', 'mock', 'mock-app-server.mjs'),
-  MOCK_CODEX_HOME: join(work, 'mock-home'),
+  // 模拟执行器把 thread 存在 CODEX_HOME 下（CODEX_HOME 在执行器环境变量白名单里）
+  CODEX_HOME: join(work, 'mock-home'),
 };
 const results = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

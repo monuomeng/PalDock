@@ -101,15 +101,16 @@ export function approvalResponse(kind: RuntimeApprovalRequest['kind'], decision:
 const agentText = (turn: CodexTurn) =>
   turn.items?.filter((i) => i.type === 'agentMessage' && typeof i.text === 'string').at(-1)?.text ?? null;
 
-/** turn/completed → 终态事件；流式期间记下的最后一条回复优先，其次取 turn 自带的条目。 */
+/** turn/completed → 终态事件；与核对共用一套状态映射，流式期间记下的最后一条回复优先。 */
 export function finalTurnEvent(turn: CodexTurn, lastAgentMessage: string | null): RuntimeEvent {
-  switch (turn.status) {
+  const check = toTurnCheck(turn);
+  switch (check.status) {
     case 'completed':
-      return { type: 'completed', finalMessage: lastAgentMessage ?? agentText(turn) };
+      return { type: 'completed', finalMessage: lastAgentMessage ?? check.finalMessage };
+    case 'failed':
+      return { type: 'failed', message: check.message };
     case 'interrupted':
       return { type: 'interrupted' };
-    case 'failed':
-      return { type: 'failed', message: turn.error?.message ?? 'turn 失败' };
     default:
       return { type: 'disconnected', message: `turn 以未知状态结束：${turn.status}` };
   }

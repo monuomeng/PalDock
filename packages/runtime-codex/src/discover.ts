@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { delimiter, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { resolveExecutable } from '@paldock/platform';
 
 export interface CodexCommand {
   command: string;
@@ -11,20 +12,6 @@ export interface CodexCommand {
 }
 
 const NPM_ENTRY = join('node_modules', '@openai', 'codex', 'bin', 'codex.js');
-const CANDIDATES = process.platform === 'win32' ? ['codex.exe', 'codex.cmd'] : ['codex'];
-
-/** 按 PATH 顺序找第一个候选文件，一次遍历。 */
-function findOnPath(): string | undefined {
-  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
-    if (!dir) continue;
-    for (const name of CANDIDATES) {
-      const candidate = join(dir, name);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  return undefined;
-}
-
 /**
  * 找到可直接 spawn 的 Codex 命令。Windows 上 npm 安装只提供 codex.cmd 外壳，
  * 而 Node 不允许不经 shell 启动 .cmd，所以改为用 Node 运行旁边的 codex.js 入口。
@@ -39,8 +26,8 @@ export function resolveCodexCommand(configured?: string, nodePath = process.exec
       ? { command: nodePath, prefixArgs: [configured], source: 'configured' }
       : { command: configured, prefixArgs: [], source: 'configured' };
   }
-  const found = findOnPath();
-  if (!found?.endsWith('.cmd')) return found ? { command: found, prefixArgs: [], source: 'native' } : undefined;
+  const found = resolveExecutable('codex');
+  if (!found?.toLowerCase().endsWith('.cmd')) return found ? { command: found, prefixArgs: [], source: 'native' } : undefined;
   const entry = join(dirname(found), NPM_ENTRY);
   return existsSync(entry) ? { command: nodePath, prefixArgs: [entry], source: 'npm-shim' } : undefined;
 }

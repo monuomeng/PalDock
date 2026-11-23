@@ -1,16 +1,15 @@
 import type {
-  AttentionItem,
   CommandArgsOf,
   CommandName,
+  CommandResultOf,
   EphemeralEvent,
   PersistentEvent,
-  TaskDetail,
-  TaskSummary,
+  RendererResult,
 } from '@paldock/contracts';
 
 /** preload 暴露的白名单方法（见 apps/desktop/src/preload.cts）。 */
 interface Bridge {
-  request(name: string, args: unknown): Promise<{ ok: true; value: unknown } | { ok: false; code: string; message: string }>;
+  request(name: string, args: unknown): Promise<RendererResult>;
   status(): Promise<HostStatus | undefined>;
   pickProject(): Promise<string | undefined>;
   onEvent(listener: (event: PersistentEvent) => void): () => void;
@@ -19,6 +18,7 @@ interface Bridge {
   debugCrashService(): Promise<void>;
 }
 
+/** 主进程推送的连接状态（apps/desktop/src/main.ts 的 publishStatus）。 */
 export type HostStatus =
   | { state: 'starting' | 'ready' }
   | { state: 'connected'; interruptedRuns: number; dataRoot?: string }
@@ -31,31 +31,11 @@ declare global {
   }
 }
 
-/** 各命令的返回类型；未列出的命令返回值不使用。 */
-interface Results {
-  'task.create': TaskDetail;
-  'task.list': TaskSummary[];
-  'task.get': TaskDetail;
-  'task.cancel': TaskDetail;
-  'attention.list': AttentionItem[];
-  'run.checkOutput': string;
-  'maintenance.backup': { path: string };
-}
-type ResultOf<N extends CommandName> = N extends keyof Results ? Results[N] : unknown;
-
-export class ApiError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-export async function call<N extends CommandName>(name: N, args: CommandArgsOf<N>): Promise<ResultOf<N>> {
+/** 调用本地服务命令；失败时抛出带 code 的错误（code 取自 contracts 的 ErrorCode）。 */
+export async function call<N extends CommandName>(name: N, args: CommandArgsOf<N>): Promise<CommandResultOf<N>> {
   const result = await window.paldock.request(name, args);
-  if (!result.ok) throw new ApiError(result.code, result.message);
-  return result.value as ResultOf<N>;
+  if (!result.ok) throw Object.assign(new Error(result.message), { code: result.code });
+  return result.value as CommandResultOf<N>;
 }
 
 export const bridge = (): Bridge => window.paldock;

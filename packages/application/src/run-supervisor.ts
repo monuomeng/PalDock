@@ -14,6 +14,8 @@ import type {
   RuntimeRun,
   StorePort,
   SubtaskRecord,
+  SubtaskStatus,
+  TaskRecord,
   TurnCheck,
 } from '@paldock/contracts';
 import { P1_DEFAULTS } from '@paldock/domain';
@@ -23,7 +25,7 @@ import { redact } from './redact.js';
 import { riskOf } from './risk.js';
 import { moveSubtask, moveTask } from './transitions.js';
 
-export type Limits = typeof P1_DEFAULTS & { maxConcurrentRuns: number; expiryScanMs: number };
+export type Limits = typeof P1_DEFAULTS;
 
 export interface SupervisorDeps {
   store: StorePort;
@@ -46,6 +48,8 @@ export interface RunPlan {
 interface LiveRun {
   run: RunRecord;
   subtask: SubtaskRecord;
+  /** 启动时读一次；检查命令等在 Run 期间不变。 */
+  task: TaskRecord;
   worktree: string | undefined;
   handle: RuntimeRun | undefined;
   /** approvalId → 执行器请求 ID；回复时原样带回。 */
@@ -57,6 +61,7 @@ interface LiveRun {
 }
 
 const TERMINAL_EVENTS = new Set<RuntimeEvent['type']>(['completed', 'failed', 'interrupted', 'disconnected']);
+const CANCELLED = '用户取消';
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 500);
 
@@ -65,6 +70,7 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
  * Run 结束后收集证据。确定性规则都在这里，模型说「完成」只会让子任务进入待验收。
  */
 export class RunSupervisor {
+  /** 按 subtaskId 索引：同一子任务同时最多一次 Run。 */
   private readonly live = new Map<string, LiveRun>();
   private readonly queue: { subtaskId: string; plan: RunPlan }[] = [];
   private readonly limits: Limits;
@@ -74,7 +80,7 @@ export class RunSupervisor {
   private readonly inflight = new Set<Promise<void>>();
 
   constructor(private readonly deps: SupervisorDeps) {
-    this.limits = { ...P1_DEFAULTS, maxConcurrentRuns: 10, expiryScanMs: 15_000, ...deps.limits };
+    this.limits = { ...P1_DEFAULTS, ...deps.limits };
   }
 
   start(): void {
@@ -98,17 +104,6 @@ export class RunSupervisor {
     this.live.clear();
   }
 
-  private background(work: Promise<void>): void {
-    this.inflight.add(work);
-    void work
-      .catch((error) => this.deps.log(`background work failed: ${errorText(error)}`))
-      .finally(() => this.inflight.delete(work));
-  }
-
-  isLive(subtaskId: string): boolean {
-    return [...this.live.values()].some((l) => l.subtask.id === subtaskId) || this.queue.some((q) => q.subtaskId === subtaskId);
-  }
-
   /** 调用方已把子任务置为 queued；并发已满时排队。 */
   enqueue(subtaskId: string, plan: RunPlan): void {
     if (this.live.size >= this.limits.maxConcurrentRuns) this.queue.push({ subtaskId, plan });
@@ -122,7 +117,7 @@ export class RunSupervisor {
       this.queue.splice(queued, 1);
       return false;
     }
-    const live = [...this.live.values()].find((l) => l.subtask.id === subtaskId);
+    const live = this.live.get(subtaskId);
     if (!live) return false;
     live.cancelRequested = true;
     live.check.abort();
@@ -130,14 +125,31 @@ export class RunSupervisor {
     return true;
   }
 
-  /** 用户（或过期）已在库里决定审批，这里转告执行器；没有挂起的审批后 Run 回到 running。 */
+  /** 用户（或过期）已在库里决定审批，这里转告执行器。 */
   forwardDecision(approval: ApprovalRecord, decision: ApprovalDecision): void {
-    const live = this.live.get(approval.runId);
+    const live = this.liveRun(approval.runId);
     const nativeId = live?.approvals.get(approval.id);
     if (!live || nativeId === undefined) return;
-    live.approvals.delete(approval.id);
+    this.releaseApproval(live, approval.id);
     live.handle?.respondApproval(nativeId, decision);
+  }
+
+  private liveRun(runId: string): LiveRun | undefined {
+    for (const live of this.live.values()) if (live.run.id === runId) return live;
+    return undefined;
+  }
+
+  /** 释放本地记录；没有挂起的审批后 Run 回到 running。 */
+  private releaseApproval(live: LiveRun, approvalId: string): void {
+    live.approvals.delete(approvalId);
     if (live.approvals.size === 0 && live.run.status === 'waiting_approval') this.publish(this.runTo(live, 'running'));
+  }
+
+  private background(work: Promise<void>): void {
+    this.inflight.add(work);
+    void work
+      .catch((error) => this.deps.log(`background work failed: ${errorText(error)}`))
+      .finally(() => this.inflight.delete(work));
   }
 
   private publish(events: PersistentEvent[]): void {
@@ -166,7 +178,7 @@ export class RunSupervisor {
         ...(plan.resumesRunId ? { resumesRunId: plan.resumesRunId } : {}),
       });
       this.publish([...moved.events, ...taskEvents, ...run.events]);
-      return this.track(run.record, moved.record);
+      return this.track(run.record, moved.record, store.tasks.getTask(moved.record.taskId)!);
     });
 
     try {
@@ -179,16 +191,17 @@ export class RunSupervisor {
       if (this.stopping) return;
       const reason = plan.threadId ? `续做失败：${errorText(error)}` : `启动失败：${errorText(error)}`;
       if (plan.threadId) this.publish([store.runs.addNotice(live.run.id, 'resume_failed', reason)]);
-      return this.finishBlocked(live, 'failed', reason);
+      return this.finish(live, 'failed', 'blocked', reason);
     }
     if (this.stopping) return live.handle.dispose();
     if (live.cancelRequested) await live.handle.cancel();
   }
 
-  private track(run: RunRecord, subtask: SubtaskRecord): LiveRun {
+  private track(run: RunRecord, subtask: SubtaskRecord, task: TaskRecord): LiveRun {
     const live: LiveRun = {
       run,
       subtask,
+      task,
       worktree: subtask.worktreePath ?? undefined,
       handle: undefined,
       approvals: new Map(),
@@ -197,16 +210,15 @@ export class RunSupervisor {
       cancelRequested: false,
       check: new AbortController(),
     };
-    this.live.set(run.id, live);
+    this.live.set(subtask.id, live);
     return live;
   }
 
   /** 写入型子任务的 worktree 只建一次（数据根下，分支名小写），之后各次 Run 共用。 */
   private async ensureWorktree(live: LiveRun): Promise<string> {
     if (live.subtask.worktreePath) return live.subtask.worktreePath;
-    const task = this.deps.store.tasks.getTask(live.subtask.taskId)!;
-    const workspace = this.deps.store.tasks.getWorkspace(task.workspaceId)!;
-    const slug = task.id.replace(/^task_/, '').slice(0, 8).toLowerCase();
+    const workspace = this.deps.store.tasks.getWorkspace(live.task.workspaceId)!;
+    const slug = live.task.id.replace(/^task_/, '').slice(0, 8).toLowerCase();
     const path = join(this.deps.dataRoot, 'worktrees', slug);
     const branch = `${this.limits.branchPrefix}${slug}`;
     const base = await headCommit(workspace.rootPath).catch(() => {
@@ -226,7 +238,7 @@ export class RunSupervisor {
     } catch (error) {
       // 状态写入失败（例如版本冲突）不能让执行器事件循环崩溃；记录后按失败收尾
       this.deps.log(`run ${live.run.id} event ${event.type} failed: ${errorText(error)}`);
-      if (TERMINAL_EVENTS.has(event.type) && this.live.has(live.run.id)) this.finishBlocked(live, 'failed', '内部错误');
+      if (TERMINAL_EVENTS.has(event.type) && this.live.get(live.subtask.id) === live) this.finish(live, 'failed', 'blocked', '内部错误');
     }
   }
 
@@ -234,14 +246,12 @@ export class RunSupervisor {
     const { store } = this.deps;
     switch (event.type) {
       case 'thread':
-        if (!store.runs.recordThread(live.run, event.threadId)) this.deps.log(`run ${live.run.id} 的 thread 与记录不符`);
-        else live.run = { ...live.run, nativeThreadId: event.threadId };
+        if (store.runs.recordThread(live.run, event.threadId)) live.run = { ...live.run, nativeThreadId: event.threadId };
+        else this.deps.log(`run ${live.run.id} 的 thread 与记录不符`);
         return;
-      case 'turn': {
-        const updated = store.runs.recordTurn(live.run.id, event.turnId);
-        if (updated) live.run = { ...live.run, nativeTurnId: event.turnId };
+      case 'turn':
+        if (store.runs.recordTurn(live.run.id, event.turnId)) live.run = { ...live.run, nativeTurnId: event.turnId };
         return this.publish(this.runTo(live, 'running'));
-      }
       case 'output_delta':
         live.output += event.text;
         this.deps.publishEphemeral({ type: 'run.output_delta', runId: live.run.id, text: event.text });
@@ -249,21 +259,16 @@ export class RunSupervisor {
         return;
       case 'approval_request':
         return this.onApprovalRequest(live, event.request);
-      case 'approval_withdrawn': {
-        const approvalId = [...live.approvals].find(([, nativeId]) => nativeId === event.nativeRequestId)?.[0];
-        const approval = approvalId && store.runs.getApproval(approvalId);
-        if (!approval || approval.status !== 'pending') return;
-        this.publish(store.runs.decideApproval(approval.id, approval.version, 'cancelled', 'policy').events);
-        return this.forwardDecision(approval, 'deny');
-      }
+      case 'approval_withdrawn':
+        return this.onApprovalWithdrawn(live, event.nativeRequestId);
       case 'notice':
         return this.publish([store.runs.addNotice(live.run.id, event.code, event.detail)]);
       case 'completed':
         return this.background(this.finishSucceeded(live, event.finalMessage));
       case 'failed':
-        return this.finishBlocked(live, 'failed', `执行失败：${event.message}`);
+        return this.finish(live, 'failed', 'blocked', `执行失败：${event.message}`);
       case 'interrupted':
-        return live.cancelRequested ? this.finishCancelled(live) : this.finishBlocked(live, 'interrupted', '执行被中断');
+        return this.finishInterrupted(live, '执行被中断');
       case 'disconnected':
         return this.background(this.reconcile(live, event.message));
     }
@@ -284,6 +289,18 @@ export class RunSupervisor {
     this.publish([...change.events, ...this.runTo(live, 'waiting_approval')]);
   }
 
+  /** 执行器自己收回了请求：审批置为 cancelled，不再回复执行器。 */
+  private onApprovalWithdrawn(live: LiveRun, nativeRequestId: string): void {
+    for (const [approvalId, nativeId] of live.approvals) {
+      if (nativeId !== nativeRequestId) continue;
+      const approval = this.deps.store.runs.getApproval(approvalId);
+      if (approval?.status === 'pending') {
+        this.publish(this.deps.store.runs.decideApproval(approval.id, approval.version, 'cancelled', 'policy').events);
+      }
+      return this.releaseApproval(live, approvalId);
+    }
+  }
+
   /** 流式输出只走临时事件；到检查点或 Run 结束时合并成一条持久消息。 */
   private flushOutput(live: LiveRun): void {
     clearTimeout(live.flushTimer);
@@ -294,20 +311,21 @@ export class RunSupervisor {
     this.publish(this.deps.store.messages.append(live.run.sessionId, 'assistant', text, live.run.id).events);
   }
 
-  /** Run 结束时的公共收尾：合并输出、取消仍挂起的审批（转告执行器）、让出并发名额。 */
-  private settle(live: LiveRun, reason: string): PersistentEvent[] {
-    this.flushOutput(live);
-    const events: PersistentEvent[] = [];
-    for (const approval of this.deps.store.runs.pendingApprovals(live.run.id)) {
-      events.push(...this.deps.store.runs.decideApproval(approval.id, approval.version, 'cancelled', 'policy').events);
-      const nativeId = live.approvals.get(approval.id);
-      if (nativeId !== undefined) live.handle?.respondApproval(nativeId, 'cancel');
-    }
+  /**
+   * 取消这次 Run 仍挂起的审批（一条 UPDATE）并让 Run 回到 running；respond 为真时同时回复执行器 cancel。
+   * Run 不会在审批挂起时直接进入终态。
+   */
+  private closeApprovals(live: LiveRun, respond: boolean): PersistentEvent[] {
+    if (live.approvals.size === 0 && live.run.status !== 'waiting_approval') return [];
+    if (respond) for (const nativeId of live.approvals.values()) live.handle?.respondApproval(nativeId, 'cancel');
     live.approvals.clear();
-    this.deps.log(`run ${live.run.id} settled: ${reason}`);
-    this.live.delete(live.run.id);
+    return [...this.deps.store.runs.cancelPendingApprovals(live.run.id).events, ...this.runTo(live, 'running')];
+  }
+
+  /** 让出并发名额（Run 与证据收集都结束后调用一次）。 */
+  private release(live: LiveRun): void {
+    if (this.live.get(live.subtask.id) === live) this.live.delete(live.subtask.id);
     queueMicrotask(() => this.dequeue());
-    return events;
   }
 
   private dequeue(): void {
@@ -317,85 +335,69 @@ export class RunSupervisor {
     }
   }
 
-  private finishBlocked(live: LiveRun, runStatus: 'failed' | 'interrupted', reason: string): void {
+  /** Run 结束的公共收尾：合并输出、取消挂起审批，Run、子任务、任务同一事务进入各自的状态。 */
+  private finish(live: LiveRun, runStatus: RunStatus, subtaskStatus: SubtaskStatus, reason: string): void {
     const { store } = this.deps;
+    this.flushOutput(live);
     this.publish(
       store.transaction(() => [
-        ...this.settle(live, reason),
+        ...this.closeApprovals(live, true),
         ...this.runTo(live, runStatus, reason),
-        ...moveSubtask(store, live.subtask.id, 'blocked', reason).events,
-        ...moveTask(store, live.subtask.taskId, 'blocked', reason),
+        ...moveSubtask(store, live.subtask.id, subtaskStatus, reason).events,
+        ...moveTask(store, live.subtask.taskId, subtaskStatus === 'cancelled' ? 'cancelled' : 'blocked', reason),
       ]),
     );
+    this.deps.log(`run ${live.run.id} finished: ${runStatus}（${reason}）`);
+    this.release(live);
   }
 
-  private finishCancelled(live: LiveRun): void {
-    const { store } = this.deps;
-    this.publish(
-      store.transaction(() => [
-        ...this.settle(live, '用户取消'),
-        ...this.runTo(live, 'cancelled', '用户取消'),
-        ...moveSubtask(store, live.subtask.id, 'cancelled', '用户取消').events,
-        ...moveTask(store, live.subtask.taskId, 'cancelled', '用户取消'),
-      ]),
-    );
+  /** 中断：用户要求的算取消，否则阻塞等用户选择恢复、重新开始或放弃。 */
+  private finishInterrupted(live: LiveRun, reason: string): void {
+    if (live.cancelRequested) this.finish(live, 'cancelled', 'cancelled', CANCELLED);
+    else this.finish(live, 'interrupted', 'blocked', reason);
   }
 
-  /** turn 完成：Run 成功，收集证据后子任务进入待验收（不直接成功）。 */
+  /** turn 完成：Run 成功，收集证据后子任务进入待验收（不直接成功）。证据收集期间仍占用名额、仍可取消。 */
   private async finishSucceeded(live: LiveRun, finalMessage: string | null): Promise<void> {
     const { store } = this.deps;
-    this.publish(store.transaction(() => [...this.settle(live, 'completed'), ...this.runTo(live, 'succeeded')]));
-    // 证据收集期间仍可取消（中止检查命令）；为此暂时留在 live 表中
-    this.live.set(live.run.id, live);
-    let result: NewRunResult;
-    try {
-      result = await this.collectEvidence(live, finalMessage);
-    } catch (error) {
-      result = this.emptyResult(live, finalMessage, `收集证据失败：${errorText(error)}`);
-    }
-    this.live.delete(live.run.id);
+    this.flushOutput(live);
+    this.publish(store.transaction(() => [...this.closeApprovals(live, false), ...this.runTo(live, 'succeeded')]));
+    const result = await this.collectEvidence(live, finalMessage).catch((error) => ({
+      ...this.resultBase(live, finalMessage, `收集证据失败：${errorText(error)}`),
+      checkStatus: 'error' as const,
+    }));
     if (this.stopping) return;
     const cancelled = live.cancelRequested;
     this.publish(
       store.transaction(() => [
         ...store.runs.saveResult(result).events,
-        ...moveSubtask(store, live.subtask.id, cancelled ? 'cancelled' : 'review', cancelled ? '用户取消' : undefined).events,
-        ...(cancelled ? moveTask(store, live.subtask.taskId, 'cancelled', '用户取消') : []),
+        ...moveSubtask(store, live.subtask.id, cancelled ? 'cancelled' : 'review', cancelled ? CANCELLED : undefined).events,
+        ...(cancelled ? moveTask(store, live.subtask.taskId, 'cancelled', CANCELLED) : []),
       ]),
     );
-    this.dequeue();
+    this.release(live);
   }
 
-  private emptyResult(live: LiveRun, finalMessage: string | null, diffStat: string | null): NewRunResult {
-    return {
-      runId: live.run.id,
-      finalMessage,
-      diffStat,
-      checkStatus: 'error',
-      checkExitCode: null,
-      checkDurationMs: null,
-      checkOutputRef: null,
-    };
+  private resultBase(live: LiveRun, finalMessage: string | null, diffStat: string | null) {
+    return { runId: live.run.id, finalMessage, diffStat, checkExitCode: null, checkDurationMs: null, checkOutputRef: null };
   }
 
   private async collectEvidence(live: LiveRun, finalMessage: string | null): Promise<NewRunResult> {
     const worktree = live.worktree!;
-    const diffStat = await stageAndDiffStat(worktree, live.subtask.baseCommit ?? 'HEAD');
-    const task = this.deps.store.tasks.getTask(live.subtask.taskId)!;
-    const base = { runId: live.run.id, finalMessage, diffStat, checkExitCode: null, checkDurationMs: null, checkOutputRef: null };
-    if (!task.checkCommand) return { ...base, checkStatus: 'not_configured' };
+    const base = this.resultBase(live, finalMessage, await stageAndDiffStat(worktree, live.subtask.baseCommit ?? 'HEAD'));
+    const { checkCommand, checkConfirmedAt } = live.task;
+    if (!checkCommand) return { ...base, checkStatus: 'not_configured' };
     // 用户在建任务时没有确认的命令不会运行
-    if (!task.checkConfirmedAt) return { ...base, checkStatus: 'not_confirmed' };
+    if (!checkConfirmedAt) return { ...base, checkStatus: 'not_confirmed' };
 
-    const outcome = await runCheck(task.checkCommand, {
+    const outcome = await runCheck(checkCommand, {
       cwd: worktree,
       timeoutMs: this.limits.checkTimeoutMs,
       maxOutputBytes: this.limits.checkOutputMaxBytes,
       signal: live.check.signal,
     });
     const ref = `checks/${live.run.id}.log`;
-    const dir = join(this.deps.dataRoot, 'artifacts', 'checks');
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(join(this.deps.dataRoot, 'artifacts', 'checks'), { recursive: true });
     const note = outcome.truncated ? `\n\n[输出超过 ${this.limits.checkOutputMaxBytes} 字节，已截断]` : '';
     writeFileSync(join(this.deps.dataRoot, 'artifacts', ref), redact(outcome.output) + note, 'utf8');
     if (outcome.truncated) this.publish([this.deps.store.runs.addNotice(live.run.id, 'output_truncated', '检查命令输出已截断')]);
@@ -407,37 +409,30 @@ export class RunSupervisor {
    * 有明确终态才更新；多次仍无法确认则转为 interrupted 交给用户，不猜测结果。
    */
   private async reconcile(live: LiveRun, message: string): Promise<void> {
-    const { store } = this.deps;
-    this.publish(
-      store.transaction(() => {
-        const events = this.runTo(live, 'unconfirmed', message);
-        for (const approval of store.runs.pendingApprovals(live.run.id)) {
-          events.push(...store.runs.decideApproval(approval.id, approval.version, 'cancelled', 'policy').events);
-        }
-        live.approvals.clear();
-        return events;
-      }),
-    );
-    const { nativeThreadId: threadId, nativeTurnId: turnId } = live.run;
+    this.publish(this.deps.store.transaction(() => [...this.closeApprovals(live, false), ...this.runTo(live, 'unconfirmed', message)]));
+    const check = await this.pollTurn(live.run);
+    if (this.stopping) return;
+    switch (check.status) {
+      case 'completed':
+        return this.finishSucceeded(live, check.finalMessage);
+      case 'failed':
+        return this.finish(live, 'failed', 'blocked', `执行失败：${check.message}`);
+      case 'interrupted':
+        return this.finishInterrupted(live, '执行被中断');
+      default:
+        return this.finishInterrupted(live, live.run.nativeTurnId ? '执行器断线，无法确认这一轮的结果' : '执行器在开始前断线');
+    }
+  }
+
+  /** 按 thread + turn 核对，in_progress / not_found 时按间隔重试；没有 turn ID 直接视为无法确认。 */
+  private async pollTurn({ nativeThreadId: threadId, nativeTurnId: turnId }: RunRecord): Promise<TurnCheck> {
     let check: TurnCheck = { status: 'not_found' };
     for (let attempt = 0; threadId && turnId && attempt < this.limits.confirmAttempts && !this.stopping; attempt++) {
       if (attempt > 0) await sleep(this.limits.confirmIntervalMs);
       check = await this.deps.runtime.checkTurn(threadId, turnId).catch((): TurnCheck => ({ status: 'not_found' }));
       if (check.status !== 'in_progress' && check.status !== 'not_found') break;
     }
-    if (this.stopping) return;
-    switch (check.status) {
-      case 'completed':
-        return this.finishSucceeded(live, check.finalMessage);
-      case 'failed':
-        return this.finishBlocked(live, 'failed', `执行失败：${check.message}`);
-      case 'interrupted':
-        return live.cancelRequested ? this.finishCancelled(live) : this.finishBlocked(live, 'interrupted', '执行被中断');
-      default:
-        return live.cancelRequested
-          ? this.finishCancelled(live)
-          : this.finishBlocked(live, 'interrupted', turnId ? '执行器断线，无法确认这一轮的结果' : '执行器在开始前断线');
-    }
+    return check;
   }
 
   private expireApprovals(): void {

@@ -1,17 +1,14 @@
 import type { TaskService } from '@paldock/application';
-import type { CommandArgs, CommandName } from '@paldock/contracts';
+import type { CommandArgs, CommandName, CommandResultOf } from '@paldock/contracts';
 import type { Store } from '@paldock/storage-sqlite';
 import type { z } from 'zod';
 
-/** 处理函数返回可序列化的结果；写入产生的事件由用例层直接广播。 */
-export type Handlers = { [N in CommandName]: (args: z.output<(typeof CommandArgs)[N]>) => unknown };
+/** 处理函数的返回类型由 contracts 的 CommandResults 约束；写入产生的事件由用例层直接广播。 */
+export type Handlers = {
+  [N in CommandName]: (args: z.output<(typeof CommandArgs)[N]>) => CommandResultOf<N> | Promise<CommandResultOf<N>>;
+};
 
-export interface ServiceInfo {
-  version: string;
-  startedAt: string;
-  interruptedRuns: number;
-  runtime: string;
-}
+export type ServiceInfo = CommandResultOf<'service.status'>;
 
 /** 命令 → 用例的映射。每个处理函数只做参数到用例调用的转换，不含业务规则。 */
 export function createHandlers(store: Store, tasks: TaskService, info: ServiceInfo): Handlers {

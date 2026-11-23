@@ -6,6 +6,10 @@ export const P1_DEFAULTS = {
   approvalTtlMs: 30 * 60 * 1000,
   /** 取消时最多等 turn/started 多久，之后直接结束进程树。 */
   cancelWaitForTurnMs: 10_000,
+  /** 同时执行的 Run 上限（02「上限与护栏」：全局同时最多 10 个模型调用）。 */
+  maxConcurrentRuns: 10,
+  /** 多久扫描一次过期审批。 */
+  expiryScanMs: 15_000,
   /** 执行器断线后核对 turn 结果的次数与间隔。 */
   confirmAttempts: 3,
   confirmIntervalMs: 2_000,

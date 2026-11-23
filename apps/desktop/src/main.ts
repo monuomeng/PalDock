@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron';
-import { COMMAND_NAMES, type CommandName, type EphemeralEvent, type PersistentEvent } from '@paldock/contracts';
+import { COMMAND_NAMES, ErrorCode, type CommandName, type EphemeralEvent, type PersistentEvent, type RendererResult } from '@paldock/contracts';
 import { IpcClient } from '@paldock/platform';
 import { APP_ORIGIN, registerAppScheme, serveRenderer } from './app-protocol.js';
 import { startPowerDiagnostics } from './power-diagnostics.js';
@@ -81,7 +81,7 @@ function fromOurRenderer(event: IpcMainInvokeEvent): boolean {
 }
 
 function registerIpc(): void {
-  ipcMain.handle('paldock:request', async (event, name: unknown, args: unknown) => {
+  ipcMain.handle('paldock:request', async (event, name: unknown, args: unknown): Promise<RendererResult> => {
     if (!fromOurRenderer(event) || typeof name !== 'string' || !RENDERER_COMMANDS.has(name)) {
       throw new Error('不允许的请求');
     }
@@ -90,8 +90,8 @@ function registerIpc(): void {
     try {
       return { ok: true, value: await client.request(name as CommandName, args as never) };
     } catch (error) {
-      const { code = 'internal', message } = error as { code?: string; message: string };
-      return { ok: false, code, message };
+      const { code, message } = error as { code?: unknown; message: string };
+      return { ok: false, code: ErrorCode.safeParse(code).data ?? 'internal', message };
     }
   });
   // 窗口重建（刷新页面）后先拿到当前连接状态

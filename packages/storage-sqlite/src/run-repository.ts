@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type {
   ApprovalChannel,
   Change,
@@ -25,7 +24,7 @@ import type { Clock } from './clock.js';
 import { COLUMNS } from './columns.js';
 import type { Database } from './database.js';
 import type { EventLog } from './event-log.js';
-import { applyTransition, insertWithEvent, statusChanged, type TransitionSpec } from './writes.js';
+import { applyTransition, insertWithEvent, newId, statusChanged, type TransitionSpec } from './writes.js';
 
 const SQL = {
   // 每次 Run 是独立尝试，attempt 在子任务内递增（走 UNIQUE (subtask_id, attempt) 索引）；旧 Run 及其证据保留
@@ -53,7 +52,11 @@ const SQL = {
   selectApproval: `SELECT ${COLUMNS.approval()} FROM approvals WHERE id = ?`,
   // 走部分索引 approvals_pending（条件逐字一致）
   selectExpired: `SELECT ${COLUMNS.approval()} FROM approvals WHERE status = 'pending' AND expires_at <= ? ORDER BY requested_at`,
-  selectPendingOfRun: `SELECT ${COLUMNS.approval()} FROM approvals WHERE run_id = ? AND status = 'pending'`,
+  // Run 结束时一次取消它全部挂起的审批（走 approvals_by_run）
+  cancelPendingOfRun: `
+    UPDATE approvals SET status = 'cancelled', version = version + 1, decided_at = ?, decided_via = 'policy'
+     WHERE run_id = ? AND status = 'pending'
+    RETURNING ${COLUMNS.approval()}`,
   insertResult: `
     INSERT INTO run_results (run_id, final_message, diff_stat, check_status, check_exit_code, check_duration_ms, check_output_ref, collected_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -92,8 +95,6 @@ const TRANSITIONS = {
       RETURNING ${COLUMNS.approval()}`,
   },
 } satisfies { run: TransitionSpec<RunStatus>; approval: TransitionSpec<ApprovalStatus> };
-
-const newId = (prefix: string) => `${prefix}_${randomUUID()}`;
 
 const groupByRun = <T extends { runId: string | null }>(rows: T[]) => {
   const map = new Map<string, T[]>();
@@ -184,8 +185,13 @@ export class RunRepository implements RunStorePort {
     return this.db.get<ApprovalRecord>(SQL.selectApproval, id);
   }
 
-  pendingApprovals(runId: string): ApprovalRecord[] {
-    return this.db.all<ApprovalRecord>(SQL.selectPendingOfRun, runId);
+  /** Run 结束或执行器断线时，把这次 Run 仍挂起的审批一次置为 cancelled（policy），每条各写一个事件。 */
+  cancelPendingApprovals(runId: string): Change<ApprovalRecord[]> {
+    return this.db.transaction(() => {
+      const record = this.db.all<ApprovalRecord>(SQL.cancelPendingOfRun, this.clock.iso(), runId);
+      const events = record.map((a) => this.events.append(a.id, { type: 'approval.decided', payload: { status: 'cancelled', via: 'policy' } }));
+      return { record, events };
+    });
   }
 
   expiredApprovals(): ApprovalRecord[] {
@@ -216,10 +222,14 @@ export class RunRepository implements RunStorePort {
       result.checkOutputRef,
       this.clock.iso(),
     ];
-    return this.db.transaction(() => {
-      const record = this.db.get<RunResultRecord>(SQL.insertResult, ...params)!;
-      return { record, events: [this.events.append(record.runId, { type: 'run.result_collected', payload: { checkStatus: record.checkStatus } })] };
-    });
+    return insertWithEvent<RunResultRecord>(
+      this.db,
+      this.events,
+      SQL.insertResult,
+      params,
+      (r) => ({ type: 'run.result_collected', payload: { checkStatus: r.checkStatus } }),
+      (r) => r.runId,
+    );
   }
 
   getResult(runId: string): RunResultRecord | undefined {

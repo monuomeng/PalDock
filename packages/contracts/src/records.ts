@@ -161,10 +161,20 @@ export interface RunDetail {
   messages: MessageRecord[];
 }
 
+/** 当前允许的用户操作，由服务端按状态机与续做条件给出，界面只按它显示按钮。 */
+export interface TaskActions {
+  cancel: boolean;
+  review: boolean;
+  resume: boolean;
+  restart: boolean;
+  abandon: boolean;
+}
+
 export interface TaskDetail {
   task: TaskRecord;
   workspace: WorkspaceRecord;
   subtask: SubtaskRecord;
   /** 按 attempt 升序。 */
   runs: RunDetail[];
+  actions: TaskActions;
 }

@@ -44,8 +44,9 @@ ALTER TABLE runs ADD COLUMN native_turn_id TEXT;
 ALTER TABLE runs ADD COLUMN resumes_run_id TEXT REFERENCES runs (id);
 ALTER TABLE runs ADD COLUMN failure_reason TEXT;
 
+-- 迁移前已有的审批行没有类别，记为 other
 ALTER TABLE approvals ADD COLUMN kind TEXT NOT NULL DEFAULT 'other'
-  CHECK (kind IN ('command', 'file_change', 'permissions', 'check_command', 'other'));
+  CHECK (kind IN ('command', 'file_change', 'permissions', 'other'));
 ALTER TABLE approvals ADD COLUMN native_request_id TEXT;
 ALTER TABLE approvals ADD COLUMN cwd TEXT;
 ALTER TABLE approvals ADD COLUMN detail TEXT;

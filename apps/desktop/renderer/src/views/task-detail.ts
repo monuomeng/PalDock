@@ -1,10 +1,8 @@
 import type { ApprovalRecord, RunDetail, SubtaskRecord, TaskDetail } from '@paldock/contracts';
 import { call } from '../api.js';
-import { field, h, type Child } from '../dom.js';
-import { APPROVAL_LABEL, CHECK_LABEL, RISK_LABEL, RUN_LABEL, SUBTASK_LABEL, duration, time } from '../format.js';
+import { h, type Child } from '../dom.js';
+import { APPROVAL_LABEL, CHECK_LABEL, RISK_LABEL, RUN_LABEL, SUBTASK_LABEL, checkCommandText, duration, time } from '../format.js';
 import { liveText } from '../live-output.js';
-
-const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
 
 /** 操作失败时把错误显示在页面上（例如版本冲突：别处已处理）。 */
 type Act = (action: () => Promise<unknown>) => () => Promise<void>;
@@ -13,7 +11,7 @@ type Act = (action: () => Promise<unknown>) => () => Promise<void>;
  * 任务详情：目标与 worktree、按时间列出的各次 Run（执行器、原生会话、状态、用时）、
  * 当前 Run 的流式输出、审批卡片、证据，以及取消 / 验收 / 退回 / 恢复操作。
  */
-export async function taskDetailView(taskId: string, focusRunId: string | undefined, refresh: () => void): Promise<HTMLElement> {
+export async function taskDetailView(taskId: string, focusRunId: string | undefined, refresh: () => void): Promise<RenderedDetail> {
   const detail = await call('task.get', { taskId });
   const error = h('p', { class: 'error', role: 'alert' });
   const act: Act = (action) => async () => {
@@ -28,7 +26,7 @@ export async function taskDetailView(taskId: string, focusRunId: string | undefi
   const { task, subtask, workspace } = detail;
   const focus = focusRunId ?? detail.runs.at(-1)?.run.id;
 
-  return h(
+  const element = h(
     'article',
     { class: 'task-detail', 'aria-labelledby': 'task-title' },
     h('h2', { id: 'task-title' }, task.title),
@@ -39,7 +37,7 @@ export async function taskDetailView(taskId: string, focusRunId: string | undefi
       ...fact('项目', workspace.rootPath),
       ...fact('分支', subtask.branch ?? '（尚未创建）'),
       ...fact('worktree', subtask.worktreePath ?? '（尚未创建）'),
-      ...fact('检查命令', task.checkCommand ? `${[task.checkCommand.executable, ...task.checkCommand.args].join(' ')}${task.checkConfirmedAt ? '' : '（未确认，不会运行）'}` : '未设置'),
+      ...fact('检查命令', checkCommandText(task)),
       ...(subtask.reworkCount > 0 ? fact('退回次数', subtask.reworkCount) : []),
     ),
     h('details', {}, h('summary', {}, '目标'), h('pre', { class: 'goal' }, task.goal)),
@@ -48,51 +46,58 @@ export async function taskDetailView(taskId: string, focusRunId: string | undefi
     h('h3', {}, `执行记录（${detail.runs.length} 次）`),
     ...[...detail.runs].reverse().map((run) => runView(run, run.run.id === focus, act)),
   );
+  return { element, ids: scopeOf(detail) };
+}
+
+export interface RenderedDetail {
+  element: HTMLElement;
+  /** 这个页面涉及的聚合 ID；只有这些对象的事件才需要重绘。 */
+  ids: Set<string>;
+}
+
+function scopeOf({ task, subtask, runs }: TaskDetail): Set<string> {
+  return new Set([task.id, subtask.id, ...runs.flatMap((r) => [r.run.id, ...r.approvals.map((a) => a.id)])]);
 }
 
 function fact(label: string, value: Child): [HTMLElement, HTMLElement] {
   return [h('dt', {}, label), h('dd', {}, value)];
 }
 
-function actions(detail: TaskDetail, act: Act): HTMLElement | null {
-  const { subtask, task } = detail;
-  if (TERMINAL.has(subtask.status)) return null;
-  const latest = detail.runs.at(-1)?.run;
-  const cancel = h('button', { type: 'button', class: 'danger', onclick: act(() => call('task.cancel', { taskId: task.id })) }, '取消任务');
-
-  if (subtask.status === 'review') return reviewActions(subtask, act, cancel);
-  if (subtask.status === 'blocked') {
-    const canResume = latest?.status === 'interrupted' && !!latest.nativeThreadId;
-    const recover = (action: 'resume' | 'restart' | 'abandon') =>
-      act(() => call('run.recover', { subtaskId: subtask.id, expectedVersion: subtask.version, action }));
-    return h(
-      'section',
-      { class: 'panel blocked', 'aria-label': '阻塞处理' },
-      h('p', {}, h('strong', {}, '已阻塞：'), subtask.statusReason ?? '原因未知'),
-      h(
-        'p',
-        { class: 'hint' },
-        canResume
-          ? '「恢复」在同一个执行器会话里继续；「重新开始」开一个新会话从头做；两者都会保留这次的记录。'
-          : '这次执行无法续做，可以重新开始（新会话），或放弃这个任务。',
-      ),
-      h(
-        'div',
-        { class: 'actions' },
-        canResume ? h('button', { type: 'button', class: 'primary', onclick: recover('resume') }, '恢复') : null,
-        h('button', { type: 'button', onclick: recover('restart') }, '重新开始'),
-        h('button', { type: 'button', class: 'danger', onclick: recover('abandon') }, '放弃'),
-      ),
-    );
-  }
-  return h('div', { class: 'actions' }, cancel);
+/** 按钮只按服务端给出的可用操作显示，规则不在界面里重复。 */
+function actions({ task, subtask, actions: allowed }: TaskDetail, act: Act): HTMLElement | null {
+  const cancel = allowed.cancel
+    ? h('button', { type: 'button', class: 'danger', onclick: act(() => call('task.cancel', { taskId: task.id })) }, '取消任务')
+    : null;
+  if (allowed.review) return reviewActions(subtask, act, cancel);
+  if (!allowed.restart) return cancel && h('div', { class: 'actions' }, cancel);
+  const recover = (action: 'resume' | 'restart' | 'abandon') =>
+    act(() => call('run.recover', { subtaskId: subtask.id, expectedVersion: subtask.version, action }));
+  return h(
+    'section',
+    { class: 'panel blocked', 'aria-label': '阻塞处理' },
+    h('p', {}, h('strong', {}, '已阻塞：'), subtask.statusReason ?? '原因未知'),
+    h(
+      'p',
+      { class: 'hint' },
+      allowed.resume
+        ? '「恢复」在同一个执行器会话里继续；「重新开始」开一个新会话从头做；两者都会保留这次的记录。'
+        : '这次执行无法续做，可以重新开始（新会话），或放弃这个任务。',
+    ),
+    h(
+      'div',
+      { class: 'actions' },
+      allowed.resume ? h('button', { type: 'button', class: 'primary', onclick: recover('resume') }, '恢复') : null,
+      h('button', { type: 'button', onclick: recover('restart') }, '重新开始'),
+      allowed.abandon ? h('button', { type: 'button', class: 'danger', onclick: recover('abandon') }, '放弃') : null,
+    ),
+  );
 }
 
-function reviewActions(subtask: SubtaskRecord, act: Act, cancel: HTMLElement): HTMLElement {
+function reviewActions(subtask: SubtaskRecord, act: Act, cancel: HTMLElement | null): HTMLElement {
   const note = h('textarea', { id: 'review-note', rows: 3, 'data-keep': `review-${subtask.id}`, placeholder: '退回时必填：哪里不对、要怎么改' });
   const decide = (decision: 'accept' | 'rework') =>
     act(() => {
-      const text = field<HTMLTextAreaElement>(note.parentElement!, '#review-note').value.trim();
+      const text = note.value.trim();
       return call('review.decide', { subtaskId: subtask.id, expectedVersion: subtask.version, decision, ...(text ? { note: text } : {}) });
     });
   return h(
