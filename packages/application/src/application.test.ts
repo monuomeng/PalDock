@@ -120,7 +120,10 @@ describe('风险分级（只看客观内容）', () => {
     [{ kind: 'file_change', paths: [inside, outside] }, 'write_outside_worktree'],
     [{ kind: 'file_change', paths: [] }, 'write_outside_worktree'],
     [{ kind: 'command', command: 'pnpm install', cwd: wt }, 'install_dependencies'],
-    [{ kind: 'command', command: 'pnpm test', cwd: wt }, 'run_tests'],
+    [{ kind: 'command', command: 'pnpm test', cwd: wt }, 'run_command_in_worktree'],
+    // 真实 Codex 实测：越界写文件的命令，路径里带 tests 也不能被当成跑测试
+    [{ kind: 'command', command: `Set-Content -Path '${join(outside, 'tests', 'x.txt')}' -Value hi`, cwd: wt }, 'write_outside_worktree'],
+    [{ kind: 'command', command: `type "${inside}"`, cwd: wt }, 'run_command_in_worktree'],
     [{ kind: 'command', command: 'git push origin main', cwd: wt }, 'push_remote'],
     [{ kind: 'command', command: 'ls', cwd: outside }, 'write_outside_worktree'],
     [{ kind: 'command', command: 'curl example.com', cwd: wt }, 'run_command_in_worktree'],
