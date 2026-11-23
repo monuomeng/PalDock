@@ -6,7 +6,7 @@
  * `--bounce` 在运行中途主动断开再重连，验证重连与断线期间的事件。
  * 输出只含事件类型、会话类型、去重结果与延迟，不含消息正文、用户 ID 与凭据。
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as Lark from '@larksuiteoapi/node-sdk';
@@ -29,7 +29,9 @@ async function main(): Promise<void> {
   const credential = await readCredential('paldock/feishu');
   if (!credential) return log('凭据管理器中没有 paldock/feishu');
 
-  const dataRoot = mkdtempSync(join(tmpdir(), 'paldock-feishu-probe-'));
+  // 固定目录，跨次运行保留 inbox，用来验证重启后去重仍然有效
+  const dataRoot = join(tmpdir(), 'paldock-feishu-probe');
+  mkdirSync(dataRoot, { recursive: true });
   const store = await openStore(dataRoot);
   const base = { appId: credential.user, appSecret: credential.secret, loggerLevel: Lark.LoggerLevel.warn };
   const client = new Lark.Client(base);
@@ -92,7 +94,6 @@ async function main(): Promise<void> {
   ws.close();
   log('done', { received, inboxRows: store.db.get<{ n: number }>('SELECT count(*) AS n FROM inbox')?.n });
   store.close();
-  rmSync(dataRoot, { recursive: true, force: true });
   process.exit(0);
 }
 

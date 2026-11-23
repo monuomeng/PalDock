@@ -8,10 +8,10 @@
 |---|---|---|
 | P0-01 | Codex app-server 能力 | 通过：发现、initialize、账号、thread、流式、中断、审批请求、跨进程恢复均已实测（2026-11-23 经用户同意跑了计费项）；app-server 在 turn 中途崩溃的恢复未测 |
 | P0-02 | Claude Code SDK/CLI | 通过（CLI stream-json）：流式、中断、权限请求、跨进程恢复均已实测；Agent SDK 未单独评估。桌面版自带 Claude Code 2.1.325（`%LOCALAPPDATA%\Claude-Data\…\claude-code\2.1.325\…\claude.exe`）），需单独登录 |
-| P0-03 | 飞书长连接 | 阻塞：无测试租户；P0 只完成 inbox 去重、租约与会话串行的存储侧实现 |
+| P0-03 | 飞书长连接 | 通过（单聊）：用户自建测试应用，长连接、接收、回复、断线补投与去重已实测；群聊、卡片未测 |
 | P0-04 | Electron + SQLite + 受限 IPC | 通过（Windows）：存储、服务进程、Electron 窗口、看护重启、单实例与正常退出已实测；电源事件、长路径、macOS 未测 |
 | P0-05 | 版本化事件与状态机 | 通过：契约与状态机测试见 `packages/contracts`、`packages/domain` |
-| P0-06 | 许可证与素材 | 待用户决定 |
+| P0-06 | 许可证与素材 | 已决定（2026-11-23）：暂不开源。仓库保持私有、不放开源许可证；只引入允许闭源分发的依赖（MIT / Apache-2.0 / BSD 等），不复制 GPL / AGPL 代码（Coopanion 只借鉴设计）。桌宠素材来源待定 |
 | P0-07 | Codex / Claude / ACP 子代理对比 | 未开始：P0-02 已通过，可以开始 |
 
 自动化测试：`pnpm test` 共 44 项通过，`pnpm build`（`tsc -b` 严格模式）通过。
@@ -68,6 +68,21 @@
 
 与 Codex 对照：两者都支持流式、中断、宿主审批和恢复，可以落到同一个 `RuntimeAdapter` 契约上；差异在于 Codex 审批是 JSON-RPC 服务端请求、按命令/文件改动分类，Claude 是按工具名的 `can_use_tool`，策略引擎需要各自映射到风险级别。
 
+## P0-03 飞书长连接
+
+探测脚本 `node packages/channel-feishu/dist/probe.js [--minutes N] [--reply] [--bounce]`，官方 SDK `@larksuiteoapi/node-sdk` 1.76.0（MIT）的 WSClient。凭据由用户用 `cmdkey /generic:paldock/feishu` 存入 Windows 凭据管理器，程序经 Win32 CredRead 读入内存，不落盘、不进日志。
+
+| 项 | 实测（2026-11-23，用户的测试租户与自建应用） |
+|---|---|
+| 建连 | 启动约 0.3 秒 `ready`，无需公网地址；必须先有程序在线，开发者后台才能把订阅方式保存为「长连接」 |
+| 接收 | `im.message.receive_v1` 载荷含 `event_id`、`create_time`、`event_type`、`tenant_key`、`app_id`、`sender`、`message`；`event_id` 可直接作为 inbox 去重键 |
+| 回复 | 单聊里 `im.v1.message.reply` 成功（code 0），接收到回复约 0.8–1.5 秒 |
+| 时钟 | `create_time` 比本机时间晚约 0.6–0.7 秒（负延迟），时间判断不能依赖它与本机时钟的差 |
+| 断线补投 | 断开 3 分钟期间发出的 3 条消息，重连后没有立刻推送，而是在各自发送后约 **314 秒**统一补投；配置订阅前发出的消息同样在约 314 秒后补投。补投的消息仍按新事件处理，未见重复投递 |
+| 去重 | inbox 放在固定数据根，跨进程重启保留；同一 `event_id` 再次到达会被拒绝（存储侧测试已覆盖） |
+
+对产品的影响：渠道断线恢复后的约 5 分钟内，外部消息可能延迟到达，界面应提示「渠道刚恢复，消息可能延迟」；补投与重试都必须靠 `event_id` 去重。未测：群聊 @ 机器人、交互卡片与 `card.action.trigger`、长时间断线（补投重试次数与上限）。
+
 ## P0-04 存储（SQLite）
 
 驱动选择 `node:sqlite`（Node 内置，SQLite 3.53.4）：Electron 45 自带的 Node 同样提供，免去 better-sqlite3 在 Windows 上的原生编译。
@@ -117,5 +132,5 @@ Electron 45.2.3（内置 Node 24.22.2）。其 `node:sqlite` 为 SQLite 3.53.4�
 ## 阻塞项与所需条件
 
 - **P0-07**：P0-02 已解除阻塞，子代理与独立会话对比待做。
-- **P0-03**：需要飞书测试租户与自建应用（WSClient 长连接权限），Telegram 需要测试 bot 与可用代理。
-- **P0-06**：需要用户确定产品许可证与桌宠素材来源。
+- **Telegram**：需要测试 bot 与可用代理。
+- **P0-06**：桌宠素材来源待定。
