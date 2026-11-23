@@ -63,8 +63,15 @@ export class JsonRpcStdioClient {
     return this.child.stderr;
   }
 
-  request<T = unknown>(method: string, params?: unknown): Promise<T> {
-    return this.pending.add((id) => writeFrame(this.child.stdin, { id, method, params })) as Promise<T>;
+  /** timeoutMs 到期仍无响应时拒绝（进程可能已卡死）；缺省不限时，适用于 turn 这类长请求。 */
+  request<T = unknown>(method: string, params?: unknown, timeoutMs?: number): Promise<T> {
+    const response = this.pending.add((id) => writeFrame(this.child.stdin, { id, method, params })) as Promise<T>;
+    if (timeoutMs === undefined) return response;
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${method} 超时（${timeoutMs} ms）`)), timeoutMs);
+    });
+    return Promise.race([response, timeout]).finally(() => clearTimeout(timer));
   }
 
   notify(method: string, params?: unknown): void {

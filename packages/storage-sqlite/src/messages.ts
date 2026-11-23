@@ -1,36 +1,27 @@
-import type { MessageRole } from '@paldock/contracts';
+import type { MessageRecord, MessageRole } from '@paldock/contracts';
 import type { Clock } from './clock.js';
+import { COLUMNS } from './columns.js';
 import type { Database } from './database.js';
 import type { EventLog } from './event-log.js';
 import { insertWithEvent, type Change } from './writes.js';
 
-export interface MessageRecord {
-  id: number;
-  sessionId: string;
-  role: MessageRole;
-  body: string;
-  createdAt: string;
-}
-
-const columns = (alias: string) =>
-  `${alias}id, ${alias}session_id AS sessionId, ${alias}role, ${alias}body, ${alias}created_at AS createdAt`;
 
 /** trigram 分词至少需要 3 个字符；更短的查询（例如两字中文词）只能 LIKE 全表扫描。 */
 const TRIGRAM_MIN_CHARS = 3;
 
 const SQL = {
   insert: `
-    INSERT INTO messages (session_id, role, body, created_at) VALUES (?, ?, ?, ?)
-    RETURNING ${columns('')}`,
+    INSERT INTO messages (session_id, run_id, role, body, created_at) VALUES (?, ?, ?, ?, ?)
+    RETURNING ${COLUMNS.message()}`,
   searchFts: `
-    SELECT ${columns('m.')}
+    SELECT ${COLUMNS.message('m.')}
       FROM messages_fts AS f
       JOIN messages AS m ON m.id = f.rowid
      WHERE messages_fts MATCH ?
      ORDER BY f.rank
      LIMIT ?`,
   searchLike: `
-    SELECT ${columns('m.')}
+    SELECT ${COLUMNS.message('m.')}
       FROM messages AS m
      WHERE m.body LIKE ? ESCAPE '\\'
      ORDER BY m.id DESC
@@ -48,10 +39,12 @@ export class MessageStore {
     private readonly clock: Clock,
   ) {}
 
-  append(sessionId: string, role: MessageRole, body: string): Change<MessageRecord> {
-    return insertWithEvent<MessageRecord>(this.db, this.events, SQL.insert, [sessionId, role, body, this.clock.iso()], () => ({
+  /** runId 为空表示不属于某次 Run 的消息（例如以后的主会话对话）。 */
+  append(sessionId: string, role: MessageRole, body: string, runId: string | null = null): Change<MessageRecord> {
+    const params = [sessionId, runId, role, body, this.clock.iso()];
+    return insertWithEvent<MessageRecord>(this.db, this.events, SQL.insert, params, () => ({
       type: 'message.created',
-      payload: { sessionId, role },
+      payload: { sessionId, runId, role },
     }));
   }
 

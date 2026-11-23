@@ -1,19 +1,10 @@
-import type { AttentionKind } from '@paldock/contracts';
+import type { AttentionItem, AttentionKind } from '@paldock/contracts';
 import type { Clock } from './clock.js';
 import type { Database } from './database.js';
 
-export interface AttentionItem {
-  kind: AttentionKind;
-  itemId: string;
-  taskId: string;
-  title: string;
-  since: string;
-  read: boolean;
-}
-
 const SQL = {
   list: `
-    SELECT i.kind, i.item_id AS itemId, i.task_id AS taskId, i.title, i.since, r.item_id IS NOT NULL AS read
+    SELECT i.kind, i.item_id AS itemId, i.task_id AS taskId, i.run_id AS runId, i.title, i.reason, i.since, r.item_id IS NOT NULL AS read
       FROM attention_items AS i
       LEFT JOIN attention_reads AS r ON r.item_kind = i.kind AND r.item_id = i.item_id
      ORDER BY i.since`,

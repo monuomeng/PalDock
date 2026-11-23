@@ -32,7 +32,13 @@ function findOnPath(): string | undefined {
  * `nodePath` 在 Electron 内应传 Electron 可执行文件，并设置 ELECTRON_RUN_AS_NODE=1。
  */
 export function resolveCodexCommand(configured?: string, nodePath = process.execPath): CodexCommand | undefined {
-  if (configured) return existsSync(configured) ? { command: configured, prefixArgs: [], source: 'configured' } : undefined;
+  if (configured) {
+    if (!existsSync(configured)) return undefined;
+    // 配置为 .js / .mjs 入口时（npm 布局或离线模拟执行器）用 Node 运行
+    return /\.m?js$/i.test(configured)
+      ? { command: nodePath, prefixArgs: [configured], source: 'configured' }
+      : { command: configured, prefixArgs: [], source: 'configured' };
+  }
   const found = findOnPath();
   if (!found?.endsWith('.cmd')) return found ? { command: found, prefixArgs: [], source: 'native' } : undefined;
   const entry = join(dirname(found), NPM_ENTRY);

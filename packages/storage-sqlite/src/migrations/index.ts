@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { backup } from 'node:sqlite';
 import type { Database } from '../database.js';
 import { initialSchema } from './001-initial.js';
+import { p1Schema } from './002-p1-sessions-runs.js';
 
 export interface Migration {
   version: number;
@@ -11,7 +12,10 @@ export interface Migration {
 }
 
 /** 单向递增；已发布的迁移不再修改，只追加新版本。 */
-export const MIGRATIONS: readonly Migration[] = [{ version: 1, name: 'initial', sql: initialSchema }];
+export const MIGRATIONS: readonly Migration[] = [
+  { version: 1, name: 'initial', sql: initialSchema },
+  { version: 2, name: 'p1-sessions-runs', sql: p1Schema },
+];
 
 export interface MigrateResult {
   from: number;

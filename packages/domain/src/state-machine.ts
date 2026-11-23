@@ -32,7 +32,7 @@ export const taskMachine = defineMachine<TaskStatus>('task', {
   running: ['waiting_approval', 'waiting_dependency', 'blocked', 'succeeded', 'failed', 'cancelled'],
   waiting_approval: ['running', 'failed', 'cancelled'],
   waiting_dependency: ['running', 'blocked', 'cancelled'],
-  blocked: ['queued', 'cancelled'],
+  blocked: ['queued', 'failed', 'cancelled'],
   succeeded: [],
   failed: [],
   cancelled: [],
@@ -49,7 +49,8 @@ export const subtaskMachine = defineMachine<SubtaskStatus>('subtask', {
   running: ['waiting_approval', 'blocked', 'review', 'failed', 'cancelled'],
   waiting_approval: ['running', 'failed', 'cancelled'],
   waiting_dependency: ['queued', 'blocked', 'cancelled'],
-  blocked: ['queued', 'cancelled'],
+  // blocked → failed：服务重启后被中断、用户选择放弃
+  blocked: ['queued', 'failed', 'cancelled'],
   review: ['succeeded', 'failed', 'queued', 'cancelled'],
   succeeded: [],
   failed: ['queued'],
@@ -63,7 +64,8 @@ export const subtaskMachine = defineMachine<SubtaskStatus>('subtask', {
 export const runMachine = defineMachine<RunStatus>('run', {
   starting: ['running', 'unconfirmed', 'interrupted', 'failed', 'cancelled'],
   running: ['waiting_approval', 'unconfirmed', 'interrupted', 'succeeded', 'failed', 'cancelled'],
-  waiting_approval: ['running', 'unconfirmed', 'interrupted', 'failed', 'cancelled'],
+  // 审批挂起时 turn 也可能直接结束（执行器自己收回了请求）
+  waiting_approval: ['running', 'unconfirmed', 'interrupted', 'succeeded', 'failed', 'cancelled'],
   unconfirmed: ['running', 'waiting_approval', 'interrupted', 'succeeded', 'failed', 'cancelled'],
   interrupted: ['running', 'failed', 'cancelled'],
   succeeded: [],

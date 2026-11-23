@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import {
   ApprovalChannel,
+  ApprovalKind,
+  CheckStatus,
+  ReviewDecision,
   ApprovalStatus,
   MessageRole,
   RiskLevel,
@@ -37,7 +40,7 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
   z.object({ type: z.literal('run.status_changed'), payload: transition(RunStatus) }),
   z.object({
     type: z.literal('approval.requested'),
-    payload: z.object({ runId: Id, riskLevel: RiskLevel, summary: z.string().max(500), expiresAt: z.iso.datetime() }),
+    payload: z.object({ runId: Id, kind: ApprovalKind, riskLevel: RiskLevel, expiresAt: z.iso.datetime() }),
   }),
   z.object({
     type: z.literal('approval.decided'),
@@ -45,7 +48,16 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('message.created'),
-    payload: z.object({ sessionId: Id, role: MessageRole }),
+    payload: z.object({ sessionId: Id, runId: Id.nullable(), role: MessageRole }),
+  }),
+  /** Run 结束后收集到证据；聚合 ID 为 runId。 */
+  z.object({ type: z.literal('run.result_collected'), payload: z.object({ checkStatus: CheckStatus }) }),
+  /** 用户验收或退回；聚合 ID 为产生证据的那次 runId。 */
+  z.object({ type: z.literal('review.decided'), payload: z.object({ decision: ReviewDecision }) }),
+  /** 需要让用户知道、但不改变状态的情况，例如执行器发来未识别的请求、恢复失败。 */
+  z.object({
+    type: z.literal('run.notice'),
+    payload: z.object({ code: z.enum(['unknown_request', 'resume_failed', 'output_truncated']), detail: z.string().max(500) }),
   }),
 ]);
 export type PersistentEventBody = z.infer<typeof PersistentEventBody>;

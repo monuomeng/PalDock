@@ -1,23 +1,39 @@
 import { z } from 'zod';
 import { EphemeralEvent, PersistentEvent } from './events.js';
-import { AttentionKind, SCHEMA_VERSION, TaskStatus } from './states.js';
+import { CheckCommand } from './records.js';
+import { ApprovalDecision, AttentionKind, ReviewDecision, SCHEMA_VERSION } from './states.js';
 
 /** 单帧上限；超长帧直接断开，防止本机客户端撑爆内存。 */
 export const MAX_FRAME_BYTES = 1024 * 1024;
 
-const Id = z.string().min(1);
+const Id = z.string().min(1).max(200);
+const Version = z.number().int().nonnegative();
 
 /** 命令名 → 参数 schema。新增命令只在这里登记，服务端和客户端共用。 */
 export const CommandArgs = {
   'service.status': z.object({}),
-  'workspace.create': z.object({ name: z.string().min(1).max(100), rootPath: z.string().min(1) }),
-  'task.create': z.object({ workspaceId: Id, title: z.string().min(1).max(200) }),
-  'task.transition': z.object({
-    taskId: Id,
-    expectedVersion: z.number().int().nonnegative(),
-    to: TaskStatus,
-    reason: z.string().max(500).optional(),
-  }),
+  'task.create': z
+    .object({
+      /** 用户在桌面选的项目目录（git 仓库）。 */
+      rootPath: z.string().min(1).max(1000),
+      goal: z.string().trim().min(1).max(8000),
+      check: CheckCommand.optional(),
+      /** 用户已看过完整命令和「以你的账户权限运行」的提示并确认；未确认的命令不会运行。 */
+      checkConfirmed: z.boolean().default(false),
+      /** 客户端为每次提交生成；重复提交返回同一个任务。 */
+      idempotencyKey: z.string().min(8).max(100),
+    })
+    .strict(),
+  'task.list': z.object({ limit: z.number().int().positive().max(500).default(100) }),
+  'task.get': z.object({ taskId: Id }),
+  'task.cancel': z.object({ taskId: Id }),
+  'approval.decide': z.object({ approvalId: Id, expectedVersion: Version, decision: ApprovalDecision }),
+  'review.decide': z
+    .object({ subtaskId: Id, expectedVersion: Version, decision: ReviewDecision, note: z.string().trim().max(2000).optional() })
+    .refine((v) => v.decision === 'accept' || (v.note?.length ?? 0) > 0, { message: '退回重做需要写明原因' }),
+  /** 服务重启后被中断的子任务：恢复（续做同一 thread）、重新开始（新 thread）或放弃。 */
+  'run.recover': z.object({ subtaskId: Id, expectedVersion: Version, action: z.enum(['resume', 'restart', 'abandon']) }),
+  'run.checkOutput': z.object({ runId: Id }),
   'events.since': z.object({
     afterSeq: z.number().int().nonnegative(),
     limit: z.number().int().positive().max(1000).default(200),
@@ -25,6 +41,7 @@ export const CommandArgs = {
   'attention.list': z.object({}),
   'attention.markRead': z.object({ itemKind: AttentionKind, itemId: Id }),
   'messages.search': z.object({ query: z.string().min(1).max(200), limit: z.number().int().positive().max(100).default(20) }),
+  'maintenance.backup': z.object({}),
 } as const;
 export type CommandName = keyof typeof CommandArgs;
 export const COMMAND_NAMES = Object.keys(CommandArgs) as [CommandName, ...CommandName[]];
