@@ -26,7 +26,10 @@ export interface RunStartRequest {
   runId: string;
   cwd: string;
   prompt: string;
-  /** 上次 Run 的原生会话 ID；有值时先尝试恢复，失败再新建。 */
+  /**
+   * 要恢复的原生会话 ID；有值时只尝试恢复，失败即报错，不静默新建会话
+   * （上下文和审批边界会因此改变）。是否改为新建由用户决定，新建时开新的 Run。
+   */
   nativeSessionId?: string;
 }
 
