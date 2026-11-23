@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, rmSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { join } from 'node:path';
@@ -8,10 +8,16 @@ import { MAX_FRAME_BYTES } from '@paldock/contracts';
  * 本机 IPC 端点：Windows 用带随机后缀的命名管道（不落盘），
  * macOS / Linux 用数据根下的 Unix 域套接字（权限 0600）。不开 TCP 端口。
  */
+/** macOS 的 sockaddr_un.sun_path 只有 104 字节（Linux 108），含结尾的 \0。 */
+const MAX_SOCKET_PATH_BYTES = 103;
+
 export function createIpcPath(dataRoot: string, platform = process.platform): string {
-  return platform === 'win32'
-    ? `\\\\.\\pipe\\paldock-${randomBytes(8).toString('hex')}`
-    : join(dataRoot, 'paldock.sock');
+  if (platform === 'win32') return `\\\\.\\pipe\\paldock-${randomBytes(8).toString('hex')}`;
+  const preferred = join(dataRoot, 'paldock.sock');
+  if (Buffer.byteLength(preferred) <= MAX_SOCKET_PATH_BYTES) return preferred;
+  // 数据根路径太长时退到 /tmp 下的短名字；文件权限仍是 0600，且连接要校验令牌
+  const digest = createHash('sha256').update(dataRoot).digest('hex').slice(0, 12);
+  return `/tmp/paldock-${digest}.sock`;
 }
 
 export function listenIpc(path: string, onConnection: (socket: Socket) => void): Promise<Server> {

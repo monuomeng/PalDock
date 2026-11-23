@@ -25,6 +25,13 @@ describe('PID 锁', () => {
 });
 
 describe('IPC', () => {
+  it('posix 套接字路径超过 sun_path 上限时退到 /tmp 短路径', () => {
+    const root = '/Users/a/Library/Application Support/PalDock';
+    expect(createIpcPath(root, 'darwin')).toBe(join(root, 'paldock.sock'));
+    expect(createIpcPath(`/Users/a/${'x'.repeat(120)}`, 'darwin')).toMatch(/^\/tmp\/paldock-[0-9a-f]{12}\.sock$/);
+    expect(createIpcPath('D:/data', 'win32')).toMatch(/^\\\\\.\\pipe\\paldock-[0-9a-f]{16}$/);
+  });
+
   it('令牌比较为定长比较，长度不同直接不等', () => {
     const token = createToken();
     expect(token).toHaveLength(43);

@@ -36,3 +36,6 @@ Thumbs.db
 
 # IDE
 .idea/
+
+# P0 check outputs
+p0-*-check.json

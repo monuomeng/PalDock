@@ -16,7 +16,7 @@
 - [安全、隐私与测试](docs/06-security-quality.md)
 - [启动积压与待决事项](docs/07-backlog.md)
 - [桌宠统筹与助手会话设计](docs/08-assistant-orchestration.md)
-- [P0 开发计划](docs/plan/p0-technical-validation.md)、[P0 实测记录](docs/p0/findings.md)、[P0 变更说明](docs/pr/p0-technical-validation.md)
+- [P0 开发计划](docs/plan/p0-technical-validation.md)、[P0 实测记录](docs/p0/findings.md)、[P0 变更说明](docs/pr/p0-technical-validation.md)、[macOS 测试手册](docs/test-kits/macos/README.md)
 - 架构决策记录：[ADR 0001 初始架构](docs/adr/0001-initial-architecture.md)、[ADR 0002 进程拓扑、任务板编排与多平台边界](docs/adr/0002-process-topology-and-task-board.md)
 
 ## 现阶段约定

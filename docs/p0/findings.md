@@ -148,7 +148,19 @@ Electron 45.2.3（内置 Node 24.22.2）。其 `node:sqlite` 为 SQLite 3.53.4�
 | 禁止导航 | 页面内跳转外部网址被阻止，仍停留在 `file:` |
 | 正常退出 | 关闭窗口后服务收尾退出，PID 锁删除，WAL 已合并只剩 `paldock.db` |
 
-未验证：powerMonitor 锁屏 / 空闲事件、开机自启、worktree 长路径与杀毒扫描、macOS 文件夹授权、35 秒强制结束路径（服务没有卡住的场景）。
+以上检查已整理成可重复运行的 `node scripts/p0/electron-check.mjs`（14 项，Windows 全部通过）。
+
+**worktree 放在数据根**（`node scripts/p0/worktree-check.mjs`，Windows / git 2.42）：
+
+- 在数据根下创建 worktree、写入并提交 334 字符的深层路径都没有问题（Node 与 git 均可处理）。
+- **删除含超长路径的 worktree 时，不开 `core.longpaths` 会报 `Filename too long`，而且 worktree 已被注销、文件残留在磁盘上**；加 `-c core.longpaths=true` 后删除成功。PalDock 对 worktree 的 git 命令应统一带上该参数，不修改用户的全局配置。
+- 文件系统不区分大小写：只差大小写的两个分支名（`paldock/Fix-Login` 与 `paldock/fix-login`）不能共存，只差大小写的两个文件会合并成一个。PalDock 生成的分支名应统一用小写 slug；macOS 默认 APFS 同样不区分大小写，待 Mac 测试确认。
+
+未验证：powerMonitor 锁屏 / 空闲事件（已加诊断开关 `PALDOCK_DIAGNOSTICS=1`，事件写入数据根下的 `diagnostics.log`）、开机自启、杀毒软件扫描对 worktree 的影响、macOS 文件夹授权、35 秒强制结束路径（服务没有卡住的场景）。
+
+## macOS
+
+用户只有 Windows 电脑，macOS 由其他人协助测试。测试包是仓库 `git archive` 打出的 zip，附 AI 可执行的手册 [docs/test-kits/macos/README.md](../test-kits/macos/README.md) 和一键脚本 `scripts/macos/run-p0-checks.sh`，结果以 `p0-macos-results.zip` 发回。为 macOS 预先处理的点：Unix 套接字路径超过 `sun_path` 上限（104 字节）时退到 `/tmp/paldock-<哈希>.sock`；执行器进程组整体结束；凭据读取目前只实现了 Windows（macOS 钥匙串待补，测试包不涉及）。结果待回收。
 
 ## 阻塞项与所需条件
 

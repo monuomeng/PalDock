@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron';
 import { COMMAND_NAMES, type CommandName, type PersistentEvent } from '@paldock/contracts';
 import { IpcClient } from '@paldock/platform';
+import { startPowerDiagnostics } from './power-diagnostics.js';
 import { ServiceHost, type HostStatus } from './service-host.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -109,6 +110,7 @@ async function boot(): Promise<void> {
   mkdirSync(dataRoot, { recursive: true });
 
   registerIpc();
+  if (process.env.PALDOCK_DIAGNOSTICS === '1') startPowerDiagnostics(dataRoot);
   createWindow();
   host = new ServiceHost(dataRoot, (status) => void onHostStatus(status).catch(() => {}));
   host.start();
