@@ -6,8 +6,8 @@
 
 | 积压 ID | 项目 | 结果 |
 |---|---|---|
-| P0-01 | Codex app-server 能力 | 部分通过：发现、initialize、账号状态、模型列表、ephemeral thread 创建已实测；流式、取消、审批、恢复的探测脚本已就绪，因消耗额度待用户同意后运行 |
-| P0-02 | Claude Code SDK/CLI | 阻塞：本机未安装 `claude`，未评估 |
+| P0-01 | Codex app-server 能力 | 通过：发现、initialize、账号、thread、流式、中断、审批请求、跨进程恢复均已实测（2026-11-23 经用户同意跑了计费项）；app-server 在 turn 中途崩溃的恢复未测 |
+| P0-02 | Claude Code SDK/CLI | 未开始：PATH 上没有 `claude`，但 Claude 桌面版自带 Claude Code 2.1.325（`%LOCALAPPDATA%\Claude-Data\...\claude-code.1.325\...\claude.exe`），`--help` 显示支持 `-p`、`stream-json` 输入输出与 `--resume`；真实对话会消耗用户的 Claude 额度，待用户决定 |
 | P0-03 | 飞书长连接 | 阻塞：无测试租户；P0 只完成 inbox 去重、租约与会话串行的存储侧实现 |
 | P0-04 | Electron + SQLite + 受限 IPC | 存储与服务进程已实测；Electron 窗口实机运行见下文「Electron」 |
 | P0-05 | 版本化事件与状态机 | 通过：契约与状态机测试见 `packages/contracts`、`packages/domain` |
@@ -32,7 +32,17 @@
 | 协议面 | `generate-ts` 生成 97 个顶层类型 + 664 个 v2 类型。关键方法：`thread/start`、`thread/resume`、`turn/start`、`turn/interrupt`、`turn/steer`；审批为服务端请求 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval`、`item/permissions/requestApproval`，决定值 `accept / acceptForSession / decline / cancel` 及策略修订；完成通知 `turn/completed`（状态 `completed / interrupted / failed / inProgress`）；流式 `item/agentMessage/delta` |
 | 进程树 | **重要**：只结束外层 node 进程时，内层 `codex.exe` 仍持有 stdout 管道和工作目录句柄，导致探测进程挂起、临时目录删除报 EPERM。改用 `taskkill /T /F` 结束整树后正常（`packages/platform/src/process-tree.ts`）。P1 评估 Job Object |
 
-尚未验证：流式与完成（`--turn`）、取消（`--interrupt`）、审批请求的实际触发与回复、`thread/resume` 跨进程恢复、app-server 崩溃后的恢复。
+计费项实测（`probe.js --turn --interrupt --approval --resume`，2026-11-23）：
+
+| 项 | 结果 |
+|---|---|
+| 流式与完成 | 极短回复 turn 用时 26–42 秒（含 MCP 服务器启动），`item/agentMessage/delta` 1 次后 `turn/completed`（`completed`）；较长回复 27 次 delta |
+| 中断 | `turn/start` 返回时 turn 不一定已开始，立刻 `turn/interrupt` 会报 `no active turn to interrupt`；等到 `turn/started` 通知再中断，58 ms 后收到 `turn/completed`（`interrupted`）。适配器必须以 `turn/started` 为准 |
+| 审批 | 只读沙箱 + `on-request` 下要求写文件，收到服务端请求 `item/commandExecution/requestApproval`；回复 `decline` 后 turn 正常结束（`completed`），没有写入 |
+| 跨进程恢复 | 非 ephemeral thread 跑完一轮后结束 app-server，新进程 `thread/resume` 返回同一 thread、加载 3 个历史 turn，随后新 turn 正常完成。副作用：在 Codex 历史里留下一条测试会话 |
+| 通知面 | 一次 turn 还会收到 `thread/status/changed`、`item/started`/`item/completed`、`thread/tokenUsage/updated`、`account/rateLimits/updated`、`mcpServer/startupStatus/updated`（用户配置的 MCP 服务器每次都会启动，是首轮耗时的主要来源，可考虑为 PalDock 的 Run 关闭无关 MCP） |
+
+尚未验证：app-server 在 turn 进行中崩溃后的恢复、`acceptForSession` 的作用范围、文件改动审批（`item/fileChange/requestApproval`）。
 
 ## P0-04 存储（SQLite）
 
@@ -67,6 +77,6 @@
 
 ## 阻塞项与所需条件
 
-- **P0-02 / P0-07**：需要在本机安装 Claude Code 并完成认证；之后才能评估 Agent SDK 流式、resume 和 PermissionRequest hook。
+- **P0-02 / P0-07**：可使用桌面版自带的 Claude Code（共用用户的 Claude 登录与额度）；需用户同意消耗额度后，评估流式、resume 和权限请求。
 - **P0-03**：需要飞书测试租户与自建应用（WSClient 长连接权限），Telegram 需要测试 bot 与可用代理。
 - **P0-06**：需要用户确定产品许可证与桌宠素材来源。
