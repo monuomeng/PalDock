@@ -7,6 +7,7 @@
     { "path": "packages/platform" },
     { "path": "packages/runtime-codex" },
     { "path": "packages/runtime-claude" },
+    { "path": "packages/channel-feishu" },
     { "path": "apps/local-service" },
     { "path": "apps/desktop" }
   ]

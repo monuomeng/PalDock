@@ -1,0 +1,11 @@
+{
+  "name": "@paldock/channel-feishu",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "1.76.0",
+    "@paldock/platform": "workspace:*",
+    "@paldock/storage-sqlite": "workspace:*"
+  }
+}
