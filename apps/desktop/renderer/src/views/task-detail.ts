@@ -132,7 +132,11 @@ function runView({ run, result, reviews, approvals, messages }: RunDetail, open:
     run.status === 'unconfirmed' ? h('p', { class: 'warning', role: 'status' }, '与执行器的连接断开，正在核对这一轮的结果，暂不判定成功或失败。') : null,
     ...approvals.map((a) => approvalView(a, act)),
     h('h4', {}, '输出'),
-    h('pre', { class: 'output', 'data-live-run': run.id, tabindex: 0, 'aria-label': `第 ${run.attempt} 次执行的输出` }, output || '（暂无输出）'),
+    h(
+      'pre',
+      { class: 'output', 'data-live-run': run.id, 'data-empty': output === '', tabindex: 0, 'aria-label': `第 ${run.attempt} 次执行的输出` },
+      output || '（暂无输出）',
+    ),
     result ? evidenceView(run.id, result) : null,
     ...reviews.map((r) => h('p', { class: `review-note review-${r.decision}` }, r.decision === 'accept' ? '验收通过' : '退回重做', ` · ${time(r.decidedAt)}`, r.note ? `：${r.note}` : '')),
   );

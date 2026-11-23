@@ -286,6 +286,16 @@ describe('启动恢复', () => {
     expect(plan(`SELECT id FROM runs WHERE status IN ('starting', 'running', 'waiting_approval', 'unconfirmed')`)).toContain(
       'runs_active',
     );
+    expect(plan(`SELECT id FROM subtasks WHERE status IN ('queued', 'running')`)).toContain('subtasks_in_progress');
+    expect(plan(`SELECT id FROM tasks WHERE status IN ('queued', 'running')`)).toContain('tasks_in_progress');
+  });
+
+  it('只在内存里排队、还没开始的任务重启后也转为阻塞，可重新开始', () => {
+    const { sub, task } = seedTask();
+    store.interruptActiveWork('服务重启');
+    expect(store.tasks.getSubtask(sub.id)).toMatchObject({ status: 'blocked', statusReason: '服务重启' });
+    expect(store.tasks.getTask(task.id)?.status).toBe('blocked');
+    expect(store.attention.list()).toEqual([expect.objectContaining({ kind: 'blocked', itemId: sub.id, runId: null })]);
   });
 });
 

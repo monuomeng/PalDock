@@ -60,7 +60,7 @@ PalDock 是一个本地优先的 AI 桌面助手，主机支持 Windows 和 macO
 | 2 安装 | 锁定版本的依赖能在 macOS 安装；Electron 45.2.3 能下载 | `exit=0` |
 | 3 构建与测试 | TypeScript 严格模式构建；全部单元/集成测试（含 SQLite FTS5 中文检索、Unix 套接字通信） | 构建 `exit=0`，测试全部通过 |
 | 4 服务进程 | 本地服务经 Unix 套接字握手；同一数据目录第二个服务被拒（退出码 75）；强杀后遗留锁被接管；正常退出码 0 | 日志中依次出现 `ready`、`locked`、`ready`、`graceful exit 0` |
-| 5 Electron | 窗口连上服务；渲染进程拿不到 Node；命令白名单；**套接字文件权限为 600**；服务被结束后 3 秒自动重启；单实例；禁止跳转外部网址；关闭窗口后锁文件和套接字被清理 | `p0-electron-check.json` 中 `failed: 0` |
+| 5 Electron | 窗口连上服务；渲染进程拿不到 Node；命令白名单；**套接字文件权限为 600**；建任务→执行→回显→验收、审批、取消；服务被结束后 3 秒自动重启并可恢复任务；单实例；禁止跳转外部网址；关闭窗口后锁文件和套接字被清理（P1 起改用 `scripts/p1/e2e-check.mjs`） | `p1-e2e-check.json` 中 `failed: 0` |
 | 6 worktree | 默认不区分大小写的 APFS 上，只差大小写的分支名和文件名会冲突；深层路径可用 | 记录事实即可，`INFO` 不算失败 |
 | 7 执行器发现 | 能否在 PATH 上找到 Codex / Claude Code 及登录状态（不发起对话） | 未安装时报告 `available: false` 属正常 |
 | 8 电源事件 | Electron `powerMonitor` 在 macOS 上实际发出的事件 | `power-diagnostics.log` 中应出现 `lock-screen`、`unlock-screen`、`idle-state`（active → idle → active），睡眠时有 `suspend` / `resume` |
@@ -71,12 +71,12 @@ PalDock 是一个本地优先的 AI 桌面助手，主机支持 Windows 和 macO
 
 - `environment.txt`：系统、Node、pnpm、git 版本与文件系统类型
 - `run.log`：每一步的命令、输出和退出码
-- `p0-electron-check.json`、`p0-worktree-check.json`：逐项结果
+- `p1-e2e-check.json`、`p0-worktree-check.json`：逐项结果
 - `codex-discovery.json`、`claude-discovery.json`：执行器发现结果（只有版本和是否登录）
 - `power-diagnostics.log`、`power-app.log`：第 8 步的事件记录
 
 ## 常见问题
 
 - **`pnpm install` 卡在 Electron 下载**：设置上面的 `ELECTRON_MIRROR` 后重试；或删除 `node_modules` 后重新运行脚本。
-- **第 5 步窗口没出现或连接超时**：查看 `p0-electron-check.json` 末尾的 `appOutputTail`，原样发回即可。
+- **第 5 步窗口没出现或连接超时**：查看 `p1-e2e-check.json` 末尾的 `appOutputTail`，原样发回即可。
 - **只想单独补做第 8 步**：先完成第 2、3 步，然后运行 `bash scripts/macos/run-p0-checks.sh`，等前面步骤跑完后按提示操作；或者手动执行脚本第 8 步中的命令。

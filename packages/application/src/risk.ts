@@ -3,12 +3,27 @@ import { classifyRisk, type OperationKind } from '@paldock/domain';
 import { isInside } from '@paldock/platform';
 
 const INSTALL = /\b(?:npm|pnpm|yarn|bun)\s+(?:i|install|add|ci)\b|\bpip3?\s+install\b|\bcargo\s+(?:add|install)\b|\bgo\s+get\b/i;
-/** 命令文本里的绝对路径：Windows 盘符路径、UNC 路径与 posix 路径。 */
-const ABSOLUTE_PATHS = /[A-Za-z]:[\\/][^\s'"`;|&<>]*|\\\\[^\s'"`;|&<>]+|(?<=^|[\s'"`=])\/[^\s'"`;|&<>]+/g;
+const STOP = `\\s'"\`;|&<>`;
+/**
+ * 命令文本里的绝对路径：Windows 盘符路径（前面不能是字母数字，排除 https:// 之类）、UNC 路径、
+ * 至少两段的 posix 路径（排除 cmd 的 /c、/s 等开关）。
+ */
+const ABSOLUTE_PATHS = new RegExp(
+  `(?<![A-Za-z0-9])[A-Za-z]:[\\\\/][^${STOP}]*|(?<=^|[\\s'"\`=])\\\\\\\\[^${STOP}]+|(?<=^|[\\s'"\`=])/[^${STOP}/]+/[^${STOP}]*`,
+  'g',
+);
+/** 用 .. 跳出当前目录。 */
+const PARENT_ESCAPE = /(?:^|[\s'"`=\\/])\.\.(?:[\\/]|$|[\s'"`])/;
+/** 开头的可执行文件路径（执行器常把命令包成 `C:\…\powershell.exe -Command …`），不算操作对象。 */
+const LEADING_PROGRAM = /^\s*(?:"[^"]+\.exe"|'[^']+\.exe'|\S+\.exe)(?=\s|$)/i;
 
-/** 命令里出现 worktree 以外的绝对路径时，按 worktree 外的操作处理（真实 Codex 实测：越界写文件的 PowerShell 命令）。 */
+/**
+ * 命令是否涉及 worktree 以外的位置：出现 worktree 外的绝对路径，或用 .. 跳出。
+ * 真实 Codex 实测：越界写文件的命令是 PowerShell，路径以参数形式出现。
+ */
 function touchesOutside(command: string, worktree: string): boolean {
-  return (command.match(ABSOLUTE_PATHS) ?? []).some((path) => !isInside(worktree, path));
+  const args = command.replace(LEADING_PROGRAM, '');
+  return PARENT_ESCAPE.test(args) || (args.match(ABSOLUTE_PATHS) ?? []).some((path) => !isInside(worktree, path));
 }
 
 /**

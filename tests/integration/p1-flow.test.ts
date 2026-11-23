@@ -114,7 +114,7 @@ describe('P1 主流程', () => {
     });
     const reviewed = await until(created.task.id, (d) => d.subtask.status === 'review');
     const run = latest(reviewed);
-    expect(reviewed.subtask.branch).toMatch(/^paldock\/[0-9a-f]{8}$/);
+    expect(reviewed.subtask.branch).toMatch(/^paldock\/[0-9a-f]{12}$/);
     expect(existsSync(join(reviewed.subtask.worktreePath!, 'mock-change.txt'))).toBe(true);
     expect(run.run).toMatchObject({ status: 'succeeded', attempt: 1 });
     expect(run.run.nativeThreadId).toMatch(/^thr_/);
@@ -137,6 +137,29 @@ describe('P1 主流程', () => {
     expect(done.subtask.status).toBe('succeeded');
     expect(git(repo, 'log', '--format=%s', '-1', done.subtask.branch!).trim()).toBe('paldock: 加一个文件');
     expect(await attention()).toEqual([]);
+  });
+
+  it('验收只提交证据里的改动，检查命令之后生成的文件不进提交', async () => {
+    const created = await create('生成产物', {
+      check: { executable: process.execPath, args: ['-e', "require('fs').writeFileSync('coverage.txt', 'x')"] },
+      checkConfirmed: true,
+    });
+    const reviewed = await until(created.task.id, (d) => d.subtask.status === 'review');
+    expect(latest(reviewed).result?.diffStat).not.toContain('coverage.txt');
+    await call('review.decide', { subtaskId: reviewed.subtask.id, expectedVersion: reviewed.subtask.version, decision: 'accept' });
+    const files = git(repo, 'ls-tree', '-r', '--name-only', reviewed.subtask.branch!);
+    expect(files).toContain('mock-change.txt');
+    expect(files).not.toContain('coverage.txt');
+  });
+
+  it('审批请求先于 turn 到达时照常进入等待审批', async () => {
+    const created = await create('[mock:early-approval] 早到的审批');
+    const waiting = await until(created.task.id, (d) => !!pendingApproval(d));
+    expect(latest(waiting).run.status).toBe('waiting_approval');
+    const approval = pendingApproval(waiting)!;
+    await call('approval.decide', { approvalId: approval.id, expectedVersion: approval.version, decision: 'allow_once' });
+    const reviewed = await until(created.task.id, (d) => d.subtask.status === 'review');
+    expect(existsSync(join(reviewed.subtask.worktreePath!, 'early.txt'))).toBe(true);
   });
 
   it('未确认的检查命令不运行', async () => {
@@ -318,6 +341,22 @@ describe('崩溃与恢复', () => {
     ).rejects.toMatchObject({ code: 'bad_request' });
     await call('run.recover', { subtaskId: again.subtask.id, expectedVersion: again.subtask.version, action: 'abandon' });
     expect((await detail(created.task.id)).task.status).toBe('failed');
+  });
+
+  it('并发已满时排队的任务在重启后转为阻塞，可重新开始', async () => {
+    await stopService();
+    await startService({}, { maxConcurrentRuns: 1 });
+    const running = await create('[mock:slow] 占着名额');
+    await until(running.task.id, (d) => latest(d)?.run.status === 'running');
+    const queued = await create('排队中');
+    expect((await detail(queued.task.id)).subtask.status).toBe('queued');
+
+    await stopService();
+    await startService();
+    const blocked = await detail(queued.task.id);
+    expect(blocked).toMatchObject({ subtask: { status: 'blocked' }, runs: [], actions: { restart: true, resume: false } });
+    await call('run.recover', { subtaskId: blocked.subtask.id, expectedVersion: blocked.subtask.version, action: 'restart' });
+    await until(queued.task.id, (d) => d.subtask.status === 'review');
   });
 
   it('重复启动：同一数据根第二个服务被拒绝', async () => {

@@ -11,12 +11,15 @@ ALTER TABLE tasks ADD COLUMN check_confirmed_at TEXT;
 ALTER TABLE tasks ADD COLUMN idempotency_key TEXT;
 CREATE UNIQUE INDEX tasks_by_idempotency_key ON tasks (idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX tasks_by_created ON tasks (created_at);
+-- 启动恢复：排队中或执行中的任务一律转为阻塞（排队只在内存里，重启后不会自动继续）
+CREATE INDEX tasks_in_progress ON tasks (updated_at) WHERE status IN ('queued', 'running');
 
 ALTER TABLE subtasks ADD COLUMN status_reason TEXT;
 -- P1 每个写入型子任务一个 worktree，各次 Run 共用
 ALTER TABLE subtasks ADD COLUMN worktree_path TEXT;
 ALTER TABLE subtasks ADD COLUMN branch TEXT;
 ALTER TABLE subtasks ADD COLUMN base_commit TEXT;
+CREATE INDEX subtasks_in_progress ON subtasks (updated_at) WHERE status IN ('queued', 'running');
 
 CREATE TABLE sessions (
   id         TEXT PRIMARY KEY,

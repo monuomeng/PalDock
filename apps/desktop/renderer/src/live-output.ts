@@ -8,6 +8,11 @@ export function appendLive(runId: string, text: string): void {
   buffers.set(runId, (buffers.get(runId) ?? '') + text);
   const target = document.querySelector<HTMLElement>(`[data-live-run="${CSS.escape(runId)}"]`);
   if (!target) return;
+  // 第一段输出到达时去掉「暂无输出」占位
+  if (target.hasAttribute('data-empty')) {
+    target.removeAttribute('data-empty');
+    target.textContent = '';
+  }
   const nearBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 40;
   target.append(text);
   if (nearBottom) target.scrollTop = target.scrollHeight;

@@ -35,9 +35,20 @@ export async function headCommit(repo: string): Promise<string> {
   return (await git(repo, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
 }
 
-/** 在 base 提交上新建分支并检出到 worktreePath。 */
-export async function addWorktree(repo: string, worktreePath: string, branch: string, base: string): Promise<void> {
-  await git(repo, ['worktree', 'add', '-b', branch, worktreePath, base]);
+/**
+ * 在 base 提交上新建分支并检出到 worktreePath，返回分支实际的起点。可重入：上次已建好分支
+ * （例如建完 worktree 后、记录入库前进程退出）时复用该分支，起点取它与 base 的分叉点。
+ */
+export async function addWorktree(repo: string, worktreePath: string, branch: string, base: string): Promise<string> {
+  const exists = await git(repo, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]).then(() => true, () => false);
+  if (!exists) {
+    await git(repo, ['worktree', 'add', '-b', branch, worktreePath, base]);
+    return base;
+  }
+  await git(repo, ['worktree', 'prune']);
+  const registered = (await git(repo, ['worktree', 'list', '--porcelain'])).includes(`branch refs/heads/${branch}`);
+  if (!registered) await git(repo, ['worktree', 'add', worktreePath, branch]);
+  return (await git(repo, ['merge-base', base, branch])).trim();
 }
 
 /** 暂存 worktree 内全部改动（含新文件），返回相对 base 的改动统计；没有改动时为空串。 */
@@ -46,9 +57,11 @@ export async function stageAndDiffStat(worktree: string, base: string): Promise<
   return (await git(worktree, ['diff', '--cached', '--stat', base])).trimEnd();
 }
 
-/** 把已暂存的改动提交到 worktree 的分支；没有改动时返回 false。 */
+/**
+ * 把收集证据时暂存的改动提交到 worktree 的分支；没有改动时返回 false。
+ * 不再 `add -A`：验收的是证据里那份改动，检查命令之后生成的文件（构建产物、覆盖率）不应混进提交。
+ */
 export async function commitStaged(worktree: string, message: string): Promise<boolean> {
-  await git(worktree, ['add', '-A']);
   const staged = await git(worktree, ['diff', '--cached', '--name-only']);
   if (staged.trim() === '') return false;
   await git(worktree, ['-c', 'user.name=PalDock', '-c', 'user.email=paldock@localhost', 'commit', '--no-verify', '-m', message]);

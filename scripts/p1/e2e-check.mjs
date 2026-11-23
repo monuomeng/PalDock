@@ -2,7 +2,7 @@
 // 用法：先 `pnpm install && pnpm build`，再在仓库根目录运行 `node scripts/p1/e2e-check.mjs`。
 // 数据写在临时目录，不碰用户数据，不调用任何模型或外部服务。结果写到 ./p1-e2e-check.json，截图写到 ./p1-e2e-*.png。
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -130,6 +130,11 @@ try {
   );
   check('未登记的命令被拒绝', (await evaluate(`window.paldock.request('fs.deleteAll',{}).then(()=>'allowed',()=>'rejected')`)) === 'rejected');
   check('页面经自定义协议加载', (await evaluate('location.protocol')) === 'paldock:');
+  if (process.platform !== 'win32') {
+    const sock = join(dataRoot, 'paldock.sock');
+    const mode = existsSync(sock) ? (statSync(sock).mode & 0o777).toString(8) : 'missing';
+    check('Unix 套接字权限为 600', mode === '600', `mode=${mode}`);
+  }
 
   // 主流程：表单建任务 → 执行 → 回显 → 待验收 → 验收
   await createViaForm(evaluate, '加一个文件');
@@ -214,7 +219,8 @@ try {
   evaluate(`setTimeout(() => window.close(), 50)`).catch(() => {});
   const exit = await Promise.race([app.exited, sleep(40000).then(() => 'timeout')]);
   check('关闭窗口后应用在 40 秒内退出', exit !== 'timeout', JSON.stringify(exit));
-  check('正常退出后 PID 锁已删除', !readdirSync(dataRoot).includes('paldock.lock'));
+  const left = readdirSync(dataRoot);
+  check('正常退出后 PID 锁与套接字已清理', !left.includes('paldock.lock') && !left.includes('paldock.sock'), left.join(' '));
 
   app = launch([`--remote-debugging-port=${port}`]);
   ({ evaluate, screenshot } = await connectPage());

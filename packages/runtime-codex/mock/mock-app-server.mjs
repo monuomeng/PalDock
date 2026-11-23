@@ -15,6 +15,7 @@
 //   [mock:crash]           turn 开始后进程直接退出（turn 留在 inProgress）
 //   [mock:crash-after-complete]  turn 完成并落盘后、发出 turn/completed 之前退出
 //   [mock:withdraw]        请求审批后自己收回（serverRequest/resolved），然后完成
+//   [mock:early-approval]  在 turn/start 响应之前就发出命令审批（批准才写 early.txt）
 // 默认：写入 mock-change.txt，流式输出几段文字后完成。
 // MOCK_CODEX_START_DELAY_MS：turn/start 响应后延迟多久才发 turn/started（测试「开始前取消」）。
 import { randomUUID } from 'node:crypto';
@@ -185,6 +186,24 @@ const handlers = {
     thread.turns.push(turn);
     saveThread(thread);
     const text = input.map((part) => part.text ?? '').join('\n');
+    if (text.includes('[mock:early-approval]')) {
+      // 先于 turn/start 的响应发出审批请求，验证客户端在 Run 尚未记录 turn 时也能处理
+      const { response } = serverRequest('item/commandExecution/requestApproval', {
+        threadId,
+        turnId: turn.id,
+        itemId: 'early',
+        kind: 'command',
+        startedAtMs: Date.now(),
+        environmentId: null,
+        command: 'echo early',
+        cwd: thread.cwd,
+      });
+      void response.then(({ result }) => {
+        if (result?.decision === 'accept') writeFileSync(join(thread.cwd, 'early.txt'), 'early\n');
+        setImmediate(() => void runTurn(thread, turn, text.replace('[mock:early-approval]', '')));
+      });
+      return { turn };
+    }
     setImmediate(() => void runTurn(thread, turn, text));
     return { turn };
   },

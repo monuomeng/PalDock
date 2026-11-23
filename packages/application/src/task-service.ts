@@ -67,7 +67,14 @@ function actionsOf(subtask: SubtaskRecord, latest: RunRecord | undefined): TaskA
  * 状态变更与事件同事务写入后立即广播；需要执行器参与的部分交给 RunSupervisor。
  */
 export class TaskService {
+  /** 正在验收提交（git commit 期间）的子任务；期间的取消、恢复一律返回冲突，避免分支已提交而状态写入失败。 */
+  private readonly committing = new Set<string>();
+
   constructor(private readonly deps: TaskServiceDeps) {}
+
+  private assertNotCommitting(subtaskId: string): void {
+    if (this.committing.has(subtaskId)) throw new CodedError('conflict', '正在提交验收结果，请稍后再试');
+  }
 
   private get store() {
     return this.deps.store;
@@ -135,6 +142,7 @@ export class TaskService {
   cancelTask(taskId: string): void {
     const subtask = this.store.tasks.getSubtaskOfTask(taskId);
     if (!subtask) throw new CodedError('not_found', '任务不存在');
+    this.assertNotCommitting(subtask.id);
     if (!this.deps.supervisor.cancel(subtask.id)) this.close(subtask, 'cancelled', '用户取消');
   }
 
@@ -155,12 +163,18 @@ export class TaskService {
    * 退回时新开一次 Run，沿用原生会话并带上意见，旧 Run 的证据保留。
    */
   async decideReview(subtaskId: string, expectedVersion: number, decision: ReviewDecision, note?: string): Promise<void> {
+    this.assertNotCommitting(subtaskId);
     const subtask = requireSubtask(this.store, subtaskId, 'review', expectedVersion);
     const run = this.store.runs.latestRun(subtaskId)!;
     const task = this.store.tasks.getTask(subtask.taskId)!;
 
     if (decision === 'accept') {
-      if (subtask.worktreePath) await commitStaged(subtask.worktreePath, `paldock: ${task.title}`);
+      this.committing.add(subtaskId);
+      try {
+        if (subtask.worktreePath) await commitStaged(subtask.worktreePath, `paldock: ${task.title}`);
+      } finally {
+        this.committing.delete(subtaskId);
+      }
       this.publish(
         this.store.transaction(() => [
           ...this.store.runs.addReview(run.id, 'accept', note ?? null).events,
@@ -188,6 +202,7 @@ export class TaskService {
    * 放弃 = 失败。恢复失败不会静默新建会话，由用户再选。
    */
   recover(subtaskId: string, expectedVersion: number, action: 'resume' | 'restart' | 'abandon'): void {
+    this.assertNotCommitting(subtaskId);
     const subtask = requireSubtask(this.store, subtaskId, 'blocked', expectedVersion);
     if (action === 'abandon') return this.close(subtask, 'failed', '用户放弃');
 

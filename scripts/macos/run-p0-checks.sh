@@ -40,9 +40,9 @@ run pnpm test
 step "4. 本地服务进程（fork 方式）"
 run node scripts/p0/fork-check.mjs "$ROOT"
 
-step "5. Electron 窗口实机检查（会弹出窗口，几十秒后自动关闭）"
-run node scripts/p0/electron-check.mjs
-[ -f p0-electron-check.json ] && cp p0-electron-check.json "$OUT/"
+step "5. Electron 窗口实机检查（会弹出窗口，约两分钟后自动关闭；用离线模拟执行器，不耗额度）"
+run node scripts/p1/e2e-check.mjs
+[ -f p1-e2e-check.json ] && cp p1-e2e-check.json "$OUT/"
 
 step "6. git worktree 与大小写"
 run node scripts/p0/worktree-check.mjs

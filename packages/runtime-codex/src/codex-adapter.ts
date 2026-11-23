@@ -253,7 +253,8 @@ class CodexRun implements RuntimeRun {
   }
 
   private onExit(): void {
-    if (this.disposing || this.finished) return;
+    // 拿到 turn 之前退出：start() 会因请求失败而拒绝，由调用方按启动失败处理，这里不再上报断线
+    if (this.disposing || this.finished || this.turnId === undefined) return;
     this.finish({ type: 'disconnected', message: 'Codex app-server 意外退出' });
   }
 
