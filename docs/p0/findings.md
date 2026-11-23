@@ -14,7 +14,7 @@
 | P0-06 | 许可证与素材 | 待用户决定 |
 | P0-07 | Codex / Claude / ACP 子代理对比 | 未开始：依赖 P0-02 |
 
-自动化测试：`pnpm test` 共 39 项通过，`pnpm build`（`tsc -b` 严格模式）通过。
+自动化测试：`pnpm test` 共 44 项通过，`pnpm build`（`tsc -b` 严格模式）通过。
 
 ## P0-01 Codex app-server
 
@@ -61,7 +61,7 @@
 
 ## Electron
 
-代码已完成（单实例、数据根选择、utilityProcess 看护、受限 preload、白名单命令转发、导航与新窗口禁止、CSP）。Electron 45 改为首次运行时下载二进制，经 npmmirror 下载速度约 40 KiB/s，本记录写作时尚未完成。实机运行结果见下方补记。
+代码已完成（单实例、数据根选择、utilityProcess 看护、受限 preload、白名单命令转发、导航与新窗口禁止、CSP）。Electron 45 改为首次运行时下载二进制，经 npmmirror 下载速度约 30–40 KiB/s（150 MB 约需 1.5 小时），本记录写作时尚未完成，窗口实机运行待补。
 
 未验证：utilityProcess 下的看护与重启、powerMonitor 锁屏/空闲事件、worktree 长路径与杀毒扫描、macOS 文件夹授权。
 

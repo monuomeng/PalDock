@@ -1,6 +1,6 @@
 # P0 开发计划：方案与技术验证
 
-状态：进行中（2026-11-23 起）。负责人：Claude；分支 `claude/project-thread-ta1qy4`。本文只列本次做什么、按什么顺序、怎样算完成；设计依据见 [架构](../02-architecture.md) 与 [ADR 0002](../adr/0002-process-topology-and-task-board.md)，与旧文档冲突时以这两份为准。完成后的前因后果与注意点写在 [docs/pr/](../pr/)。
+状态：主体完成，Electron 实机与 Codex 计费项待补（2026-11-23）。负责人：Claude；分支 `claude/project-thread-ta1qy4`。本文只列本次做什么、按什么顺序、怎样算完成；设计依据见 [架构](../02-architecture.md) 与 [ADR 0002](../adr/0002-process-topology-and-task-board.md)，与旧文档冲突时以这两份为准。完成后的前因后果与注意点写在 [docs/pr/](../pr/)。
 
 ## 目标
 

@@ -2,7 +2,9 @@
 
 本地优先的 AI 桌面助手与多会话协作平台。用户可以通过桌面界面或授权的外部聊天渠道发起任务，由协调助手分派给拥有独立会话的专业助手；执行器可接入本地 Codex、Claude Code 或其他兼容能力。
 
-> 当前阶段：规划与方案验证。仓库尚无可运行应用，不代表所列功能已经实现。
+> 当前阶段：P0 方案与技术验证。仓库只有验证用的样机代码，不代表所列功能已经实现。
+
+本地验证：`pnpm install` 后运行 `pnpm build` 和 `pnpm test`（需 Node 24+）。
 
 ## 文档入口
 
@@ -14,6 +16,7 @@
 - [安全、隐私与测试](docs/06-security-quality.md)
 - [启动积压与待决事项](docs/07-backlog.md)
 - [桌宠统筹与助手会话设计](docs/08-assistant-orchestration.md)
+- [P0 开发计划](docs/plan/p0-technical-validation.md)、[P0 实测记录](docs/p0/findings.md)、[P0 变更说明](docs/pr/p0-technical-validation.md)
 - 架构决策记录：[ADR 0001 初始架构](docs/adr/0001-initial-architecture.md)、[ADR 0002 进程拓扑、任务板编排与多平台边界](docs/adr/0002-process-topology-and-task-board.md)
 
 ## 现阶段约定
