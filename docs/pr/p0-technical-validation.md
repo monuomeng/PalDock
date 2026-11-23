@@ -54,6 +54,7 @@ packages/runtime-codex ──► platform
 
 0. **Codex 中断要等 `turn/started`**：`turn/start` 返回时 turn 可能尚未开始，立刻中断会报错。
 0. **服务是否「正常退出」不能看退出码**：Windows 上被结束的 utilityProcess 退出码也是 0，看护程序以「是否主动要求关闭」为准。
+0. **Windows 上删除 worktree 要带 `-c core.longpaths=true`**，否则超长路径删不掉且文件残留；分支名统一用小写。
 0. **启动 Claude Code 子进程必须用白名单环境变量**：否则会继承宿主的 `CLAUDE_*` 变量挂到宿主会话上。Claude 中断后的结果是 `error_during_execution`，要映射为「已中断」。
 
 1. **Windows 上的 Codex 是两层进程**。npm 安装只有 `codex.cmd`，需要用 Node 运行 `codex.js`，而它再启动 `codex.exe`。只结束外层会留下持有管道和目录句柄的内层进程，必须结束整个进程树（目前用 `taskkill /T`，P1 评估 Job Object）。非 npm 全局安装的布局识别不了，需要在设置里填可执行文件路径。
@@ -67,7 +68,7 @@ packages/runtime-codex ──► platform
 
 ## 下一步建议
 
-1. 补测 powerMonitor 锁屏 / 空闲与 worktree 长路径；macOS 上跑一遍同样的验证。
+1. 回收 macOS 测试结果（测试包：`release/paldock-macos-test-kit.zip`，手册：`docs/test-kits/macos/README.md`）；Windows 上补测锁屏 / 空闲事件。
 2. Codex 适配器（P1-03）以 `turn/started` 为准再允许中断，并为 Run 关闭无关的 MCP 服务器以缩短首轮耗时。
 3. 做 P0-07（子代理与独立会话对比）；准备飞书测试租户后做 P0-03。
 4. P1-01 补 CI（Windows + macOS）和依赖许可证检查。
