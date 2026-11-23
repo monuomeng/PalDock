@@ -45,14 +45,19 @@ function sendToRenderer(channel: string, payload: unknown): void {
   if (window && !window.isDestroyed()) window.webContents.send(channel, payload);
 }
 
+// 每次状态变化递增；异步连接完成时若已有更新的状态，丢弃这次结果
+let statusGeneration = 0;
+
 async function onHostStatus(status: HostStatus): Promise<void> {
-  if (status.state !== 'ready') connected = false;
+  const generation = ++statusGeneration;
+  connected = false;
   // 令牌和管道名只留在主进程
   sendToRenderer('paldock:status', status.state === 'ready' ? { state: 'ready' } : status);
   if (status.state !== 'ready') return;
 
   await client.close();
   await client.connect(status.ipcPath, status.token);
+  if (generation !== statusGeneration) return;
   connected = true;
   sendToRenderer('paldock:status', { state: 'connected', interruptedRuns: status.interruptedRuns });
 }

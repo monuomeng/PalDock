@@ -62,6 +62,18 @@ describe('本地服务 IPC', () => {
     expect(fresh).toEqual([]);
   });
 
+  it('令牌错误时 connect 被拒绝而不是一直挂起', async () => {
+    await expect(new IpcClient(() => {}).connect(ipcPath, createToken())).rejects.toThrow();
+  });
+
+  it('外键与唯一约束映射为 not_found / conflict', async () => {
+    const client = await connectClient();
+    await expect(client.request('task.create', { workspaceId: 'ws_missing', title: 't' })).rejects.toMatchObject({ code: 'not_found' });
+    await client.request('workspace.create', { name: 'a', rootPath: 'same' });
+    await expect(client.request('workspace.create', { name: 'b', rootPath: 'same' })).rejects.toMatchObject({ code: 'conflict' });
+    await client.close();
+  });
+
   it('业务错误带错误码返回，参数错误为 bad_request', async () => {
     const client = await connectClient();
     await expect(client.request('task.transition', { taskId: 'nope', expectedVersion: 0, to: 'queued' })).rejects.toMatchObject({

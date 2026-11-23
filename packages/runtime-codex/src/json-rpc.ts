@@ -46,8 +46,13 @@ export class JsonRpcStdioClient {
       detached: process.platform !== 'win32',
       env: env ?? process.env,
     });
-    // 非 JSON 行（例如调试输出）跳过，不中断会话
-    readFrames(this.child.stdout, (frame) => this.onMessage(frame as RpcMessage), () => {});
+    // 非 JSON 行（例如调试输出）跳过；单行超限说明输出失控，结束进程
+    readFrames(this.child.stdout, (frame) => this.onMessage(frame), (error) => {
+      if (error.kind === 'too_large') void this.dispose();
+    });
+    // 启动失败（EACCES 等）可能只有 error 没有 exit；进程退出后写 stdin 会得到 EPIPE
+    this.child.on('error', (error) => this.pending.rejectAll(error));
+    this.child.stdin.on('error', () => {});
     this.child.on('exit', (code) => {
       this.pending.rejectAll(new Error(`进程已退出（${code}）`));
       handlers.onExit?.(code);
@@ -72,7 +77,9 @@ export class JsonRpcStdioClient {
     return killProcessTree(this.child);
   }
 
-  private onMessage(message: RpcMessage): void {
+  private onMessage(frame: unknown): void {
+    if (typeof frame !== 'object' || frame === null) return;
+    const message = frame as RpcMessage;
     if (message.method && message.id !== undefined) return void this.answer(message.id, message.method, message.params);
     if (message.method) return this.handlers.onNotification?.(message.method, message.params);
     if (message.id === undefined) return;

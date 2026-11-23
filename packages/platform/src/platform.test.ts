@@ -35,7 +35,7 @@ describe('IPC', () => {
   it('命名管道 / 套接字上按行收发帧，半包能正确拼接', async () => {
     const path = createIpcPath(dir);
     const received: unknown[] = [];
-    const server = await listenIpc(path, (socket) => readFrames(socket, (f) => received.push(f), () => socket.destroy()));
+    const server = await listenIpc(path, (socket) => readFrames(socket, (f) => received.push(f), () => {}));
     const client = connect(path);
     await new Promise<void>((resolve) => client.once('connect', resolve));
     writeFrame(client, { kind: 'a' });
@@ -43,6 +43,10 @@ describe('IPC', () => {
     client.write('"b"}\n');
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(received).toEqual([{ kind: 'a' }, { kind: 'b' }]);
+    client.write('not json\n{"kind":"c"}\n');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // 解析失败的行被跳过，同一块里后面的帧照常处理
+    expect(received).toEqual([{ kind: 'a' }, { kind: 'b' }, { kind: 'c' }]);
     client.destroy();
     await new Promise((resolve) => server.close(resolve));
   });

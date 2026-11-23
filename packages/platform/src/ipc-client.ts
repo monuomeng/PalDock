@@ -22,16 +22,24 @@ export class IpcClient {
 
   constructor(private readonly onEvent: (event: PersistentEvent) => void) {}
 
+  /** 握手完成且补发结束后 resolve；握手前连接被关闭（令牌错误、超时、版本不符）则 reject。 */
   connect(path: string, token: string): Promise<void> {
     return new Promise((resolve, reject) => {
+      let welcomed = false;
       const socket = connect(path);
       this.socket = socket;
-      socket.once('error', reject);
+      // 常驻的 error 监听：服务崩溃时的 ECONNRESET / EPIPE 只导致 close，不变成未捕获异常
+      socket.on('error', (error) => {
+        if (!welcomed) reject(error);
+      });
       socket.once('connect', () => {
         const resume = this.lastSeq === undefined ? {} : { afterSeq: this.lastSeq };
         writeFrame(socket, { kind: 'hello', schemaVersion: SCHEMA_VERSION, token, client: 'desktop-main', ...resume });
       });
-      socket.on('close', () => this.pending.rejectAll(new Error('IPC 连接已断开')));
+      socket.on('close', () => {
+        if (!welcomed) reject(new Error('IPC 握手未完成即断开'));
+        this.pending.rejectAll(new Error('IPC 连接已断开'));
+      });
       readFrames(
         socket,
         (raw) => {
@@ -40,7 +48,7 @@ export class IpcClient {
           const frame = parsed.data;
           if (frame.kind === 'welcome') {
             this.lastSeq ??= frame.headSeq;
-            socket.off('error', reject);
+            welcomed = true;
             resolve();
           } else if (frame.kind === 'event') {
             this.lastSeq = Math.max(this.lastSeq ?? 0, frame.event.seq);

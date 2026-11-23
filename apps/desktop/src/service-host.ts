@@ -20,6 +20,7 @@ export class ServiceHost {
   private child: UtilityProcess | undefined;
   private readonly policy = new RestartPolicy();
   private stopping = false;
+  private restartTimer: NodeJS.Timeout | undefined;
 
   constructor(
     private readonly dataRoot: string,
@@ -27,6 +28,7 @@ export class ServiceHost {
   ) {}
 
   start(): void {
+    if (this.stopping) return;
     const ipcPath = createIpcPath(this.dataRoot);
     const token = createToken();
     this.onStatus({ state: 'starting' });
@@ -52,7 +54,7 @@ export class ServiceHost {
     const decision = this.policy.onExit(code, Date.now());
     if (decision.action === 'stop') return this.onStatus({ state: 'stopped', reason: decision.reason });
     this.onStatus({ state: 'restarting', inMs: decision.delayMs });
-    setTimeout(() => this.start(), decision.delayMs);
+    this.restartTimer = setTimeout(() => this.start(), decision.delayMs);
   }
 
   private post(message: ParentToService): void {
@@ -62,6 +64,7 @@ export class ServiceHost {
   /** 正常退出：通知服务收尾（Run 置为 interrupted 并落库），最多等 35 秒后强制结束。 */
   stop(): Promise<void> {
     this.stopping = true;
+    clearTimeout(this.restartTimer);
     const child = this.child;
     if (!child) return Promise.resolve();
     return new Promise((resolve) => {

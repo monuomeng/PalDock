@@ -40,14 +40,21 @@ export function tokensEqual(expected: string, actual: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+export class FrameError extends Error {
+  constructor(readonly kind: 'parse' | 'too_large') {
+    super(kind === 'parse' ? '无法解析的帧' : '帧超过上限');
+  }
+}
+
 /**
- * 按行分隔的 JSON 帧，用于本机 IPC 和执行器的 stdio JSON-RPC。超过上限的帧报错，由调用方断开；
- * 这里只负责切分和 JSON 解析，帧结构由 contracts 中的 schema 校验。
+ * 按行分隔的 JSON 帧，用于本机 IPC 和执行器的 stdio JSON-RPC；帧结构由 contracts 中的 schema 校验。
+ * 无法解析的行报 `parse` 后跳过、继续处理后续行；缓冲超过上限报 `too_large` 并丢弃缓冲。
+ * 是否断开由调用方决定：本机 IPC 两种都断开，执行器 stdout 只在超限时结束进程。
  */
 export function readFrames(
   input: NodeJS.ReadableStream,
   onFrame: (frame: unknown) => void,
-  onError: (error: Error) => void,
+  onError: (error: FrameError) => void,
   maxBytes = MAX_FRAME_BYTES,
 ): void {
   let pending = '';
@@ -63,13 +70,17 @@ export function readFrames(
       try {
         frame = JSON.parse(line);
       } catch {
-        return onError(new Error('无法解析的帧'));
+        onError(new FrameError('parse'));
+        continue;
       }
       onFrame(frame);
     }
     pending = text.slice(start);
-    // UTF-8 每个 UTF-16 码元最多 3 字节，按字符数估算上限即可，不必逐次重新编码
-    if (pending.length * 3 > maxBytes && Buffer.byteLength(pending) > maxBytes) onError(new Error('帧超过上限'));
+    // UTF-8 每个 UTF-16 码元最多 3 字节：先用字符数粗判，超过才精确计算
+    if (pending.length * 3 > maxBytes && Buffer.byteLength(pending) > maxBytes) {
+      pending = '';
+      onError(new FrameError('too_large'));
+    }
   });
 }
 
