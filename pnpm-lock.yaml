@@ -73,6 +73,12 @@ importers:
         specifier: workspace:*
         version: link:../contracts
 
+  packages/runtime-claude:
+    dependencies:
+      '@paldock/platform':
+        specifier: workspace:*
+        version: link:../platform
+
   packages/runtime-codex:
     dependencies:
       '@paldock/contracts':

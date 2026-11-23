@@ -44,6 +44,19 @@
 
 尚未验证：app-server 在 turn 进行中崩溃后的恢复、`acceptForSession` 的作用范围、文件改动审批（`item/fileChange/requestApproval`）。
 
+## P0-02 Claude Code（零成本部分）
+
+探测脚本 `node packages/runtime-claude/dist/probe.js [--turn] [--interrupt] [--permission] [--resume]`，经 CLI 的 stream-json 双向流接入。
+
+| 项 | 实测 |
+|---|---|
+| 发现 | PATH 上没有 `claude`；Claude 桌面版自带 Claude Code 2.1.325，路径含版本号和构建号，桌面版升级后会变，产品中应让用户安装独立的 Claude Code 或在设置里填路径 |
+| 登录 | 独立运行时 `auth status` 为未登录（以非零码退出但输出 JSON）：桌面版的登录不会自动给子进程用。未登录时会话仍会输出 `system/init`，随后以「Not logged in」结束 |
+| 环境变量 | **重要**：从 Claude 桌面版或另一个 Claude Code 会话里启动子进程时，会继承几十个 `CLAUDE_*` 变量，子进程会挂到宿主会话上（实测带出了宿主的工具列表）。适配器必须用白名单环境变量启动 |
+| 隔离参数 | `--strict-mcp-config`、`--setting-sources ""` 可以不加载用户的 MCP 与设置；`--permission-prompt-tool stdio` 让权限请求经 stdout 以 `control_request/can_use_tool` 送到宿主 |
+
+计费部分（流式、中断、权限请求、`--resume` 恢复）待用户为这份 Claude Code 登录后运行。
+
 ## P0-04 存储（SQLite）
 
 驱动选择 `node:sqlite`（Node 内置，SQLite 3.53.4）：Electron 45 自带的 Node 同样提供，免去 better-sqlite3 在 Windows 上的原生编译。

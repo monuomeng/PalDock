@@ -1,0 +1,9 @@
+{
+  "name": "@paldock/runtime-claude",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@paldock/platform": "workspace:*"
+  }
+}
