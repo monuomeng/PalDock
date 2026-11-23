@@ -194,8 +194,10 @@ async function main(): Promise<void> {
     if (flags.has('--resume') && sessionId) {
       await session.dispose();
       session = new ClaudeSession(exe, cwd, ['--resume', sessionId]);
-      const resumed = await turn(session, '我们上一轮让你回复的是哪两个字母？只回答这两个字母。');
-      report.resume = resumed;
+      const answer = session.waitFor(isResult, 180_000);
+      const resumed = await turn(session, '我们第一轮让你回复的是哪两个字母？只回答这两个字母。');
+      // 只记录是否答对，不记录回复正文
+      report.resume = { ...resumed, rememberedContext: /OK/i.test(String((await answer).result ?? '')) };
     }
   } finally {
     report.messageTypes = Object.fromEntries(session.seen);

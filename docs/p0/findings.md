@@ -7,12 +7,12 @@
 | 积压 ID | 项目 | 结果 |
 |---|---|---|
 | P0-01 | Codex app-server 能力 | 通过：发现、initialize、账号、thread、流式、中断、审批请求、跨进程恢复均已实测（2026-11-23 经用户同意跑了计费项）；app-server 在 turn 中途崩溃的恢复未测 |
-| P0-02 | Claude Code SDK/CLI | 未开始：PATH 上没有 `claude`，但 Claude 桌面版自带 Claude Code 2.1.325（`%LOCALAPPDATA%\Claude-Data\…\claude-code\2.1.325\…\claude.exe`），`--help` 显示支持 `-p`、`stream-json` 输入输出与 `--resume`；真实对话会消耗用户的 Claude 额度，待用户决定 |
+| P0-02 | Claude Code SDK/CLI | 通过（CLI stream-json）：流式、中断、权限请求、跨进程恢复均已实测；Agent SDK 未单独评估。桌面版自带 Claude Code 2.1.325（`%LOCALAPPDATA%\Claude-Data\…\claude-code\2.1.325\…\claude.exe`）），需单独登录 |
 | P0-03 | 飞书长连接 | 阻塞：无测试租户；P0 只完成 inbox 去重、租约与会话串行的存储侧实现 |
 | P0-04 | Electron + SQLite + 受限 IPC | 存储与服务进程已实测；Electron 窗口实机运行见下文「Electron」 |
 | P0-05 | 版本化事件与状态机 | 通过：契约与状态机测试见 `packages/contracts`、`packages/domain` |
 | P0-06 | 许可证与素材 | 待用户决定 |
-| P0-07 | Codex / Claude / ACP 子代理对比 | 未开始：依赖 P0-02 |
+| P0-07 | Codex / Claude / ACP 子代理对比 | 未开始：P0-02 已通过，可以开始 |
 
 自动化测试：`pnpm test` 共 44 项通过，`pnpm build`（`tsc -b` 严格模式）通过。
 
@@ -55,7 +55,18 @@
 | 环境变量 | **重要**：从 Claude 桌面版或另一个 Claude Code 会话里启动子进程时，会继承几十个 `CLAUDE_*` 变量，子进程会挂到宿主会话上（实测带出了宿主的工具列表）。适配器必须用白名单环境变量启动 |
 | 隔离参数 | `--strict-mcp-config`、`--setting-sources ""` 可以不加载用户的 MCP 与设置；`--permission-prompt-tool stdio` 让权限请求经 stdout 以 `control_request/can_use_tool` 送到宿主 |
 
-计费部分（流式、中断、权限请求、`--resume` 恢复）待用户为这份 Claude Code 登录后运行。
+计费项实测（用户为这份 Claude Code 单独登录 claude.ai 账号后，`probe.js --turn --interrupt --permission --resume`，2026-11-23）：
+
+| 项 | 结果 |
+|---|---|
+| 初始化 | `system/init` 返回 session_id、默认模型、权限模式 `default`、30 个内置工具（隔离参数生效，未加载用户的 MCP） |
+| 流式与完成 | 极短回复约 3.3 秒，`--include-partial-messages` 下有 6 个 `stream_event`，以 `result/success` 结束；比 Codex 首轮快一个数量级（没有 MCP 启动开销） |
+| 中断 | 收到第一个 `stream_event` 后发 `control_request/interrupt`，9 ms 后以 `result/error_during_execution` 结束。适配器要把这个 subtype 映射为「已中断」而不是失败 |
+| 权限请求 | 要求写文件时收到 `control_request/can_use_tool`（工具 `Write`），回复 `deny` 后文件未写入，turn 正常结束 |
+| 跨进程恢复 | 结束进程后用 `--resume <session_id>` 启动新进程，模型能答出第一轮的内容。副作用：会话保存在用户的 Claude Code 历史中 |
+| 其他消息 | `system/status`、`rate_limit_event`（可用于展示额度） |
+
+与 Codex 对照：两者都支持流式、中断、宿主审批和恢复，可以落到同一个 `RuntimeAdapter` 契约上；差异在于 Codex 审批是 JSON-RPC 服务端请求、按命令/文件改动分类，Claude 是按工具名的 `can_use_tool`，策略引擎需要各自映射到风险级别。
 
 ## P0-04 存储（SQLite）
 
@@ -90,6 +101,6 @@
 
 ## 阻塞项与所需条件
 
-- **P0-02 / P0-07**：可使用桌面版自带的 Claude Code（共用用户的 Claude 登录与额度）；需用户同意消耗额度后，评估流式、resume 和权限请求。
+- **P0-07**：P0-02 已解除阻塞，子代理与独立会话对比待做。
 - **P0-03**：需要飞书测试租户与自建应用（WSClient 长连接权限），Telegram 需要测试 bot 与可用代理。
 - **P0-06**：需要用户确定产品许可证与桌宠素材来源。
