@@ -30,8 +30,16 @@ step "1. 环境"
   diskutil info / 2>/dev/null | grep -E 'File System Personality|Name \(User Visible\)'
 } | tee "$OUT/environment.txt"
 
-step "2. 安装依赖（Electron 二进制在首次运行时下载）"
+step "2. 安装依赖并预先下载 Electron 二进制"
 run pnpm install --frozen-lockfile
+# Electron 45 只在首次运行时下载二进制，下载失败会让第 5 步直接报错（Mac 首轮实测）。
+# 这里提前下载并重试；网络慢时可先 export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
+ELECTRON_PKG="$(node -e "console.log(require('path').dirname(require.resolve('electron/package.json', { paths: ['apps/desktop'] })))")"
+for attempt in 1 2 3; do
+  run node "$ELECTRON_PKG/install.js" && break
+  echo "Electron 下载第 $attempt 次失败，重试" | tee -a "$OUT/run.log"
+  sleep 5
+done
 
 step "3. 构建与单元测试"
 run pnpm build
@@ -49,8 +57,10 @@ run node scripts/p0/worktree-check.mjs
 [ -f p0-worktree-check.json ] && cp p0-worktree-check.json "$OUT/"
 
 step "7. 执行器发现（零成本，只读版本和登录状态；未安装时会如实报告）"
-run node packages/runtime-codex/dist/probe.js > "$OUT/codex-discovery.json" 2>&1 || true
-run node packages/runtime-claude/dist/probe.js > "$OUT/claude-discovery.json" 2>&1 || true
+# 直接重定向到结果文件（不经 run，否则输出会写进 run.log）
+node packages/runtime-codex/dist/probe.js > "$OUT/codex-discovery.json" 2>&1 || true
+node packages/runtime-claude/dist/probe.js > "$OUT/claude-discovery.json" 2>&1 || true
+cat "$OUT/codex-discovery.json" "$OUT/claude-discovery.json" >> "$OUT/run.log"
 
 if [ "$SKIP_MANUAL" -eq 0 ]; then
   step "8. 电源与空闲事件（需要人操作）"

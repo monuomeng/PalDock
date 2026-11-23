@@ -9,7 +9,7 @@
 | P0-01 | Codex app-server 能力 | 通过：发现、initialize、账号、thread、流式、中断、审批请求、跨进程恢复均已实测（2026-11-23 经用户同意跑了计费项）；app-server 在 turn 中途崩溃的恢复未测 |
 | P0-02 | Claude Code SDK/CLI | 通过（CLI stream-json）：流式、中断、权限请求、跨进程恢复均已实测；Agent SDK 未单独评估。桌面版自带 Claude Code 2.1.325（`%LOCALAPPDATA%\Claude-Data\…\claude-code\2.1.325\…\claude.exe`）），需单独登录 |
 | P0-03 | 飞书长连接 | 通过（单聊）：用户自建测试应用，长连接、接收、回复、断线补投与去重已实测；群聊、卡片未测 |
-| P0-04 | Electron + SQLite + 受限 IPC | 通过（Windows）：存储、服务进程、Electron 窗口、看护重启、单实例与正常退出已实测；电源事件、长路径、macOS 未测 |
+| P0-04 | Electron + SQLite + 受限 IPC | 通过（Windows 与 macOS arm64）：存储、服务进程、Electron 窗口、看护重启、单实例与正常退出已实测；电源事件两个平台都未验证 |
 | P0-05 | 版本化事件与状态机 | 通过：契约与状态机测试见 `packages/contracts`、`packages/domain` |
 | P0-06 | 许可证与素材 | 已决定（2026-11-23）：暂不开源。仓库保持私有、不放开源许可证；只引入允许闭源分发的依赖（MIT / Apache-2.0 / BSD 等），不复制 GPL / AGPL 代码（Coopanion 只借鉴设计）。桌宠素材来源待定 |
 | P0-07 | Codex / Claude / ACP 子代理对比 | 通过（Codex、Claude 实测）；ACP 只做了文档评估，未运行 |
@@ -160,7 +160,21 @@ Electron 45.2.3（内置 Node 24.22.2）。其 `node:sqlite` 为 SQLite 3.53.4�
 
 ## macOS
 
-用户只有 Windows 电脑，macOS 由其他人协助测试。测试包是仓库 `git archive` 打出的 zip，附 AI 可执行的手册 [docs/test-kits/macos/README.md](../test-kits/macos/README.md) 和一键脚本 `scripts/macos/run-p0-checks.sh`，结果以 `p0-macos-results.zip` 发回。为 macOS 预先处理的点：Unix 套接字路径超过 `sun_path` 上限（104 字节）时退到 `/tmp/paldock-<哈希>.sock`；执行器进程组整体结束；凭据读取目前只实现了 Windows（macOS 钥匙串待补，测试包不涉及）。结果待回收。
+用户只有 Windows 电脑，macOS 由其他人用测试包协助测试（测试包是 `git archive` 打出的 zip，附 AI 可执行的手册 [docs/test-kits/macos/README.md](../test-kits/macos/README.md) 和一键脚本 `scripts/macos/run-p0-checks.sh`）。结果于 2026-11-23 回收。
+
+环境：macOS 26.4.1，Apple Silicon（arm64），APFS（不区分大小写），Node 24.11.0，pnpm 10.34.5（corepack），git 2.52.0。
+
+| 步骤 | 结果 |
+|---|---|
+| 安装依赖 | 通过（锁文件一致，18.6 秒）。飞书 SDK 依赖的 protobufjs 构建脚本被 pnpm 默认忽略，不影响探测 |
+| 构建与测试 | 通过：`tsc -b` 成功，45 项测试全部通过。Node 24.11 对 `node:sqlite` 打印 ExperimentalWarning（Node 26 和 Electron 45 内置的 Node 24.22 没有这个问题），功能正常 |
+| 服务进程（fork） | 通过：Unix 套接字握手、双开被拒（退出码 75）、强杀后接管遗留锁、正常退出码 0，与 Windows 一致 |
+| Electron 实机 | **15 项全部通过**，包括 Unix 套接字权限 600、被结束后 3 秒自动重启并重连、单实例、禁止导航、正常退出后锁文件和套接字都被清理。首轮因 Electron 二进制首次下载失败而报错，测试者改用镜像重试后通过（已在脚本里加入预下载与重试） |
+| worktree | 与 Windows 一致：只差大小写的分支名、文件名会冲突；349 字符的深层路径写入、提交、删除都正常（macOS 不需要 `core.longpaths`） |
+| 执行器发现 | Codex 0.138.0（原生安装）已登录，但用探测参数启动的 app-server 以退出码 1 结束，原因未知（当时没有记录 stderr，探测脚本已补上）。很可能是旧版本与 0.166 的协议或参数不兼容，适配器需要做最低版本检查。未安装 Claude Code |
+| 电源与空闲事件 | **未验证**：诊断只记录到启动，没有锁屏、空闲或睡眠事件（人工步骤未完成） |
+
+结论：P0-04 在 macOS 上的进程拓扑、本机 IPC、看护重启与 SQLite 存储都与 Windows 行为一致，可以按「同一套代码 + 平台层」继续 P1。待补：电源事件（两个平台都没测）、Codex 0.138 启动失败的原因与最低版本、macOS 钥匙串凭据读取、打包后的文件夹授权弹窗。
 
 ## 阻塞项与所需条件
 
