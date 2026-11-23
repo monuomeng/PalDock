@@ -7,7 +7,7 @@
 | 积压 ID | 项目 | 结果 |
 |---|---|---|
 | P0-01 | Codex app-server 能力 | 通过：发现、initialize、账号、thread、流式、中断、审批请求、跨进程恢复均已实测（2026-11-23 经用户同意跑了计费项）；app-server 在 turn 中途崩溃的恢复未测 |
-| P0-02 | Claude Code SDK/CLI | 未开始：PATH 上没有 `claude`，但 Claude 桌面版自带 Claude Code 2.1.325（`%LOCALAPPDATA%\Claude-Data\...\claude-code.1.325\...\claude.exe`），`--help` 显示支持 `-p`、`stream-json` 输入输出与 `--resume`；真实对话会消耗用户的 Claude 额度，待用户决定 |
+| P0-02 | Claude Code SDK/CLI | 未开始：PATH 上没有 `claude`，但 Claude 桌面版自带 Claude Code 2.1.325（`%LOCALAPPDATA%\Claude-Data\…\claude-code\2.1.325\…\claude.exe`），`--help` 显示支持 `-p`、`stream-json` 输入输出与 `--resume`；真实对话会消耗用户的 Claude 额度，待用户决定 |
 | P0-03 | 飞书长连接 | 阻塞：无测试租户；P0 只完成 inbox 去重、租约与会话串行的存储侧实现 |
 | P0-04 | Electron + SQLite + 受限 IPC | 存储与服务进程已实测；Electron 窗口实机运行见下文「Electron」 |
 | P0-05 | 版本化事件与状态机 | 通过：契约与状态机测试见 `packages/contracts`、`packages/domain` |
