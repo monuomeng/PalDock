@@ -32,7 +32,7 @@ PalDock 是一个本地优先的 AI 桌面助手，主机支持 Windows 和 macO
 1. 解压测试包，进入目录：
 
    ```bash
-   unzip paldock-macos-test-kit.zip -d paldock && cd paldock
+   unzip paldock-macos-test-kit.zip && cd paldock
    ```
 
 2. 运行一键检查（约 5–15 分钟，主要是安装依赖和下载 Electron）：
@@ -58,7 +58,7 @@ PalDock 是一个本地优先的 AI 桌面助手，主机支持 Windows 和 macO
 | 步骤 | 验证内容 | 预期 |
 |---|---|---|
 | 2 安装 | 锁定版本的依赖能在 macOS 安装；Electron 45.2.3 能下载 | `exit=0` |
-| 3 构建与测试 | TypeScript 严格模式构建；45 个单元/集成测试（含 SQLite FTS5 中文检索、Unix 套接字通信） | 构建 `exit=0`，测试全部通过 |
+| 3 构建与测试 | TypeScript 严格模式构建；全部单元/集成测试（含 SQLite FTS5 中文检索、Unix 套接字通信） | 构建 `exit=0`，测试全部通过 |
 | 4 服务进程 | 本地服务经 Unix 套接字握手；同一数据目录第二个服务被拒（退出码 75）；强杀后遗留锁被接管；正常退出码 0 | 日志中依次出现 `ready`、`locked`、`ready`、`graceful exit 0` |
 | 5 Electron | 窗口连上服务；渲染进程拿不到 Node；命令白名单；**套接字文件权限为 600**；服务被结束后 3 秒自动重启；单实例；禁止跳转外部网址；关闭窗口后锁文件和套接字被清理 | `p0-electron-check.json` 中 `failed: 0` |
 | 6 worktree | 默认不区分大小写的 APFS 上，只差大小写的分支名和文件名会冲突；深层路径可用 | 记录事实即可，`INFO` 不算失败 |
