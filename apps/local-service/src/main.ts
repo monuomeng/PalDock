@@ -39,7 +39,7 @@ onParentMessage(async (raw) => {
   if (message.type === 'init' && !service) {
     try {
       service = await LocalService.start({ ...message, log });
-      post({ type: 'ready', ipcPath: message.ipcPath, interruptedRuns: service.interruptedRuns });
+      post({ type: 'ready', interruptedRuns: service.interruptedRuns });
     } catch (error) {
       const locked = error instanceof DataRootLockedError;
       post({ type: 'fatal', reason: locked ? 'locked' : 'error', message: (error as Error).message });

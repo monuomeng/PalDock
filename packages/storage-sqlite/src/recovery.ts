@@ -2,8 +2,12 @@ import type { PersistentEvent, RunStatus } from '@paldock/contracts';
 import type { Database } from './database.js';
 import type { EventLog } from './event-log.js';
 
-// 两条语句的条件都与部分索引 runs_active 逐字一致
-const ACTIVE = `status IN ('starting', 'running', 'waiting_approval', 'unconfirmed')`;
+/**
+ * 「未结束且未中断」的 Run 状态。必须与部分索引 runs_active 的条件逐字一致（SQLite 按文本匹配部分索引），
+ * 测试校验它与 runMachine 推导出的集合相同，新增状态时会提醒同步。
+ */
+export const ACTIVE_RUN_STATUSES = ['starting', 'running', 'waiting_approval', 'unconfirmed'] as const;
+const ACTIVE = `status IN (${ACTIVE_RUN_STATUSES.map((s) => `'${s}'`).join(', ')})`;
 const SELECT_ACTIVE_RUNS = `SELECT id, status, native_session_id AS nativeSessionId FROM runs WHERE ${ACTIVE}`;
 const MARK_INTERRUPTED = `UPDATE runs SET status = 'interrupted', version = version + 1 WHERE ${ACTIVE}`;
 

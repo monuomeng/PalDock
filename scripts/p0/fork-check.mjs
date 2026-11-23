@@ -17,8 +17,8 @@ const start = () => {
 };
 const a = start();
 console.log('A ->', await a.ready);
-const client = new IpcClient(a.ipcPath, a.token, (e) => console.log('event', e.seq, e.type));
-await client.connect();
+const client = new IpcClient((e) => console.log('event', e.seq, e.type));
+await client.connect(a.ipcPath, a.token);
 const ws = await client.request('workspace.create', { name: 'x', rootPath: 'p' });
 await client.request('task.create', { workspaceId: ws.id, title: 't' });
 const b = start();

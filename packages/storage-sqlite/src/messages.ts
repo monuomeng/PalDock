@@ -1,9 +1,8 @@
-import type { PersistentEvent } from '@paldock/contracts';
+import type { MessageRole } from '@paldock/contracts';
+import type { Clock } from './clock.js';
 import type { Database } from './database.js';
 import type { EventLog } from './event-log.js';
-import type { Change } from './status-transition.js';
-
-export type MessageRole = 'user' | 'assistant' | 'system';
+import { insertWithEvent, type Change } from './writes.js';
 
 export interface MessageRecord {
   id: number;
@@ -17,7 +16,7 @@ const columns = (alias: string) =>
   `${alias}id, ${alias}session_id AS sessionId, ${alias}role, ${alias}body, ${alias}created_at AS createdAt`;
 
 /** trigram 分词至少需要 3 个字符；更短的查询（例如两字中文词）只能 LIKE 全表扫描。 */
-export const TRIGRAM_MIN_CHARS = 3;
+const TRIGRAM_MIN_CHARS = 3;
 
 const SQL = {
   insert: `
@@ -46,18 +45,14 @@ export class MessageStore {
   constructor(
     private readonly db: Database,
     private readonly events: EventLog,
-    private readonly now: () => Date = () => new Date(),
+    private readonly clock: Clock,
   ) {}
 
   append(sessionId: string, role: MessageRole, body: string): Change<MessageRecord> {
-    return this.db.transaction(() => {
-      const record = this.db.get<MessageRecord>(SQL.insert, sessionId, role, body, this.now().toISOString())!;
-      const event: PersistentEvent = this.events.append(String(record.id), {
-        type: 'message.created',
-        payload: { sessionId, role },
-      });
-      return { record, events: [event] };
-    });
+    return insertWithEvent<MessageRecord>(this.db, this.events, SQL.insert, [sessionId, role, body, this.clock.iso()], () => ({
+      type: 'message.created',
+      payload: { sessionId, role },
+    }));
   }
 
   search(query: string, limit: number): MessageRecord[] {

@@ -1,6 +1,7 @@
 /**
  * P0 样机的初始表结构，只覆盖任务板、审批、事件、inbox/outbox、消息检索和「待我处理」。
- * 约定：状态表带 version 做乐观并发；时间统一为 ISO-8601 UTC 文本；
+ * 约定：状态表带 version 做乐观并发，status 的 CHECK 列表与 contracts 的状态数组一致（测试校验）；
+ * 时间统一为 ISO-8601 UTC 文本；
  * 部分索引的 WHERE 与查询条件逐字一致，保证 SQLite 能选中它们。
  */
 export const initialSchema = /* sql */ `
@@ -18,7 +19,7 @@ CREATE TABLE tasks (
   id           TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces (id),
   title        TEXT NOT NULL,
-  status       TEXT NOT NULL,
+  status       TEXT NOT NULL CHECK (status IN ('draft', 'queued', 'running', 'waiting_approval', 'waiting_dependency', 'blocked', 'succeeded', 'failed', 'cancelled')),
   version      INTEGER NOT NULL DEFAULT 0,
   created_at   TEXT NOT NULL,
   updated_at   TEXT NOT NULL
@@ -30,7 +31,7 @@ CREATE TABLE subtasks (
   task_id      TEXT NOT NULL REFERENCES tasks (id),
   role         TEXT NOT NULL,
   goal         TEXT NOT NULL,
-  status       TEXT NOT NULL,
+  status       TEXT NOT NULL CHECK (status IN ('draft', 'queued', 'running', 'waiting_approval', 'waiting_dependency', 'blocked', 'succeeded', 'failed', 'cancelled', 'review')),
   rework_count INTEGER NOT NULL DEFAULT 0,
   version      INTEGER NOT NULL DEFAULT 0,
   created_at   TEXT NOT NULL,
@@ -51,7 +52,7 @@ CREATE TABLE runs (
   attempt           INTEGER NOT NULL,
   runtime           TEXT NOT NULL,
   native_session_id TEXT,
-  status            TEXT NOT NULL,
+  status            TEXT NOT NULL CHECK (status IN ('starting', 'running', 'waiting_approval', 'unconfirmed', 'interrupted', 'succeeded', 'failed', 'cancelled')),
   version           INTEGER NOT NULL DEFAULT 0,
   started_at        TEXT NOT NULL,
   ended_at          TEXT,
@@ -66,7 +67,7 @@ CREATE TABLE approvals (
   run_id       TEXT NOT NULL REFERENCES runs (id),
   risk_level   TEXT NOT NULL CHECK (risk_level IN ('low', 'medium', 'high')),
   summary      TEXT NOT NULL,
-  status       TEXT NOT NULL,
+  status       TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'expired', 'cancelled')),
   requested_at TEXT NOT NULL,
   expires_at   TEXT NOT NULL,
   escalated_at TEXT,
@@ -109,7 +110,6 @@ CREATE TABLE events (
   schema_version INTEGER NOT NULL,
   occurred_at    TEXT NOT NULL
 ) STRICT;
-CREATE INDEX events_by_aggregate ON events (aggregate_id, seq);
 
 -- 入站去重：处理完保留墓碑行（payload 置空），迟到的重复事件仍被主键拒绝。
 CREATE TABLE inbox (

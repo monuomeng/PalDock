@@ -23,10 +23,9 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function connectClient(events: PersistentEvent[] = [], afterSeq = 0) {
-  const client = new IpcClient(ipcPath, token, (e) => events.push(e));
-  client.lastSeq = afterSeq;
-  await client.connect();
+async function connectClient(events: PersistentEvent[] = []) {
+  const client = new IpcClient((e) => events.push(e));
+  await client.connect(ipcPath, token);
   return client;
 }
 
@@ -52,11 +51,15 @@ describe('本地服务 IPC', () => {
     await b.request('task.transition', { taskId: task.id, expectedVersion: 0, to: 'queued' });
     await b.close();
 
-    const missed: PersistentEvent[] = [];
-    const c = await connectClient(missed, a.lastSeq);
-    expect(seen.map((e) => e.type)).toEqual(['task.created']);
-    expect(missed.map((e) => e.type)).toEqual(['task.status_changed']);
-    await c.close();
+    // 同一个客户端重连：connect 返回时已补齐断线期间的事件
+    await a.connect(ipcPath, token);
+    expect(seen.map((e) => e.type)).toEqual(['task.created', 'task.status_changed']);
+    await a.close();
+
+    // 全新客户端不补发历史
+    const fresh: PersistentEvent[] = [];
+    await (await connectClient(fresh)).close();
+    expect(fresh).toEqual([]);
   });
 
   it('业务错误带错误码返回，参数错误为 bad_request', async () => {

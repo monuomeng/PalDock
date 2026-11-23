@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   ApprovalChannel,
   ApprovalStatus,
+  MessageRole,
   RiskLevel,
   RunStatus,
   SCHEMA_VERSION,
@@ -44,11 +45,10 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('message.created'),
-    payload: z.object({ sessionId: Id, role: z.enum(['user', 'assistant', 'system']) }),
+    payload: z.object({ sessionId: Id, role: MessageRole }),
   }),
 ]);
 export type PersistentEventBody = z.infer<typeof PersistentEventBody>;
-export type PersistentEventType = PersistentEventBody['type'];
 
 /** 写入 events 表后的完整形态：`seq` 全局递增，客户端断线后按序号续拉。 */
 export const PersistentEvent = z.intersection(

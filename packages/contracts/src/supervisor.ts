@@ -11,7 +11,7 @@ export const ParentToService = z.discriminatedUnion('type', [
 export type ParentToService = z.infer<typeof ParentToService>;
 
 export const ServiceToParent = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('ready'), ipcPath: z.string(), interruptedRuns: z.number().int().nonnegative() }),
+  z.object({ type: z.literal('ready'), interruptedRuns: z.number().int().nonnegative() }),
   z.object({ type: z.literal('fatal'), reason: z.enum(['locked', 'error']), message: z.string() }),
 ]);
 export type ServiceToParent = z.infer<typeof ServiceToParent>;

@@ -53,5 +53,9 @@ export type RemoteApprovalLevel = z.infer<typeof RemoteApprovalLevel>;
 export const ApprovalChannel = z.enum(['desktop', 'feishu', 'telegram', 'policy']);
 export type ApprovalChannel = z.infer<typeof ApprovalChannel>;
 
-export const AggregateKind = z.enum(['task', 'subtask', 'run', 'approval', 'message']);
-export type AggregateKind = z.infer<typeof AggregateKind>;
+export const MessageRole = z.enum(['user', 'assistant', 'system']);
+export type MessageRole = z.infer<typeof MessageRole>;
+
+/** 「待我处理」的条目类型，与 attention_items 视图的 kind 列一致。 */
+export const AttentionKind = z.enum(['approval', 'blocked', 'review', 'unconfirmed_run']);
+export type AttentionKind = z.infer<typeof AttentionKind>;

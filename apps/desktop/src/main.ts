@@ -15,8 +15,9 @@ const RENDERER_COMMANDS = new Set<string>(COMMAND_NAMES);
 
 let window: BrowserWindow | undefined;
 let host: ServiceHost | undefined;
-let client: IpcClient | undefined;
-let lastSeq = 0;
+// 整个应用生命周期复用一个客户端：服务重启后用新的管道名和令牌重连，事件序号由客户端自己记住
+const client = new IpcClient((event: PersistentEvent) => sendToRenderer('paldock:event', event));
+let connected = false;
 
 /**
  * 数据根由用户选择（可选 D 盘）。userData 下只存一个指向数据根的 bootstrap.json；
@@ -45,17 +46,14 @@ function sendToRenderer(channel: string, payload: unknown): void {
 }
 
 async function onHostStatus(status: HostStatus): Promise<void> {
+  if (status.state !== 'ready') connected = false;
   // 令牌和管道名只留在主进程
   sendToRenderer('paldock:status', status.state === 'ready' ? { state: 'ready' } : status);
   if (status.state !== 'ready') return;
 
-  await client?.close();
-  client = new IpcClient(status.ipcPath, status.token, (event: PersistentEvent) => {
-    lastSeq = event.seq;
-    sendToRenderer('paldock:event', event);
-  });
-  client.lastSeq = lastSeq;
-  await client.connect();
+  await client.close();
+  await client.connect(status.ipcPath, status.token);
+  connected = true;
   sendToRenderer('paldock:status', { state: 'connected', interruptedRuns: status.interruptedRuns });
 }
 
@@ -68,7 +66,7 @@ function registerIpc(): void {
     if (!fromOurRenderer(event) || typeof name !== 'string' || !RENDERER_COMMANDS.has(name)) {
       throw new Error('不允许的请求');
     }
-    if (!client) throw new Error('本地服务未连接');
+    if (!connected) throw new Error('本地服务未连接');
     return client.request(name as CommandName, args as never);
   });
   if (!app.isPackaged) {
@@ -116,7 +114,8 @@ async function boot(): Promise<void> {
     if (quitting) return;
     event.preventDefault();
     quitting = true;
-    void Promise.resolve(client?.close())
+    void client
+      .close()
       .then(() => host?.stop())
       .finally(() => app.quit());
   });

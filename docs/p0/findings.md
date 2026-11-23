@@ -1,0 +1,72 @@
+# P0 实测记录
+
+记录时间 2026-11-23，Windows 11（10.0.26200，x64），Node 26.7.0（开发与测试），Electron 45.2.3（主机运行时）。只记录实际跑过的结果；未运行的项明确标注。计划见 [P0 开发计划](../plan/p0-technical-validation.md)。
+
+## 结论一览
+
+| 积压 ID | 项目 | 结果 |
+|---|---|---|
+| P0-01 | Codex app-server 能力 | 部分通过：发现、initialize、账号状态、模型列表、ephemeral thread 创建已实测；流式、取消、审批、恢复的探测脚本已就绪，因消耗额度待用户同意后运行 |
+| P0-02 | Claude Code SDK/CLI | 阻塞：本机未安装 `claude`，未评估 |
+| P0-03 | 飞书长连接 | 阻塞：无测试租户；P0 只完成 inbox 去重、租约与会话串行的存储侧实现 |
+| P0-04 | Electron + SQLite + 受限 IPC | 存储与服务进程已实测；Electron 窗口实机运行见下文「Electron」 |
+| P0-05 | 版本化事件与状态机 | 通过：契约与状态机测试见 `packages/contracts`、`packages/domain` |
+| P0-06 | 许可证与素材 | 待用户决定 |
+| P0-07 | Codex / Claude / ACP 子代理对比 | 未开始：依赖 P0-02 |
+
+自动化测试：`pnpm test` 共 39 项通过，`pnpm build`（`tsc -b` 严格模式）通过。
+
+## P0-01 Codex app-server
+
+运行方式：`pnpm build` 后执行 `node packages/runtime-codex/dist/probe.js`（零成本），`--turn` / `--interrupt` 为 opt-in。
+
+| 项 | 实测 |
+|---|---|
+| 版本 | codex-cli 0.166.0，npm 安装（`D:\software\codex-cli`） |
+| 发现 | Windows 上 PATH 里只有 `codex.cmd` 外壳；Node 不允许不经 shell 启动 `.cmd`，改为用 Node 运行 `node_modules/@openai/codex/bin/codex.js`。在 Electron 内需传 Electron 可执行文件并设 `ELECTRON_RUN_AS_NODE=1`（未实测） |
+| 传输 | `codex app-server --listen stdio://`，按行分隔 JSON-RPC；消息不带 `jsonrpc` 字段，客户端两种都接受 |
+| initialize | 通过；返回 userAgent、codexHome、platformOs；之后需发 `initialized` 通知 |
+| 账号 | `account/read` 返回 `chatgpt` 类型（未记录邮箱） |
+| 模型 | `model/list` 返回 9 个 |
+| thread/start | `ephemeral: true`、`sandbox: read-only`、`approvalPolicy: on-request` 成功，返回的 sandbox 为 `readOnly`、无网络 |
+| 协议面 | `generate-ts` 生成 97 个顶层类型 + 664 个 v2 类型。关键方法：`thread/start`、`thread/resume`、`turn/start`、`turn/interrupt`、`turn/steer`；审批为服务端请求 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval`、`item/permissions/requestApproval`，决定值 `accept / acceptForSession / decline / cancel` 及策略修订；完成通知 `turn/completed`（状态 `completed / interrupted / failed / inProgress`）；流式 `item/agentMessage/delta` |
+| 进程树 | **重要**：只结束外层 node 进程时，内层 `codex.exe` 仍持有 stdout 管道和工作目录句柄，导致探测进程挂起、临时目录删除报 EPERM。改用 `taskkill /T /F` 结束整树后正常（`packages/platform/src/process-tree.ts`）。P1 评估 Job Object |
+
+尚未验证：流式与完成（`--turn`）、取消（`--interrupt`）、审批请求的实际触发与回复、`thread/resume` 跨进程恢复、app-server 崩溃后的恢复。
+
+## P0-04 存储（SQLite）
+
+驱动选择 `node:sqlite`（Node 内置，SQLite 3.53.4）：Electron 45 自带的 Node 同样提供，免去 better-sqlite3 在 Windows 上的原生编译。
+
+- **WAL、外键、busy_timeout**：文件库打开后 `journal_mode = wal` 已验证。
+- **FTS5 trigram**：内置构建支持；中文子串「记住我」可检索。trigram 至少 3 个字符，两字中文词（如「周报」）检索不到，已实现 LIKE 回退（全表扫描，数据量大时需在 P2 用向量或 ngram 方案补充）。
+- **部分索引**：SQLite 不会从 `status = 'x'` 推出 `status IN (...)`，单值查询选不中 IN 条件的部分索引（`EXPLAIN QUERY PLAN` 实测为 SCAN）。因此每种查询条件各配一个条件逐字一致的部分索引，测试里用 `EXPLAIN QUERY PLAN` 固定下来。
+- **RETURNING**：所有插入和状态更新用 `RETURNING` 直接拿回最新行，不回查。
+- **迁移**：事务内执行，失败整体回滚；已有数据时先用 `node:sqlite` 的 online backup 备份到 `backups/`（已测）。
+- **启动恢复**：未结束的 Run 一条 UPDATE 置为 `interrupted` 并逐条写事件；处理中的 inbox 事件放回队列。
+- **inbox**：主键去重，处理完写墓碑（清空 payload），迟到重复事件仍被拒；同一会话串行，租约过期可回收（已测）。
+
+## P0-04 进程与 IPC
+
+用 `scripts/p0/fork-check.mjs` 以 `child_process.fork` 驱动本地服务入口（utilityProcess 的备选路径）实测：
+
+| 场景 | 结果 |
+|---|---|
+| 启动、迁移、经命名管道 `\\.\pipe\paldock-<随机>` 握手 | 通过 |
+| 错误令牌 | 连接被断开，收不到 welcome（自动化测试） |
+| 同一数据根第二个服务 | 收到 `fatal/locked`，退出码 75（看护程序据此不重启） |
+| 强杀服务后再启动 | 遗留 PID 锁被识别为失效并接管，数据完好 |
+| 正常退出 | 收到 `shutdown` 后中断未结束 Run、关闭连接与数据库，退出码 0 |
+| 断线续拉 | 客户端带 `afterSeq` 重连，服务先补发事件再发 welcome，connect 返回时已追上（自动化测试） |
+
+## Electron
+
+代码已完成（单实例、数据根选择、utilityProcess 看护、受限 preload、白名单命令转发、导航与新窗口禁止、CSP）。Electron 45 改为首次运行时下载二进制，经 npmmirror 下载速度约 40 KiB/s，本记录写作时尚未完成。实机运行结果见下方补记。
+
+未验证：utilityProcess 下的看护与重启、powerMonitor 锁屏/空闲事件、worktree 长路径与杀毒扫描、macOS 文件夹授权。
+
+## 阻塞项与所需条件
+
+- **P0-02 / P0-07**：需要在本机安装 Claude Code 并完成认证；之后才能评估 Agent SDK 流式、resume 和 PermissionRequest hook。
+- **P0-03**：需要飞书测试租户与自建应用（WSClient 长连接权限），Telegram 需要测试 bot 与可用代理。
+- **P0-06**：需要用户确定产品许可证与桌宠素材来源。

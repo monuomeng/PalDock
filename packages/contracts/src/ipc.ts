@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { EphemeralEvent, PersistentEvent } from './events.js';
-import { SCHEMA_VERSION, TaskStatus } from './states.js';
+import { AttentionKind, SCHEMA_VERSION, TaskStatus } from './states.js';
 
 /** 单帧上限；超长帧直接断开，防止本机客户端撑爆内存。 */
 export const MAX_FRAME_BYTES = 1024 * 1024;
@@ -23,7 +23,7 @@ export const CommandArgs = {
     limit: z.number().int().positive().max(1000).default(200),
   }),
   'attention.list': z.object({}),
-  'attention.markRead': z.object({ itemKind: z.string().min(1), itemId: Id }),
+  'attention.markRead': z.object({ itemKind: AttentionKind, itemId: Id }),
   'messages.search': z.object({ query: z.string().min(1).max(200), limit: z.number().int().positive().max(100).default(20) }),
 } as const;
 export type CommandName = keyof typeof CommandArgs;
@@ -36,7 +36,7 @@ export const ClientFrame = z.discriminatedUnion('kind', [
     schemaVersion: z.literal(SCHEMA_VERSION),
     token: z.string().min(32),
     client: z.string().min(1).max(64),
-    /** 断线重连时带上最后收到的持久事件序号，服务端补发其后的事件。 */
+    /** 断线重连时带上最后收到的持久事件序号，服务端先补发其后的事件再回 welcome。首次连接不带。 */
     afterSeq: z.number().int().nonnegative().optional(),
   }),
   z.object({ kind: z.literal('command'), id: Id, name: z.enum(COMMAND_NAMES), args: z.unknown() }),
@@ -65,7 +65,13 @@ export const ResultFrame = z.discriminatedUnion('ok', [
 export type ResultFrame = z.infer<typeof ResultFrame>;
 
 export const ServerFrame = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('welcome'), schemaVersion: z.literal(SCHEMA_VERSION), serviceVersion: z.string() }),
+  z.object({
+    kind: z.literal('welcome'),
+    schemaVersion: z.literal(SCHEMA_VERSION),
+    serviceVersion: z.string(),
+    /** 当前最大持久事件序号。首次连接（未带 afterSeq）不补发历史，客户端从这里开始续拉。 */
+    headSeq: z.number().int().nonnegative(),
+  }),
   ResultFrame,
   z.object({ kind: z.literal('event'), event: PersistentEvent }),
   z.object({ kind: z.literal('ephemeral'), event: EphemeralEvent }),

@@ -41,29 +41,42 @@ export function tokensEqual(expected: string, actual: string): boolean {
 }
 
 /**
- * 按行分隔的 JSON 帧。超过上限的帧直接报错，由调用方断开连接；
+ * 按行分隔的 JSON 帧，用于本机 IPC 和执行器的 stdio JSON-RPC。超过上限的帧报错，由调用方断开；
  * 这里只负责切分和 JSON 解析，帧结构由 contracts 中的 schema 校验。
  */
-export function readFrames(socket: Socket, onFrame: (frame: unknown) => void, onError: (error: Error) => void): void {
-  let buffered = '';
-  socket.setEncoding('utf8');
-  socket.on('data', (chunk: string) => {
-    buffered += chunk;
-    let newline: number;
-    while ((newline = buffered.indexOf('\n')) >= 0) {
-      const line = buffered.slice(0, newline);
-      buffered = buffered.slice(newline + 1);
+export function readFrames(
+  input: NodeJS.ReadableStream,
+  onFrame: (frame: unknown) => void,
+  onError: (error: Error) => void,
+  maxBytes = MAX_FRAME_BYTES,
+): void {
+  let pending = '';
+  input.setEncoding('utf8');
+  input.on('data', (chunk: string) => {
+    const text = pending + chunk;
+    let start = 0;
+    for (let newline = text.indexOf('\n'); newline >= 0; newline = text.indexOf('\n', start)) {
+      const line = text.slice(start, newline);
+      start = newline + 1;
       if (line.length === 0) continue;
+      let frame: unknown;
       try {
-        onFrame(JSON.parse(line));
+        frame = JSON.parse(line);
       } catch {
-        return onError(new Error('无法解析的 IPC 帧'));
+        return onError(new Error('无法解析的帧'));
       }
+      onFrame(frame);
     }
-    if (Buffer.byteLength(buffered) > MAX_FRAME_BYTES) onError(new Error('IPC 帧超过上限'));
+    pending = text.slice(start);
+    // UTF-8 每个 UTF-16 码元最多 3 字节，按字符数估算上限即可，不必逐次重新编码
+    if (pending.length * 3 > maxBytes && Buffer.byteLength(pending) > maxBytes) onError(new Error('帧超过上限'));
   });
 }
 
-export function writeFrame(socket: Socket, frame: unknown): void {
-  socket.write(`${JSON.stringify(frame)}\n`);
+export function serializeFrame(frame: unknown): string {
+  return `${JSON.stringify(frame)}\n`;
+}
+
+export function writeFrame(output: NodeJS.WritableStream, frame: unknown): void {
+  output.write(serializeFrame(frame));
 }

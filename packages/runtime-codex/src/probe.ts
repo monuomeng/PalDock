@@ -38,7 +38,7 @@ async function main(): Promise<void> {
     return;
   }
   report.source = cmd.source;
-  report.version = codexVersion(cmd);
+  report.version = await codexVersion(cmd);
 
   const rpc = new JsonRpcStdioClient(cmd.command, [...cmd.prefixArgs, 'app-server', '--listen', 'stdio://'], {
     onNotification: (method, params) => {

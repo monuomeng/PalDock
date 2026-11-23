@@ -12,14 +12,27 @@ function setStatus(status) {
     stopped: `已停止（${status.reason}）`,
   }[status.state];
   $('status').textContent = text ?? status.state;
-  if (status.state === 'connected') void refreshAttention();
+  if (status.state === 'connected') scheduleRefresh();
+}
+
+// 只有这些事件会改变「待我处理」；同一轮内的多个事件合并为一次刷新
+const ATTENTION_EVENTS = /^(approval\.|subtask\.status_changed|run\.status_changed)/;
+let refreshQueued = false;
+
+function scheduleRefresh() {
+  if (refreshQueued) return;
+  refreshQueued = true;
+  queueMicrotask(() => {
+    refreshQueued = false;
+    void refreshAttention();
+  });
 }
 
 function appendEvent(event) {
   const li = document.createElement('li');
   li.textContent = `#${event.seq} ${event.type} ${event.aggregateId}`;
   $('events').prepend(li);
-  void refreshAttention();
+  if (ATTENTION_EVENTS.test(event.type)) scheduleRefresh();
 }
 
 async function refreshAttention() {

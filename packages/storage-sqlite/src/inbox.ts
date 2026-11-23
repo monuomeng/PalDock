@@ -1,3 +1,4 @@
+import type { Clock } from './clock.js';
 import type { Database } from './database.js';
 
 export interface InboxItem {
@@ -41,20 +42,18 @@ const SQL = {
 export class Inbox {
   constructor(
     private readonly db: Database,
-    private readonly now: () => Date = () => new Date(),
+    private readonly clock: Clock,
   ) {}
 
   /** 返回 false 表示重复事件，调用方直接丢弃。 */
   accept(queue: string, eventId: string, conversationKey: string, payload: string): boolean {
-    return this.db.get(SQL.accept, queue, eventId, conversationKey, payload, this.now().toISOString()) !== undefined;
+    return this.db.get(SQL.accept, queue, eventId, conversationKey, payload, this.clock.iso()) !== undefined;
   }
 
   claim(leaseMs: number): InboxItem | undefined {
-    const now = this.now();
-    return this.db.statement(SQL.claim).get({
-      now: now.toISOString(),
-      leaseUntil: new Date(now.getTime() + leaseMs).toISOString(),
-    }) as InboxItem | undefined;
+    return this.db.statement(SQL.claim).get({ now: this.clock.iso(), leaseUntil: this.clock.isoAfter(leaseMs) }) as
+      | InboxItem
+      | undefined;
   }
 
   finish(queue: string, eventId: string, outcome: 'done' | 'rejected'): boolean {

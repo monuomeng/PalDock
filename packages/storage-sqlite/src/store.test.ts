@@ -1,11 +1,12 @@
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DomainError } from '@paldock/domain';
+import { APPROVAL_STATUSES, RUN_STATUSES, SUBTASK_STATUSES, TASK_STATUSES } from '@paldock/contracts';
+import { DomainError, runMachine } from '@paldock/domain';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Database } from './database.js';
 import { MIGRATIONS, migrate } from './migrations/index.js';
-import { openStore, interruptActiveWork, type Store } from './index.js';
+import { ACTIVE_RUN_STATUSES, interruptActiveWork, openStore, type Store } from './index.js';
 
 let clock = new Date('2026-11-23T08:00:00.000Z');
 const now = () => clock;
@@ -209,5 +210,25 @@ describe('迁移', () => {
     expect(db.get(`SELECT max(version) AS v FROM schema_migrations`)).toEqual({ v: 1 });
     expect(db.get(`SELECT name FROM sqlite_master WHERE name = 'ok_part'`)).toBeUndefined();
     db.close();
+  });
+});
+
+describe('表结构与契约一致', () => {
+  const checkList = (table: string) => {
+    const sql = String(store.db.get<{ sql: string }>(`SELECT sql FROM sqlite_master WHERE name = ?`, table)!.sql);
+    const list = /status\s+TEXT NOT NULL CHECK \(status IN \(([^)]*)\)\)/.exec(sql)![1]!;
+    return list.split(',').map((s) => s.trim().slice(1, -1));
+  };
+
+  it('status 的 CHECK 列表等于 contracts 的状态数组', () => {
+    expect(checkList('tasks')).toEqual([...TASK_STATUSES]);
+    expect(checkList('subtasks')).toEqual([...SUBTASK_STATUSES]);
+    expect(checkList('runs')).toEqual([...RUN_STATUSES]);
+    expect(checkList('approvals')).toEqual([...APPROVAL_STATUSES]);
+  });
+
+  it('恢复程序的活动状态集合由状态机推导一致', () => {
+    const derived = RUN_STATUSES.filter((s) => !runMachine.isTerminal(s) && s !== 'interrupted');
+    expect([...ACTIVE_RUN_STATUSES]).toEqual(derived);
   });
 });

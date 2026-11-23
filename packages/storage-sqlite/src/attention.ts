@@ -1,6 +1,6 @@
+import type { AttentionKind } from '@paldock/contracts';
+import type { Clock } from './clock.js';
 import type { Database } from './database.js';
-
-export type AttentionKind = 'approval' | 'blocked' | 'review' | 'unconfirmed_run';
 
 export interface AttentionItem {
   kind: AttentionKind;
@@ -29,7 +29,7 @@ const SQL = {
 export class AttentionQueries {
   constructor(
     private readonly db: Database,
-    private readonly now: () => Date = () => new Date(),
+    private readonly clock: Clock,
   ) {}
 
   list(): AttentionItem[] {
@@ -39,7 +39,7 @@ export class AttentionQueries {
     }));
   }
 
-  markRead(kind: string, itemId: string): void {
-    this.db.run(SQL.markRead, kind, itemId, this.now().toISOString());
+  markRead(kind: AttentionKind, itemId: string): void {
+    this.db.run(SQL.markRead, kind, itemId, this.clock.iso());
   }
 }

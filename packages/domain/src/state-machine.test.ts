@@ -1,6 +1,6 @@
 import { RUN_STATUSES, SUBTASK_STATUSES, TASK_STATUSES } from '@paldock/contracts';
 import { describe, expect, it } from 'vitest';
-import { canApproveRemotely, shouldEscalateApproval } from './approval-policy.js';
+import { canApproveRemotely, classifyRisk, shouldEscalateApproval } from './approval-policy.js';
 import { DomainError } from './errors.js';
 import { approvalMachine, runMachine, subtaskMachine, taskMachine } from './state-machine.js';
 
@@ -60,5 +60,13 @@ describe('approval policy', () => {
     expect(shouldEscalateApproval(0, 180_000, present)).toBe(true);
     expect(shouldEscalateApproval(0, 0, { ...present, locked: true })).toBe(true);
     expect(shouldEscalateApproval(0, 0, { ...present, uiRunning: false })).toBe(true);
+  });
+
+  it('风险分级草案：worktree 内为低，装依赖为中，推送/合并/外发为高', () => {
+    expect(classifyRisk('run_tests')).toBe('low');
+    expect(classifyRisk('install_dependencies')).toBe('medium');
+    for (const op of ['push_remote', 'merge_branch', 'write_outside_worktree', 'send_external_message'] as const) {
+      expect(classifyRisk(op)).toBe('high');
+    }
   });
 });

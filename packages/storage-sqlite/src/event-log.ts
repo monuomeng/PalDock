@@ -4,6 +4,7 @@ import {
   type PersistentEvent as PersistentEventT,
   type PersistentEventBody,
 } from '@paldock/contracts';
+import type { Clock } from './clock.js';
 import type { Database } from './database.js';
 
 const INSERT = `
@@ -17,6 +18,9 @@ const SELECT_SINCE = `
    WHERE seq > ?
    ORDER BY seq
    LIMIT ?`;
+
+// seq 是 INTEGER PRIMARY KEY（rowid），max 直接取 B 树末端
+const SELECT_HEAD = `SELECT coalesce(max(seq), 0) AS seq FROM events`;
 
 interface EventRow {
   seq: number;
@@ -34,13 +38,17 @@ interface EventRow {
 export class EventLog {
   constructor(
     private readonly db: Database,
-    private readonly now: () => Date = () => new Date(),
+    private readonly clock: Clock,
   ) {}
 
   append(aggregateId: string, body: PersistentEventBody): PersistentEventT {
-    const occurredAt = this.now().toISOString();
+    const occurredAt = this.clock.iso();
     const row = this.db.get<{ seq: number }>(INSERT, aggregateId, body.type, JSON.stringify(body.payload), SCHEMA_VERSION, occurredAt)!;
     return { schemaVersion: SCHEMA_VERSION, seq: row.seq, aggregateId, occurredAt, ...body };
+  }
+
+  headSeq(): number {
+    return this.db.get<{ seq: number }>(SELECT_HEAD)!.seq;
   }
 
   /** 断线续拉：读库时再按契约校验一次，旧版本或损坏的行会在这里暴露。 */
