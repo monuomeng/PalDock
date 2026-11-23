@@ -1,20 +1,25 @@
+import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
-const pkg = (name: string) => fileURLToPath(new URL(`./packages/${name}/src/index.ts`, import.meta.url));
+const root = (path: string) => fileURLToPath(new URL(path, import.meta.url));
+
+/** 每个 packages/<name>/src/index.ts 自动映射为 @paldock/<name>，新增包不用再登记。 */
+const packageAliases = Object.fromEntries(
+  readdirSync(root('./packages/'))
+    .filter((name) => existsSync(root(`./packages/${name}/src/index.ts`)))
+    .map((name) => [`@paldock/${name}`, root(`./packages/${name}/src/index.ts`)]),
+);
+
+/** 真实执行器测试（*.live.test.ts）会消耗额度，只在显式开启时运行。 */
+const live = process.env.PALDOCK_LIVE_CODEX === '1';
 
 export default defineConfig({
-  resolve: {
-    alias: {
-      '@paldock/contracts': pkg('contracts'),
-      '@paldock/domain': pkg('domain'),
-      '@paldock/storage-sqlite': pkg('storage-sqlite'),
-      '@paldock/platform': pkg('platform'),
-      '@paldock/runtime-codex': pkg('runtime-codex'),
-    },
-  },
+  resolve: { alias: packageAliases },
   test: {
     include: ['packages/*/src/**/*.test.ts', 'apps/*/src/**/*.test.ts', 'tests/**/*.test.ts'],
+    exclude: ['**/node_modules/**', '**/dist/**', ...(live ? [] : ['**/*.live.test.ts'])],
     environment: 'node',
+    testTimeout: 20_000,
   },
 });
