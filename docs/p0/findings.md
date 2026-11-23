@@ -12,7 +12,7 @@
 | P0-04 | Electron + SQLite + 受限 IPC | 通过（Windows）：存储、服务进程、Electron 窗口、看护重启、单实例与正常退出已实测；电源事件、长路径、macOS 未测 |
 | P0-05 | 版本化事件与状态机 | 通过：契约与状态机测试见 `packages/contracts`、`packages/domain` |
 | P0-06 | 许可证与素材 | 已决定（2026-11-23）：暂不开源。仓库保持私有、不放开源许可证；只引入允许闭源分发的依赖（MIT / Apache-2.0 / BSD 等），不复制 GPL / AGPL 代码（Coopanion 只借鉴设计）。桌宠素材来源待定 |
-| P0-07 | Codex / Claude / ACP 子代理对比 | 未开始：P0-02 已通过，可以开始 |
+| P0-07 | Codex / Claude / ACP 子代理对比 | 通过（Codex、Claude 实测）；ACP 只做了文档评估，未运行 |
 
 自动化测试：`pnpm test` 共 44 项通过，`pnpm build`（`tsc -b` 严格模式）通过。
 
@@ -67,6 +67,27 @@
 | 其他消息 | `system/status`、`rate_limit_event`（可用于展示额度） |
 
 与 Codex 对照：两者都支持流式、中断、宿主审批和恢复，可以落到同一个 `RuntimeAdapter` 契约上；差异在于 Codex 审批是 JSON-RPC 服务端请求、按命令/文件改动分类，Claude 是按工具名的 `can_use_tool`，策略引擎需要各自映射到风险级别。
+
+## P0-07 原生子代理与独立会话
+
+探测脚本 `packages/runtime-codex/dist/subagent-probe.js`、`packages/runtime-claude/dist/subagent-probe.js`：让主会话必须用原生子代理读取临时目录里的一个文件，记录宿主能观察到什么（2026-11-23，各消耗一次短对话）。
+
+| 项 | Codex 0.166（默认模型，`multi_agent` 默认开启） | Claude Code 2.1.325 |
+|---|---|---|
+| 是否可用 | 9 个模型中 8 个报告 `multiAgentVersion` v1/v2 | 内置 `Agent` 工具，默认可用 |
+| 用时 | 约 60 秒 | 约 7.7 秒 |
+| 创建可见性 | `subAgentActivity` 条目（`started` / `completed`）带子代理 `agentThreadId`；主线程另有 `collabAgentToolCall`（本次只观察到 `wait`，未观察到 `spawnAgent` 条目） | 主会话 `tool_use` 名为 `Agent`；另有 `system/task_started`、`task_progress`、`task_updated`、`task_notification` |
+| 子代理过程 | 子代理是独立 thread，它的条目和通知以自己的 threadId 推送给同一个 app-server 客户端（本次通知里出现 2 个 thread） | 加 `--forward-subagent-text` 后，子代理的 user / assistant 消息带 `parent_tool_use_id` 转发给宿主 |
+| 审批 | 本次只读操作没有触发审批；子代理审批是否以子 threadId 发来未验证 | 本次 `Read` 未触发权限请求；子代理内的权限请求是否经 `can_use_tool` 发来未验证 |
+| 用量 | `thread/tokenUsage/updated` 按 thread 分开上报（主、子各一） | `result` 带 `usage`、`modelUsage`、`total_cost_usd`（订阅账号下为估算值） |
+| 控制 | 协议有 `interruptAgent`、`closeAgent`、`resumeAgent` 等工具名，宿主可中断整个 turn | 中断主会话即中断子代理（未单独验证） |
+
+结论：
+
+- 两边的原生子代理都能被宿主观察到，但形态不同。PalDock 按 [ADR 0002](../adr/0002-process-topology-and-task-board.md) 把它们当作该 Run 的内部细节：只记录可见事件（子代理开始/结束、用量），不当作可派单的助手。
+- 需要可审计、可恢复、可换执行器的分工，仍走 PalDock 任务板（每个子任务独立 AgentSession / Run），不依赖原生子代理。
+- 用量要按「主会话 + 子代理」合计：Codex 按 thread 汇总 `tokenUsage`，Claude 取 `result` 中的 `modelUsage`。
+- **ACP**：未运行。Codex 与 Claude 的原生协议已经覆盖 PalDock 需要的流式、中断、审批、恢复和子代理可见性；ACP 需要额外的第三方适配器进程，P1 不采用，以后接入其他只支持 ACP 的 CLI 时再评估。
 
 ## P0-03 飞书长连接
 
