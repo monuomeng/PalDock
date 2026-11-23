@@ -5,7 +5,6 @@ import { EventLog } from './event-log.js';
 import { Inbox } from './inbox.js';
 import { MessageStore } from './messages.js';
 import { migrate, type MigrateResult } from './migrations/index.js';
-import { recoverOnStartup } from './recovery.js';
 import { TaskRepository } from './task-repository.js';
 
 export * from './attention.js';

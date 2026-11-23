@@ -1,0 +1,31 @@
+import { fork } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+const root = process.argv[2];
+const { IpcClient, createIpcPath, createToken } = await import(pathToFileURL(join(root, 'packages/platform/dist/index.js')));
+const entry = join(root, 'apps/local-service/dist/main.js');
+const dataRoot = mkdtempSync(join(tmpdir(), 'pd-fork-'));
+const start = () => {
+  const child = fork(entry, [], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+  const ipcPath = createIpcPath(dataRoot), token = createToken();
+  child.send({ type: 'init', dataRoot, ipcPath, token });
+  const ready = new Promise((res) => child.on('message', res));
+  const exited = new Promise((res) => child.on('exit', res));
+  return { child, ipcPath, token, ready, exited };
+};
+const a = start();
+console.log('A ->', await a.ready);
+const client = new IpcClient(a.ipcPath, a.token, (e) => console.log('event', e.seq, e.type));
+await client.connect();
+const ws = await client.request('workspace.create', { name: 'x', rootPath: 'p' });
+await client.request('task.create', { workspaceId: ws.id, title: 't' });
+const b = start();
+console.log('B (same data root) ->', await b.ready, 'exit', await b.exited);
+a.child.kill();               // 模拟崩溃：不走 shutdown
+console.log('A crash exit', await a.exited);
+const c = start();
+console.log('C after crash ->', await c.ready);
+c.child.send({ type: 'shutdown' });
+console.log('C graceful exit', await c.exited);

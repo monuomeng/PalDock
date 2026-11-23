@@ -9,5 +9,8 @@
       "default": "./dist/index.js"
     }
   },
-  "dependencies": { "@paldock/contracts": "workspace:*" }
+  "dependencies": {
+    "@paldock/contracts": "workspace:*",
+    "@paldock/platform": "workspace:*"
+  }
 }

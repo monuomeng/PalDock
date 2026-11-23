@@ -23,9 +23,15 @@ importers:
       '@paldock/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@paldock/local-service':
+        specifier: workspace:*
+        version: link:../local-service
       '@paldock/platform':
         specifier: workspace:*
         version: link:../../packages/platform
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       electron:
         specifier: 45.2.3
@@ -45,6 +51,9 @@ importers:
       '@paldock/storage-sqlite':
         specifier: workspace:*
         version: link:../../packages/storage-sqlite
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
 
   packages/contracts:
     dependencies:
@@ -69,6 +78,9 @@ importers:
       '@paldock/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@paldock/platform':
+        specifier: workspace:*
+        version: link:../platform
 
   packages/storage-sqlite:
     dependencies:

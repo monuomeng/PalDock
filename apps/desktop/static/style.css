@@ -1,0 +1,5 @@
+body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 24px; color: #1f2328; background: #fff; }
+section { margin-top: 20px; }
+button { margin-right: 8px; padding: 6px 12px; }
+#events { font-family: ui-monospace, Consolas, monospace; font-size: 13px; max-height: 260px; overflow: auto; }
+@media (prefers-color-scheme: dark) { body { color: #e6edf3; background: #0d1117; } }

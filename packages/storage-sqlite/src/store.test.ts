@@ -5,7 +5,7 @@ import { DomainError } from '@paldock/domain';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Database } from './database.js';
 import { MIGRATIONS, migrate } from './migrations/index.js';
-import { openStore, recoverOnStartup, type Store } from './index.js';
+import { openStore, interruptActiveWork, type Store } from './index.js';
 
 let clock = new Date('2026-11-23T08:00:00.000Z');
 const now = () => clock;
@@ -125,7 +125,7 @@ describe('启动恢复', () => {
     store.inbox.accept('feishu', 'evt_1', 'chat_a', '{}');
     store.inbox.claim(30_000);
 
-    const report = recoverOnStartup(store.db, store.events);
+    const report = interruptActiveWork(store.db, store.events, '服务重启');
     expect(report.interruptedRuns).toEqual([{ id: run.id, nativeSessionId: null }]);
     expect(report.reopenedInbox).toBe(1);
     expect(store.db.get('SELECT status, version FROM runs WHERE id = ?', run.id)).toEqual({ status: 'interrupted', version: 2 });

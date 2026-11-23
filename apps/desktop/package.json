@@ -9,7 +9,9 @@
   },
   "dependencies": {
     "@paldock/contracts": "workspace:*",
-    "@paldock/platform": "workspace:*"
+    "@paldock/platform": "workspace:*",
+    "@paldock/local-service": "workspace:*",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "electron": "45.2.3"

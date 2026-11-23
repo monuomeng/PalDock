@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'" />
+    <title>PalDock（P0 样机）</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>PalDock P0 样机</h1>
+      <p>服务状态：<strong id="status" role="status" aria-live="polite">未知</strong></p>
+    </header>
+    <main>
+      <section aria-labelledby="attention-title">
+        <h2 id="attention-title">待我处理</h2>
+        <ul id="attention"></ul>
+      </section>
+      <section aria-labelledby="actions-title">
+        <h2 id="actions-title">验证操作</h2>
+        <button id="create-task" type="button">新建示例任务</button>
+        <button id="queue-task" type="button" disabled>把最新任务置为 queued</button>
+        <button id="crash" type="button">模拟服务崩溃</button>
+      </section>
+      <section aria-labelledby="events-title">
+        <h2 id="events-title">持久事件</h2>
+        <ol id="events"></ol>
+      </section>
+    </main>
+    <script src="renderer.js"></script>
+  </body>
+</html>

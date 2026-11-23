@@ -24,17 +24,17 @@ export interface RecoveryReport {
 }
 
 /**
- * 服务启动时运行（此时没有任何执行器连接）：所有未结束的 Run 置为 interrupted，
+ * 服务启动时（此时没有任何执行器连接）和正常退出前运行：所有未结束的 Run 置为 interrupted，
  * 处理中的入站事件放回队列重做。外部副作用是否已发生在这里无法判定，交给后续核实。
  */
-export function recoverOnStartup(db: Database, events: EventLog): RecoveryReport {
+export function interruptActiveWork(db: Database, events: EventLog, reason: string): RecoveryReport {
   return db.transaction(() => {
     const active = db.all<{ id: string; status: RunStatus; nativeSessionId: string | null }>(SELECT_ACTIVE_RUNS);
     db.run(MARK_INTERRUPTED);
     const emitted = active.map((run) =>
       events.append(run.id, {
         type: 'run.status_changed',
-        payload: { from: run.status, to: 'interrupted', reason: '服务重启' },
+        payload: { from: run.status, to: 'interrupted', reason },
       }),
     );
     const reopenedInbox = db.run(REOPEN_PROCESSING);
