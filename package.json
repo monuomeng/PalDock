@@ -7,8 +7,8 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "tsc -b",
-    "typecheck": "tsc -b --noEmit false",
+    "build": "tsc -b && tsc -p apps/desktop/renderer",
+    "typecheck": "tsc -b --noEmit false && tsc -p apps/desktop/renderer --noEmit",
     "test": "vitest run",
     "clean": "tsc -b --clean"
   },

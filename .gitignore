@@ -37,5 +37,10 @@ Thumbs.db
 # IDE
 .idea/
 
+# 渲染进程编译产物
+apps/desktop/static/app/
+
 # P0 check outputs
 p0-*-check.json
+p1-*.json
+p1-e2e-*.png
