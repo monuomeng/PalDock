@@ -106,6 +106,7 @@ describe('适配器', () => {
       cursor: { get: () => cursor, set: (c) => (cursor = c) },
       sendTimeoutMs: 1000,
       backoffMs: { base: 1, max: 5 },
+      conflictBackoffMs: 3,
     });
     return { adapter, sink, inbound, states, calls, updates, cursor: () => cursor, closed: () => closed };
   }
@@ -137,6 +138,7 @@ describe('适配器', () => {
     await settle(() => t.states.length >= 4);
     expect(t.states.map(([s]) => s)).toEqual(['connected', 'reconnecting', 'error', 'connected']);
     expect(t.states[2]![1]).toContain('webhook');
+    expect(t.states[1]![1]).toMatch(/秒后重试/);
     await t.adapter.stop();
 
     const bad = setup({

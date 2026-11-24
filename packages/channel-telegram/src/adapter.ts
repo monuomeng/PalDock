@@ -16,10 +16,13 @@ export interface TelegramAdapterOptions {
   pollSeconds?: number;
   /** 出错后重试的起始与最大间隔。 */
   backoffMs?: { base: number; max: number };
+  /** 409（另有程序在收这个 bot 的消息）后至少等多久；太快重试会和对方互相顶掉并触发限流。 */
+  conflictBackoffMs?: number;
 }
 
 const DEFAULT_POLL_SECONDS = 25;
 const DEFAULT_BACKOFF = { base: 1_000, max: 60_000 };
+const DEFAULT_CONFLICT_BACKOFF_MS = 30_000;
 
 /**
  * Telegram 适配器：getUpdates 长轮询（无需公网地址、不用 webhook），回复发带内联键盘的纯文本消息。
@@ -74,9 +77,12 @@ export class TelegramAdapter implements ChannelAdapter {
         const fatal = fatalReason(error);
         if (fatal) return sink.state('error', fatal);
         failures += 1;
-        sink.state(error instanceof TelegramApiError && error.status === 409 ? 'error' : 'reconnecting', describe(error));
+        const conflict = error instanceof TelegramApiError && error.status === 409;
         const retryAfter = error instanceof TelegramApiError ? (error.retryAfterSeconds ?? 0) * 1000 : 0;
-        await sleep(Math.max(retryAfter, Math.min(backoff.max, backoff.base * 2 ** (failures - 1))), signal);
+        const floor = conflict ? (this.options.conflictBackoffMs ?? DEFAULT_CONFLICT_BACKOFF_MS) : 0;
+        const wait = Math.max(retryAfter, floor, Math.min(backoff.max, backoff.base * 2 ** (failures - 1)));
+        sink.state(conflict ? 'error' : 'reconnecting', `${describe(error)}（${Math.ceil(wait / 1000)} 秒后重试）`);
+        await sleep(wait, signal);
       }
     }
   }
