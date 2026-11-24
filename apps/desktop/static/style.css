@@ -48,7 +48,7 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.danger { color: var(--danger); }
 button.link { border: none; background: none; color: var(--accent); padding: 0; text-decoration: underline; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
-input, textarea { font: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
+input, textarea, select { font: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
 input[type="checkbox"] { width: auto; }
 label { display: block; margin-top: 12px; font-weight: 600; }
 fieldset { margin-top: 16px; border: 1px solid var(--border); border-radius: 6px; }
@@ -94,3 +94,9 @@ details.run > summary { cursor: pointer; }
 .check-passed { color: var(--ok); font-weight: 600; }
 .check-failed, .check-error, .check-timed_out { color: var(--danger); font-weight: 600; }
 .review-note { color: var(--muted); }
+.plain-list { list-style: none; padding: 0; margin: 0; }
+label.inline { display: inline; font-weight: normal; margin: 0; }
+.panel.channel { border-left-color: var(--border); }
+.code { font-family: ui-monospace, Consolas, monospace; letter-spacing: 2px; }
+.channel-connected, .account-active { color: var(--ok); }
+.channel-error, .channel-reconnecting, .account-revoked { color: var(--danger); }
