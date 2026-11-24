@@ -1,9 +1,18 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { acquirePidLock, createIpcPath, createToken, listenIpc, readFrames, tokensEqual, writeFrame } from './index.js';
+import {
+  acquirePidLock,
+  createIpcPath,
+  createToken,
+  isSystemDirectory,
+  listenIpc,
+  readFrames,
+  tokensEqual,
+  writeFrame,
+} from './index.js';
 
 let dir: string;
 beforeEach(() => (dir = mkdtempSync(join(tmpdir(), 'paldock-platform-'))));
@@ -56,5 +65,17 @@ describe('IPC', () => {
     expect(received).toEqual([{ kind: 'a' }, { kind: 'b' }, { kind: 'c' }]);
     client.destroy();
     await new Promise((resolve) => server.close(resolve));
+  });
+});
+
+describe('系统目录判断', () => {
+  it('用户临时目录（真实路径，macOS 上在 /private/var/folders 下）不算系统目录（CI 实测）', () => {
+    expect(isSystemDirectory(realpathSync.native(dir))).toBe(false);
+    expect(isSystemDirectory(realpathSync.native(tmpdir()))).toBe(false);
+  });
+
+  it('系统目录本身被拦住', () => {
+    const system = process.platform === 'win32' ? (process.env.SystemRoot ?? 'C:\Windows') : '/usr';
+    expect(isSystemDirectory(join(system, 'x'))).toBe(true);
   });
 });

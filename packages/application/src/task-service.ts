@@ -14,7 +14,7 @@ import {
   type TaskSummary,
 } from '@paldock/contracts';
 import { subtaskMachine } from '@paldock/domain';
-import { isInside, samePath } from '@paldock/platform';
+import { isInside, isSystemDirectory, samePath } from '@paldock/platform';
 import { commitStaged, headCommit, repositoryRoot } from './git.js';
 import { firstRunPrompt, resumePrompt, reworkPrompt, titleOf } from './prompts.js';
 import type { RunSupervisor } from './run-supervisor.js';
@@ -37,13 +37,6 @@ export interface TaskServiceDeps {
 
 /** P1 只有开发助手一个角色。 */
 const DEVELOPER = 'developer';
-
-/** 不允许把系统目录当作项目（Windows 系统与程序目录、macOS 系统目录）。 */
-function systemDirectories(): string[] {
-  const env = process.env;
-  const windows = [env.SystemRoot, env.ProgramFiles, env['ProgramFiles(x86)'], env.ProgramData].filter((p): p is string => !!p);
-  return process.platform === 'win32' ? windows : ['/System', '/Library', '/usr', '/bin', '/sbin', '/etc', '/private'];
-}
 
 /** 真实路径（解开符号链接与 8.3 短名）；路径不存在时退回 resolve。 */
 function canonical(path: string): string {
@@ -129,7 +122,7 @@ export class TaskService {
     if (isInside(dataRoot, full) || isInside(full, dataRoot)) {
       throw new CodedError('bad_request', '项目目录不能与 PalDock 数据目录重叠');
     }
-    if (systemDirectories().some((dir) => isInside(dir, full))) throw new CodedError('bad_request', '不能选择系统目录');
+    if (isSystemDirectory(full)) throw new CodedError('bad_request', '不能选择系统目录');
     const root = await repositoryRoot(full).catch(() => {
       throw new CodedError('bad_request', '所选目录不是 git 仓库');
     });

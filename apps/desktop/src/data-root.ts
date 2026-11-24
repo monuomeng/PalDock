@@ -1,5 +1,5 @@
 import { dirname, join } from 'node:path';
-import { isInside } from '@paldock/platform';
+import { isInside, isSystemDirectory } from '@paldock/platform';
 
 /**
  * 数据目录的默认位置与校验（不依赖 Electron，便于测试）。
@@ -22,10 +22,7 @@ export function rejectDataRoot(chosen: string, installDir: string | undefined, e
   if (installDir && isInside(installDir, chosen)) {
     return '数据目录不能放在安装目录里：卸载或升级时安装目录会被整个删除，数据会一起丢失。请选择安装目录旁边或其他位置。';
   }
-  const system = process.platform === 'win32'
-    ? [env.SystemRoot, env.ProgramFiles, env['ProgramFiles(x86)'], env.ProgramData]
-    : ['/System', '/Library', '/usr', '/bin', '/sbin', '/etc', '/Applications'];
-  if (system.some((dir) => dir && isInside(dir, chosen))) {
+  if (isSystemDirectory(chosen, env)) {
     return '数据目录不能放在系统或程序目录里（通常没有写权限）。请选择其他位置，例如 D 盘。';
   }
   return undefined;

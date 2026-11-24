@@ -3,7 +3,7 @@
  * 以及拒绝、过期、取消、执行器崩溃、服务重启、重复提交、A/B「待我处理」场景。
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LocalService } from '@paldock/local-service';
@@ -181,7 +181,8 @@ describe('P1 主流程', () => {
       windowsVerbatimArguments: true,
     }).trim();
     const created = await create('短名路径', { rootPath: short.toUpperCase() });
-    expect(created.workspace.rootPath.toLowerCase()).toBe(repo.toLowerCase());
+    // 期望值也要展开成真实路径：runner 的临时目录本身就是短名（CI 实测）
+    expect(created.workspace.rootPath.toLowerCase()).toBe(realpathSync.native(repo).toLowerCase());
   });
 
   it('拒绝非 git 仓库、子目录和数据根', async () => {

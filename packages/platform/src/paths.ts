@@ -33,3 +33,19 @@ export function resolveExecutable(executable: string, env: NodeJS.ProcessEnv = p
   }
   return undefined;
 }
+
+/**
+ * 不允许当作项目或数据目录的系统位置。比较时双方都应是真实路径：
+ * macOS 的 /etc、/var、/tmp 都是 /private 下的链接，但用户的临时目录（/private/var/folders）是正常的可写位置，
+ * 所以只列具体的系统目录，不能整个拦 /private（CI 实测）。
+ */
+export function systemDirectories(env: NodeJS.ProcessEnv = process.env): string[] {
+  if (process.platform === 'win32') {
+    return [env.SystemRoot, env.ProgramFiles, env['ProgramFiles(x86)'], env.ProgramData].filter((p): p is string => !!p);
+  }
+  return ['/System', '/Library', '/Applications', '/usr', '/bin', '/sbin', '/etc', '/private/etc', '/boot', '/proc', '/sys', '/dev'];
+}
+
+export function isSystemDirectory(path: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return systemDirectories(env).some((dir) => isInside(dir, path));
+}
