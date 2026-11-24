@@ -1,6 +1,6 @@
 # P2 开发计划：外部渠道（飞书、Telegram）
 
-状态：**第一版，待用户评审**（2026-11-24）。评审通过前不写代码。负责人：Claude；分支 `claude/p2-external-channels`，基于 master（`ea2ee8f`，P1 已合入）。设计依据见 [架构](../02-architecture.md)「聊天渠道适配器」「审批路由与远程审批等级」、[ADR 0002](../adr/0002-process-topology-and-task-board.md)、[路线图](../03-roadmap.md)、[P0 实测记录](../p0/findings.md) 和 [P1 实测记录](../p1/findings.md)；完成后的前因后果写在 `docs/pr/p2-external-channels.md`。
+状态：**第一版，用户已批准（2026-11-24），实施中**。文末三点按计划所写执行；推送暂停，P2 全部完成后统一推送。负责人：Claude；分支 `claude/p2-external-channels`，基于 master（`ea2ee8f`，P1 已合入）。设计依据见 [架构](../02-architecture.md)「聊天渠道适配器」「审批路由与远程审批等级」、[ADR 0002](../adr/0002-process-topology-and-task-board.md)、[路线图](../03-roadmap.md)、[P0 实测记录](../p0/findings.md) 和 [P1 实测记录](../p1/findings.md)；完成后的前因后果写在 `docs/pr/p2-external-channels.md`。
 
 ## 目标
 
@@ -174,9 +174,9 @@
 
 主会话与协调助手、项目监管和沟通模式、向量检索、任务提醒模式（待确认）、托盘常驻与开机自启、钉钉等其他渠道、iOS 客户端、附件收发、流式输出逐字推送到手机、多人与角色权限、代码签名。
 
-## 需要你确认的几点
+## 需要你确认的几点（2026-11-24 已按此确认）
 
 1. **任务提醒模式不进 P2**：它需要触发器和唤醒循环，与 P3 的主会话一起做更顺；如果你希望手机上先能设提醒，可以作为 P2 最后一项加入。
 2. **外部建任务要不要每次弹确认卡片**：我建议要，防止误发的消息直接开始执行。
-3. **Telegram 的测试 bot 和代理**：开始 P2-07 前需要你准备好；没有的话 Telegram 只做离线部分。
-4. **推送**：本机不能 `git push`，每轮完成后我会把推送命令发给你。
+3. **Telegram 的测试 bot 和代理**：开始 P2-07 前需要你准备好；没有的话 Telegram 只做离线部分。申请步骤见 [申请 Telegram 测试 bot](../ops/telegram-bot.md)。
+4. **推送**：本机不能 `git push`；按用户要求 P2 期间不推送，全部完成后统一给出推送命令。
