@@ -53,7 +53,7 @@ export class CodexAdapter implements RuntimeAdapter {
   async discover(): Promise<RuntimeDiscovery> {
     const cmd = resolveCodexCommand(this.configuredPath);
     if (!cmd) return { runtime: this.name, available: false, reason: '未找到 codex 可执行文件', capabilities: CAPABILITIES };
-    const version = await codexVersion(cmd);
+    const version = await codexVersion(cmd, this.options.extraEnv);
     if (!version) return { runtime: this.name, available: false, reason: '无法运行 codex --version', capabilities: CAPABILITIES };
     if (!meetsMinimum(version)) {
       const reason = `Codex ${version} 版本过低，需要 ${MIN_CODEX_VERSION} 或更高，请升级（npm i -g @openai/codex）`;

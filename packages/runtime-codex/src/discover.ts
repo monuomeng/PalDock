@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { resolveExecutable } from '@paldock/platform';
+import { childEnv, nodeRuntimeEnv, resolveExecutable } from '@paldock/platform';
 
 export interface CodexCommand {
   command: string;
@@ -32,9 +32,11 @@ export function resolveCodexCommand(configured?: string, nodePath = process.exec
   return existsSync(entry) ? { command: nodePath, prefixArgs: [entry], source: 'npm-shim' } : undefined;
 }
 
-export async function codexVersion(cmd: CodexCommand): Promise<string | undefined> {
+/** 环境变量与启动 app-server 时一致；在 Electron 里用 Electron 跑 codex.js 必须带 ELECTRON_RUN_AS_NODE，否则会启动一个新窗口。 */
+export async function codexVersion(cmd: CodexCommand, extraEnv: Record<string, string> = {}): Promise<string | undefined> {
   try {
     const { stdout } = await promisify(execFile)(cmd.command, [...cmd.prefixArgs, '--version'], {
+      env: childEnv({ ...nodeRuntimeEnv(cmd.command), ...extraEnv }),
       encoding: 'utf8',
       windowsHide: true,
       timeout: 15_000,
