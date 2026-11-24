@@ -48,6 +48,9 @@ importers:
       '@paldock/channel-feishu':
         specifier: workspace:*
         version: link:../../packages/channel-feishu
+      '@paldock/channel-telegram':
+        specifier: workspace:*
+        version: link:../../packages/channel-telegram
       '@paldock/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -93,6 +96,15 @@ importers:
       '@paldock/storage-sqlite':
         specifier: workspace:*
         version: link:../storage-sqlite
+
+  packages/channel-telegram:
+    dependencies:
+      '@paldock/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      undici:
+        specifier: 7.30.2
+        version: 7.30.2
 
   packages/contracts:
     dependencies:
@@ -3099,8 +3111,7 @@ snapshots:
 
   undici@6.29.1: {}
 
-  undici@7.30.2:
-    optional: true
+  undici@7.30.2: {}
 
   universalify@0.1.2: {}
 

@@ -33,8 +33,19 @@ export interface CredentialPort {
   remove(target: string): Promise<void>;
 }
 
+/** 渠道自己的收取游标（Telegram 的 update offset），按账号存在本地库。 */
+export interface ChannelCursor {
+  get(account: string): string | undefined;
+  set(account: string, cursor: string): void;
+}
+
 /** 由宿主（本地服务）按渠道创建具体适配器；应用层不依赖飞书或 Telegram 的 SDK。 */
-export type AdapterFactory = (provider: ChannelProvider, credential: ChannelCredential, settings: ChannelSettingsRecord) => ChannelAdapter;
+export type AdapterFactory = (
+  provider: ChannelProvider,
+  credential: ChannelCredential,
+  settings: ChannelSettingsRecord,
+  cursor: ChannelCursor,
+) => ChannelAdapter;
 
 export const credentialTarget = (provider: ChannelProvider) => `paldock/${provider}`;
 
@@ -186,7 +197,9 @@ export class ChannelService {
     if (!credential) return this.hub.reportError(provider, '没有找到凭据，请在设置里填写');
     if (provider === 'feishu') this.appIds.set(provider, credential.user);
     try {
-      await this.hub.attach(this.deps.createAdapter(provider, credential, settings));
+      const { channels } = this.deps.store;
+      const cursor: ChannelCursor = { get: (account) => channels.getCursor(provider, account), set: (account, value) => channels.setCursor(provider, account, value) };
+      await this.hub.attach(this.deps.createAdapter(provider, credential, settings, cursor));
     } catch {
       // 原因已记在渠道状态上（hub.attach），界面会显示
     }

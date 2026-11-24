@@ -9,6 +9,7 @@
     { "path": "packages/runtime-codex" },
     { "path": "packages/runtime-claude" },
     { "path": "packages/channel-feishu" },
+    { "path": "packages/channel-telegram" },
     { "path": "apps/local-service" },
     { "path": "apps/desktop" }
   ]
