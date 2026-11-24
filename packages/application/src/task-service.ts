@@ -14,6 +14,7 @@ import {
   type TaskActions,
   type TaskDetail,
   type TaskSummary,
+  type WorkspaceRecord,
 } from '@paldock/contracts';
 import { subtaskMachine } from '@paldock/domain';
 import { isInside, isSystemDirectory, samePath } from '@paldock/platform';
@@ -23,14 +24,15 @@ import type { RunSupervisor } from './run-supervisor.js';
 import { moveTask, requireSubtask } from './transitions.js';
 
 export interface CreateTaskInput {
-  rootPath: string;
+  /** 新任务的项目目录；接续任务时不填，项目取自来源任务。 */
+  rootPath?: string | undefined;
   goal: string;
   check?: CheckCommand | undefined;
   checkConfirmed: boolean;
   idempotencyKey: string;
   /** 从外部渠道建任务时的来源会话，结果回发到这里。 */
   originConversationId?: string;
-  /** 基于这个已结束的任务继续：项目必须相同，worktree 从它的分支出发。 */
+  /** 基于这个已结束的任务继续：同一项目，worktree 从它的分支出发。 */
   continuedFromTaskId?: string | undefined;
 }
 
@@ -79,13 +81,13 @@ function actionsOf(subtask: SubtaskRecord, latest: RunRecord | undefined): TaskA
  * 状态变更与事件同事务写入后立即广播；需要执行器参与的部分交给 RunSupervisor。
  */
 export class TaskService {
-  /** 正在验收提交（git commit 期间）的子任务；期间的取消、恢复一律返回冲突，避免分支已提交而状态写入失败。 */
+  /** 正在结束任务提交（git commit 期间）的子任务；期间的取消、恢复一律返回冲突，避免分支已提交而状态写入失败。 */
   private readonly committing = new Set<string>();
 
   constructor(private readonly deps: TaskServiceDeps) {}
 
   private assertNotCommitting(subtaskId: string): void {
-    if (this.committing.has(subtaskId)) throw new CodedError('conflict', '正在提交验收结果，请稍后再试');
+    if (this.committing.has(subtaskId)) throw new CodedError('conflict', '正在结束任务（提交到分支），请稍后再试');
   }
 
   private get store() {
@@ -100,12 +102,12 @@ export class TaskService {
     const existing = this.store.tasks.findTaskByIdempotencyKey(input.idempotencyKey);
     if (existing) return this.getTask(existing.id);
 
-    const rootPath = await this.validateProject(input.rootPath);
+    const { workspace, prompt } = input.continuedFromTaskId
+      ? this.continuation(input.continuedFromTaskId, input.goal)
+      : await this.freshStart(input.rootPath, input.goal);
     // 校验期间（await）可能已有同一幂等键的请求建好了任务
     const raced = this.store.tasks.findTaskByIdempotencyKey(input.idempotencyKey);
     if (raced) return this.getTask(raced.id);
-    const workspace = this.store.tasks.ensureWorkspace(basename(rootPath), rootPath);
-    const prompt = input.continuedFromTaskId ? this.continuationOf(input.continuedFromTaskId, workspace.id, input.goal) : firstRunPrompt(input.goal);
     const { record, events } = this.store.tasks.createTask({
       workspaceId: workspace.id,
       title: titleOf(input.goal),
@@ -123,16 +125,23 @@ export class TaskService {
     return { task: record.task, workspace, subtask: record.subtask, runs: [], actions: actionsOf(record.subtask, undefined) };
   }
 
-  /** 接续的来源必须是同一项目里已结束、有分支的任务；返回新任务第一轮的提示词。 */
-  private continuationOf(sourceTaskId: string, workspaceId: string, instruction: string): string {
+  /** 新任务：校验并登记项目。 */
+  private async freshStart(rootPath: string | undefined, goal: string): Promise<{ workspace: WorkspaceRecord; prompt: string }> {
+    if (!rootPath) throw new CodedError('bad_request', '请选择项目目录');
+    const root = await this.validateProject(rootPath);
+    return { workspace: this.store.tasks.ensureWorkspace(basename(root), root), prompt: firstRunPrompt(goal) };
+  }
+
+  /** 接续任务：项目取自来源任务（已登记、校验过）；来源必须已结束、有分支。提示词带上来源的目标和最后说明。 */
+  private continuation(sourceTaskId: string, instruction: string): { workspace: WorkspaceRecord; prompt: string } {
     const source = this.store.tasks.getTask(sourceTaskId);
     const subtask = source && this.store.tasks.getSubtaskOfTask(source.id);
-    if (!source || !subtask) throw new CodedError('not_found', '要接续的任务不存在');
-    if (source.workspaceId !== workspaceId) throw new CodedError('bad_request', '只能在同一个项目里接续任务');
+    const workspace = source && this.store.tasks.getWorkspace(source.workspaceId);
+    if (!source || !subtask || !workspace) throw new CodedError('not_found', '要接续的任务不存在');
     if (!canContinueFrom(subtask)) throw new CodedError('bad_request', '只能接续已结束（已提交到分支）的任务');
     const latest = this.store.runs.latestRun(subtask.id);
     const finalMessage = (latest && this.store.runs.getResult(latest.id)?.finalMessage) ?? null;
-    return continuationPrompt({ goal: source.goal, finalMessage }, instruction);
+    return { workspace, prompt: continuationPrompt({ goal: source.goal, finalMessage }, instruction) };
   }
 
   /** 项目必须是 git 仓库根目录，不能是系统目录或 PalDock 自己的数据根。 */

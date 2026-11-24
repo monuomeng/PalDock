@@ -6,12 +6,12 @@ import {
   type ConversationRecord,
   type PersistentEvent,
   type StorePort,
-  type SubtaskRecord,
+  type TaskDetail,
   type TaskRecord,
   type WorkspaceRecord,
 } from '@paldock/contracts';
-import { canApproveRemotely, type P2Limits } from '@paldock/domain';
-import type { TaskService } from '../task-service.js';
+import { canApproveRemotely, P1_DEFAULTS, taskKey, type P2Limits } from '@paldock/domain';
+import type { CreateTaskInput, TaskService } from '../task-service.js';
 import {
   clip,
   confirmCancelCard,
@@ -41,21 +41,20 @@ export interface RemoteCommandsDeps {
   limits: P2Limits;
 }
 
-/** 单聊里的当前任务及其子任务。 */
-interface Focus {
-  task: TaskRecord;
-  subtask: SubtaskRecord;
-}
-
-/** 任务的短编号或分支名（paldock/<12 位>）统一成去掉连字符的 ID 前缀。 */
-const refOf = (arg: string) => arg.replace(/^#/, '').replace(/^paldock\//i, '').toLowerCase();
-const idKey = (taskId: string) => taskId.replace(/^task_/, '').replaceAll('-', '');
+/** 命令里的任务编号（#a1b2c3）或分支名（paldock/<12 位>）统一成 taskKey 的前缀。 */
+const refOf = (arg: string) => {
+  const ref = arg.replace(/^#/, '').toLowerCase();
+  return ref.startsWith(P1_DEFAULTS.branchPrefix) ? ref.slice(P1_DEFAULTS.branchPrefix.length) : ref;
+};
 
 /** 群里只能看状态和建任务；继续、结束、取消、审批只在单聊（计划 P2-08、P2-10）。 */
 const GROUP_ACTIONS = new Set<ChannelActionRecord['kind']>(['create_task', 'dismiss']);
+const DM_ONLY_COMMANDS = new Set(['cancel', 'continue', 'done']);
 
 /** 一张确认卡片的编号：卡片上各按钮的共同目标，也是更新这张卡片的主题。 */
 const newProposalId = () => `prop_${randomBytes(9).toString('base64url')}`;
+
+type Outcome = InboundOutcome | Promise<InboundOutcome>;
 
 const errorText = (error: unknown) => (error instanceof CodedError ? error.message : '处理失败，请到电脑上查看');
 
@@ -84,65 +83,62 @@ export class RemoteCommands implements InboundHandler {
     if (trimmed.startsWith('/')) return this.command(ctx, trimmed);
     // 图片、文件等非文字消息由适配器转成空文本
     if (trimmed.length === 0) return this.say(ctx, notice('暂时只支持文字消息'));
-    if (ctx.conversation.kind === 'group') return this.proposeTask(ctx, trimmed);
-    const focus = this.focusOf(ctx.conversation.currentTaskId);
-    return focus ? this.instruct(ctx, focus, trimmed) : this.proposeTask(ctx, trimmed);
+    const current = ctx.conversation.kind === 'dm' ? this.detailOf(ctx.conversation.currentTaskId) : undefined;
+    return current ? this.instruct(ctx, current, trimmed) : this.proposeTask(ctx, trimmed);
   }
 
-  private focusOf(taskId: string | null): Focus | undefined {
-    const task = taskId ? this.deps.store.tasks.getTask(taskId) : undefined;
-    const subtask = task && this.deps.store.tasks.getSubtaskOfTask(task.id);
-    return task && subtask ? { task, subtask } : undefined;
+  /** 当前任务的详情；任务已不存在时当作没有当前任务。 */
+  private detailOf(taskId: string | null): TaskDetail | undefined {
+    if (!taskId) return undefined;
+    try {
+      return this.deps.tasks.getTask(taskId);
+    } catch {
+      return undefined;
+    }
   }
 
   /**
-   * 单聊里给当前任务的一句话：待命中就是下一步指令（同一 worktree、同一会话）；已结束就基于它新建任务接着做；
-   * 执行中、阻塞时不建任务，说明原因；失败、取消的任务没法接着做，当作新任务目标。继续不发确认卡片（P2-10）。
+   * 单聊里给当前任务的一句话，按服务端给出的可用操作（与桌面同一套规则）：待命中就是下一步指令（同一 worktree、同一会话）；
+   * 已结束且可接续就基于它新建任务；阻塞时请到电脑上处理；其余已结束的当作新任务目标；执行中不建任务。继续不发确认卡片（P2-10）。
    */
-  private async instruct(ctx: InboundContext, { task, subtask }: Focus, instruction: string): Promise<InboundOutcome> {
+  private async instruct(ctx: InboundContext, { task, subtask, actions }: TaskDetail, instruction: string): Promise<InboundOutcome> {
     const ref = `#${taskRef(task.id)}`;
     try {
-      switch (subtask.status) {
-        case 'review':
-          await this.deps.tasks.decideReview(subtask.id, subtask.version, 'rework', instruction);
-          return this.say(ctx, notice(`${ref} 继续执行`, clip(instruction, 200), '完成后会在这里通知你；想另起新任务请发 /new 内容。'));
-        case 'succeeded':
-          return await this.continueFrom(ctx, task, instruction);
-        case 'blocked':
-          return this.say(ctx, warning(`${ref} 被阻塞`, '请到电脑上恢复、重新开始或放弃；想另起新任务请发 /new 内容。'));
-        case 'failed':
-        case 'cancelled':
-          return this.proposeTask(ctx, instruction);
-        default:
-          return this.say(ctx, notice(`${ref} 还在执行`, '这句话没有发出去，等它停下后再发；想另起新任务请发 /new 内容。', `/cancel ${ref} 可以取消。`));
+      if (actions.review) {
+        await this.deps.tasks.decideReview(subtask.id, subtask.version, 'rework', instruction);
+        return this.say(ctx, notice(`${ref} 继续执行`, clip(instruction, 200), '完成后会在这里通知你；想另起新任务请发 /new 内容。'));
       }
+      if (actions.continueFrom) {
+        const input = { continuedFromTaskId: task.id, goal: instruction, idempotencyKey: `channel:${ctx.conversation.id}:${ctx.eventId}` };
+        await this.startTask(ctx, input, (created) => `已新建任务 #${created}，接着 ${ref} 做`);
+        return 'done';
+      }
+      if (actions.restart) return this.say(ctx, warning(`${ref} 被阻塞`, '请到电脑上恢复、重新开始或放弃；想另起新任务请发 /new 内容。'));
+      if (!actions.cancel) return this.proposeTask(ctx, instruction);
+      return this.say(ctx, notice(`${ref} 还在执行`, '这句话没有发出去，等它停下后再发；想另起新任务请发 /new 内容。', `/cancel ${ref} 可以取消。`));
     } catch (error) {
       return this.say(ctx, warning('没有完成', errorText(error)));
     }
   }
 
-  /** 基于已结束的任务新建任务：同一项目，worktree 从它的分支出发，成为当前任务。 */
-  private async continueFrom(ctx: InboundContext, source: TaskRecord, goal: string): Promise<InboundOutcome> {
-    const workspace = this.deps.store.tasks.getWorkspace(source.workspaceId);
-    if (!workspace) throw new CodedError('not_found', '项目已不存在');
-    const detail = await this.deps.tasks.createTask({
-      rootPath: workspace.rootPath,
-      goal,
-      checkConfirmed: false,
-      idempotencyKey: `channel:${ctx.conversation.id}:${ctx.eventId}`,
-      originConversationId: ctx.conversation.id,
-      continuedFromTaskId: source.id,
-    });
-    this.channels.setCurrentTask(ctx.conversation.id, detail.task.id);
-    const head = `已新建任务 #${taskRef(detail.task.id)}，接着 #${taskRef(source.id)} 做`;
-    return this.say(ctx, notice(head, detail.task.title, '完成或需要处理时会在这里通知你。'));
+  /** 建任务（确认卡片上点了确认，或接续已结束的任务）：结果回发本会话；单聊里成为当前任务。 */
+  private async startTask(
+    ctx: InboundContext,
+    input: Pick<CreateTaskInput, 'rootPath' | 'continuedFromTaskId' | 'goal' | 'idempotencyKey'>,
+    head: (ref: string) => string,
+    subject?: string,
+  ): Promise<void> {
+    const detail = await this.deps.tasks.createTask({ ...input, checkConfirmed: false, originConversationId: ctx.conversation.id });
+    if (ctx.conversation.kind === 'dm') this.channels.setCurrentTask(ctx.conversation.id, detail.task.id);
+    this.say(ctx, notice(head(taskRef(detail.task.id)), detail.task.title, '完成或需要处理时会在这里通知你。'), subject);
   }
 
-  private command(ctx: InboundContext, text: string): InboundOutcome | Promise<InboundOutcome> {
+  private command(ctx: InboundContext, text: string): Outcome {
     const [head = '', ...rest] = text.split(/\s+/);
     const name = head.slice(1).toLowerCase();
     const arg = rest.join(' ').trim();
     const group = ctx.conversation.kind === 'group';
+    if (group && DM_ONLY_COMMANDS.has(name)) return this.say(ctx, warning('群里不能做这个操作', '继续、结束、取消任务请到单聊或电脑上操作。'));
     switch (name) {
       case 'start':
       case 'help':
@@ -162,11 +158,11 @@ export class RemoteCommands implements InboundHandler {
         if (!arg) return this.say(ctx, notice('请带上新任务的目标', '例如：/new 给登录页加一个「记住我」'));
         return this.proposeTask(ctx, arg);
       case 'cancel':
+        return this.withTask(ctx, arg, (task) => this.confirmCancel(ctx, task));
       case 'continue':
+        return this.continueCommand(ctx, arg);
       case 'done':
-        if (group) return this.say(ctx, warning('群里不能做这个操作', '继续、结束、取消任务请到单聊或电脑上操作。'));
-        if (name === 'cancel') return this.withTask(ctx, arg, (task) => this.confirmCancel(ctx, task));
-        return name === 'continue' ? this.continueCommand(ctx, arg) : this.withTask(ctx, arg, (task) => this.confirmDone(ctx, task));
+        return this.withTask(ctx, arg, (task) => this.confirmDone(ctx, task));
       default:
         return this.say(ctx, notice('不认识这个命令', '发送 /help 查看可用命令。'));
     }
@@ -190,13 +186,13 @@ export class RemoteCommands implements InboundHandler {
    * 命令的目标任务：`#a1b2c3`、`a1b2c3` 或分支名 `paldock/<12 位>`，在最近的任务里按编号前缀匹配；
    * 单聊里不带编号时用当前任务。
    */
-  private withTask<T extends InboundOutcome | Promise<InboundOutcome>>(ctx: InboundContext, arg: string, fn: (task: TaskRecord) => T): T | InboundOutcome {
+  private withTask(ctx: InboundContext, arg: string, fn: (task: TaskRecord) => Outcome): Outcome {
     const ref = refOf(arg);
     if (!ref) {
-      const current = ctx.conversation.kind === 'dm' ? this.focusOf(ctx.conversation.currentTaskId) : undefined;
-      return current ? fn(current.task) : this.say(ctx, notice('请带上任务编号', '例如 /status #a1b2c3；发送 /tasks 查看编号。'));
+      const current = ctx.conversation.kind === 'dm' && ctx.conversation.currentTaskId ? this.deps.store.tasks.getTask(ctx.conversation.currentTaskId) : undefined;
+      return current ? fn(current) : this.say(ctx, notice('请带上任务编号', '例如 /status #a1b2c3；发送 /tasks 查看编号。'));
     }
-    const matches = this.deps.store.tasks.listTasks(50).filter(({ task }) => idKey(task.id).startsWith(ref));
+    const matches = this.deps.store.tasks.listTasks(50).filter(({ task }) => taskKey(task.id).startsWith(ref));
     if (matches.length !== 1) return this.say(ctx, notice(matches.length === 0 ? '没有找到这个任务' : '编号不唯一，请多写几位'));
     return fn(matches[0]!.task);
   }
@@ -212,25 +208,21 @@ export class RemoteCommands implements InboundHandler {
     const [ref = '', ...rest] = arg.split(/\s+/);
     const instruction = rest.join(' ').trim();
     return this.withTask(ctx, ref, (task) => {
-      const focus = this.select(ctx, task.id);
-      return instruction && focus ? this.instruct(ctx, focus, instruction) : this.showHistory(ctx, task.id);
+      const detail = this.select(ctx, task.id);
+      return instruction ? this.instruct(ctx, detail, instruction) : this.say(ctx, taskHistoryCard(detail, this.deps.now()));
     });
   }
 
-  /** 设为当前任务；之后这个单聊也会收到它的进度。 */
-  private select(ctx: InboundContext, taskId: string): Focus | undefined {
+  /** 设为当前任务（之后这个单聊也会收到它的进度），返回它的详情。 */
+  private select(ctx: InboundContext, taskId: string): TaskDetail {
     this.channels.setCurrentTask(ctx.conversation.id, taskId);
-    return this.focusOf(taskId);
-  }
-
-  private showHistory(ctx: InboundContext, taskId: string): InboundOutcome {
-    return this.say(ctx, taskHistoryCard(this.deps.tasks.getTask(taskId), this.deps.now()));
+    return this.deps.tasks.getTask(taskId);
   }
 
   /** /done：只有待命中的任务能结束；先确认，点「结束任务」才提交。 */
   private confirmDone(ctx: InboundContext, task: TaskRecord): InboundOutcome {
-    const subtask = this.deps.store.tasks.getSubtaskOfTask(task.id)!;
-    if (subtask.status !== 'review') {
+    const { subtask, actions } = this.deps.tasks.getTask(task.id);
+    if (!actions.review) {
       return this.say(ctx, notice(`#${taskRef(task.id)} 现在${SUBTASK_LABEL[subtask.status]}`, '只有待命中的任务能结束。'));
     }
     // 两个按钮都以子任务为目标：点了其一另一个作废；任务离开待命时一并作废
@@ -299,16 +291,8 @@ export class RemoteCommands implements InboundHandler {
         const { workspaceId, goal } = JSON.parse(action.payload!) as { workspaceId: string; goal: string };
         const workspace = this.deps.store.tasks.getWorkspace(workspaceId);
         if (!workspace) throw new CodedError('not_found', '项目已不存在');
-        const detail = await tasks.createTask({
-          rootPath: workspace.rootPath,
-          goal,
-          checkConfirmed: false,
-          idempotencyKey: `channel:${action.token}`,
-          originConversationId: ctx.conversation.id,
-        });
-        if (ctx.conversation.kind === 'dm') this.channels.setCurrentTask(ctx.conversation.id, detail.task.id);
-        this.say(ctx, notice(`已新建任务 #${taskRef(detail.task.id)}`, detail.task.title, '完成或需要处理时会在这里通知你。'), action.targetId);
-        return;
+        const input = { rootPath: workspace.rootPath, goal, idempotencyKey: `channel:${action.token}` };
+        return this.startTask(ctx, input, (ref) => `已新建任务 #${ref}`, action.targetId);
       }
       case 'cancel_task': {
         const task = this.deps.store.tasks.getTask(action.payload!);
@@ -329,18 +313,14 @@ export class RemoteCommands implements InboundHandler {
         return;
       }
       case 'continue_task': {
-        const focus = this.select(ctx, action.targetId);
+        const { subtask, actions } = this.select(ctx, action.targetId);
         const ref = `#${taskRef(action.targetId)}`;
-        if (focus?.subtask.status !== 'review') {
-          this.say(ctx, notice(`已切换到 ${ref}`, `它现在${focus ? SUBTASK_LABEL[focus.subtask.status] : '不存在'}。`));
-          return;
-        }
-        this.say(ctx, notice(`请直接回复 ${ref} 的下一步`, '你的下一句话会作为指令，在同一个工作目录里接着做。'));
+        if (!actions.review) this.say(ctx, notice(`已切换到 ${ref}`, `它现在${SUBTASK_LABEL[subtask.status]}。`));
+        else this.say(ctx, notice(`请直接回复 ${ref} 的下一步`, '你的下一句话会作为指令，在同一个工作目录里接着做。'));
         return;
       }
       case 'select_task':
-        this.select(ctx, action.targetId);
-        this.showHistory(ctx, action.targetId);
+        this.say(ctx, taskHistoryCard(this.select(ctx, action.targetId), this.deps.now()));
         return;
     }
   }

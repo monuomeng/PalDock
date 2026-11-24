@@ -11,6 +11,7 @@ import type {
   TaskSummary,
   WorkspaceRecord,
 } from '@paldock/contracts';
+import { taskKey } from '@paldock/domain';
 
 /**
  * 发到外部渠道的卡片文案。内容一律当纯文本（适配器不解析标记）；任务目标、执行器回复等都会截断，
@@ -37,8 +38,12 @@ export function clip(text: string, max: number): string {
   return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
 }
 
-/** 任务的短编号：ID 里 UUID 的前 6 位，命令里用 `#a1b2c3` 引用。 */
-export const taskRef = (taskId: string) => taskId.replace(/^task_/, '').slice(0, 6);
+/** 任务的短编号：taskKey 的前 6 位，命令里用 `#a1b2c3` 引用。 */
+export const taskRef = (taskId: string) => taskKey(taskId).slice(0, 6);
+
+/** 改动统计的最后一行（「n files changed, …」）。 */
+const diffSummary = (result: RunResultRecord | null | undefined, max: number) =>
+  result?.diffStat ? clip(result.diffStat.split('\n').at(-1) ?? '', max) : undefined;
 
 const card = (title: string, tone: CardTone, lines: string[], buttons: CardButton[] = []): Card => ({ title, tone, lines, buttons });
 
@@ -60,22 +65,20 @@ export function pairedCard(): Card {
 }
 
 export function helpCard(group: boolean): Card {
+  const shared = ['/new <目标> 新建任务', '/projects 列出项目，/use <编号> 设置默认项目', '/tasks 最近的任务，/status #编号 查看一个任务'];
   if (group) {
     return card('PalDock 可用命令', 'info', [
       '@我 说一句话：在默认项目里新建任务（会先让你确认）。',
-      '/projects 列出项目，/use <编号> 设置默认项目',
-      '/tasks 最近的任务，/status #编号 查看一个任务',
+      ...shared,
       '群里不能继续、结束、取消任务或审批，请到单聊或电脑上处理。',
     ]);
   }
   return card('PalDock 可用命令', 'info', [
     '直接发一句话：当前任务待命中时就是它的下一步指令；没有当前任务时新建任务（会先让你确认）。',
-    '/new <目标> 另起一个新任务',
     '/continue 列出最近的任务，选一个作为当前任务；/continue #编号 <指令> 直接继续它',
     '/done 结束当前任务（改动提交到任务分支，不合并）',
-    '/projects 列出项目，/use <编号> 设置默认项目',
-    '/tasks 最近的任务，/status [#编号] 查看一个任务',
-    '/cancel #编号 取消任务',
+    ...shared,
+    '/cancel #编号 取消任务；不带编号的命令都指当前任务',
   ]);
 }
 
@@ -97,19 +100,19 @@ export function confirmCreateCard(workspace: WorkspaceRecord, goal: string, conf
   );
 }
 
-const mark = (taskId: string, currentId: string | null) => (taskId === currentId ? '（当前）' : '');
+/** 列表里的一行：编号（当前任务加标记）、状态、[多久之前]、目标摘要。 */
+function taskLine({ task, subtaskStatus, lastActivityAt }: TaskSummary, currentId: string | null, now?: Date): string {
+  const when = now ? ` · ${ago(lastActivityAt, now)}` : '';
+  return `#${taskRef(task.id)}${task.id === currentId ? '（当前）' : ''} ${SUBTASK_LABEL[subtaskStatus]}${when} · ${clip(task.title, 40)}`;
+}
 
 export function tasksCard(tasks: TaskSummary[], currentId: string | null): Card {
   if (tasks.length === 0) return notice('还没有任务');
-  return card(
-    '最近的任务',
-    'info',
-    tasks.map(({ task, subtaskStatus }) => `#${taskRef(task.id)}${mark(task.id, currentId)} ${SUBTASK_LABEL[subtaskStatus]} · ${clip(task.title, 40)}`),
-  );
+  return card('最近的任务', 'info', tasks.map((t) => taskLine(t, currentId)));
 }
 
 /** 相对时间，手机上不用换算时区。 */
-export function ago(iso: string, now: Date): string {
+function ago(iso: string, now: Date): string {
   const minutes = Math.floor((now.getTime() - Date.parse(iso)) / 60_000);
   if (minutes < 1) return '刚刚';
   if (minutes < 60) return `${minutes} 分钟前`;
@@ -120,10 +123,7 @@ export function ago(iso: string, now: Date): string {
 /** /continue 的列表：按最近活动排序，每个任务一个按钮，点了设为当前任务并显示它做过什么。 */
 export function recentTasksCard(tasks: TaskSummary[], currentId: string | null, now: Date, select: (taskId: string) => string): Card {
   if (tasks.length === 0) return notice('还没有任务', '直接发一句话就能新建任务。');
-  const lines = tasks.map(
-    ({ task, subtaskStatus, lastActivityAt }) =>
-      `#${taskRef(task.id)}${mark(task.id, currentId)} ${SUBTASK_LABEL[subtaskStatus]} · ${ago(lastActivityAt, now)} · ${clip(task.title, 40)}`,
-  );
+  const lines = tasks.map((t) => taskLine(t, currentId, now));
   lines.push('点编号查看这个任务做过什么，并把它设为当前任务。');
   return card('最近的任务', 'info', lines, tasks.map(({ task }) => button(`#${taskRef(task.id)}`, select(task.id))));
 }
@@ -137,13 +137,14 @@ function instructionOf(detail: TaskDetail, index: number): string {
   return detail.runs[index]!.run.resumesRunId ? '（中断后恢复）' : '（重新开始）';
 }
 
-const NEXT_STEP: Partial<Record<SubtaskStatus, string>> = {
-  review: '直接回复就是下一步指令；/done 结束任务。',
-  succeeded: '任务已结束。回复一句话会基于它新建任务接着做。',
-  blocked: '任务被阻塞，请到电脑上恢复、重新开始或放弃。',
-  failed: '任务失败了。回复一句话会新建任务（会先让你确认）。',
-  cancelled: '任务已取消。回复一句话会新建任务（会先让你确认）。',
-};
+/** 下一步能做什么：按服务端给出的可用操作，与单聊里普通文字的处理一致。 */
+function nextStep({ actions }: TaskDetail): string {
+  if (actions.review) return '直接回复就是下一步指令；/done 结束任务。';
+  if (actions.continueFrom) return '任务已结束。回复一句话会基于它新建任务接着做。';
+  if (actions.restart) return '任务被阻塞，请到电脑上恢复、重新开始或放弃。';
+  if (!actions.cancel) return '任务已结束。回复一句话会新建任务（会先让你确认）。';
+  return '正在执行，停下后再发指令。';
+}
 
 /** 一个任务做过什么：每一轮的指令、AI 的说明和改动，只列最近几轮。 */
 export function taskHistoryCard(detail: TaskDetail, now: Date, maxRounds = 5): Card {
@@ -158,10 +159,11 @@ export function taskHistoryCard(detail: TaskDetail, now: Date, maxRounds = 5): C
     if (index < first) return;
     lines.push('', `第 ${index + 1} 轮 · ${ago(run.run.startedAt, now)}`, `指令：${clip(instructionOf(detail, index), 200)}`);
     if (run.result?.finalMessage) lines.push(`说明：${clip(run.result.finalMessage, 300)}`);
-    if (run.result?.diffStat) lines.push(`改动：${clip(run.result.diffStat.split('\n').at(-1) ?? '', 120)}`);
+    const diff = diffSummary(run.result, 120);
+    if (diff) lines.push(`改动：${diff}`);
     if (run.run.failureReason) lines.push(`原因：${clip(run.run.failureReason, 120)}`);
   });
-  lines.push('', NEXT_STEP[subtask.status] ?? '正在执行，停下后再发指令。');
+  lines.push('', nextStep(detail));
   return card(`#${taskRef(task.id)} ${clip(task.title, 60)}`, 'info', lines);
 }
 
@@ -198,7 +200,8 @@ export function taskProgressCard(
       return card(head, 'info', ['开始执行。']);
     case 'review': {
       const lines = ['这一轮做完了，待命中。'];
-      if (result?.diffStat) lines.push(`改动：${clip(result.diffStat.split('\n').at(-1) ?? '', 200)}`);
+      const diff = diffSummary(result, 200);
+      if (diff) lines.push(`改动：${diff}`);
       if (result?.finalMessage) lines.push(`说明：${clip(result.finalMessage, 600)}`);
       lines.push(review ? '直接回复就是下一步指令；/new 另起新任务。' : '请到单聊或电脑上继续或结束。');
       const buttons = review ? [button('继续', review.next), button('结束任务', review.end, 'primary')] : [];

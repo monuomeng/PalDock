@@ -62,12 +62,12 @@ export class ChannelNotifier {
     const { tasks, runs } = this.deps.store;
     const subtask = tasks.getSubtask(subtaskId);
     const task = subtask && tasks.getTask(subtask.taskId);
-    if (!subtask || !task) return;
-    const latest = runs.latestRun(subtask.id);
+    const subscribers = task ? this.subscribers(task) : [];
+    if (!subtask || !task || subscribers.length === 0) return;
+    // 证据只有待命中卡片要用
+    const latest = to === 'review' ? runs.latestRun(subtask.id) : undefined;
     const result = latest && runs.getResult(latest.id);
-    for (const conversation of this.subscribers(task)) {
-      this.notifyProgress(conversation, task, subtask, to, result);
-    }
+    for (const conversation of subscribers) this.notifyProgress(conversation, task, subtask, to, result);
   }
 
   /** 来源会话，加上把它设为当前任务的单聊（桌面建的任务在手机上继续后也能收到进度）。 */

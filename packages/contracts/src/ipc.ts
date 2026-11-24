@@ -21,18 +21,21 @@ export const CommandArgs = {
   'service.status': z.object({}),
   'task.create': z
     .object({
-      /** 用户在桌面选的项目目录（git 仓库）。 */
-      rootPath: z.string().min(1).max(1000),
+      /** 用户在桌面选的项目目录（git 仓库）；接续任务时不填，项目取自来源任务。 */
+      rootPath: z.string().min(1).max(1000).optional(),
       goal: z.string().trim().min(1).max(8000),
       check: CheckCommand.optional(),
       /** 用户已看过完整命令和「以你的账户权限运行」的提示并确认；未确认的命令不会运行。 */
       checkConfirmed: z.boolean().default(false),
       /** 客户端为每次提交生成；重复提交返回同一个任务。 */
       idempotencyKey: z.string().min(8).max(100),
-      /** 基于这个已结束的任务继续：项目必须相同，worktree 从它的分支出发。 */
+      /** 基于这个已结束的任务继续：同一项目，worktree 从它的分支出发。 */
       continuedFromTaskId: z.string().min(1).max(100).optional(),
     })
-    .strict(),
+    .strict()
+    .refine((v) => (v.rootPath === undefined) !== (v.continuedFromTaskId === undefined), {
+      message: '新建任务请选择项目目录；接续任务时项目取自来源任务',
+    }),
   'task.list': z.object({ limit: z.number().int().positive().max(500).default(100) }),
   'task.get': z.object({ taskId: Id }),
   'task.cancel': z.object({ taskId: Id }),

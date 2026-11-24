@@ -146,11 +146,11 @@ describe('P1 主流程', () => {
     await expect(
       call('review.decide', { subtaskId: reviewed.subtask.id, expectedVersion: reviewed.subtask.version, decision: 'rework', note: '  ' }),
     ).rejects.toThrow(/下一步/);
-    await expect(create('接着做', { continuedFromTaskId: created.task.id })).rejects.toThrow(/已结束/);
+    await expect(create('接着做', { rootPath: undefined, continuedFromTaskId: created.task.id })).rejects.toThrow(/已结束/);
 
     await call('review.decide', { subtaskId: reviewed.subtask.id, expectedVersion: reviewed.subtask.version, decision: 'accept' });
     expect((await detail(created.task.id)).actions.continueFrom).toBe(true);
-    const next = await create('接着做', { continuedFromTaskId: created.task.id });
+    const next = await create('接着做', { rootPath: undefined, continuedFromTaskId: created.task.id });
     expect(next.task.continuedFromTaskId).toBe(created.task.id);
     const started = await until(next.task.id, (d) => d.subtask.worktreePath !== null);
     expect(started.subtask.baseCommit).toBe(git(repo, 'rev-parse', reviewed.subtask.branch!).trim());

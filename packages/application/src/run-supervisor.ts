@@ -19,7 +19,7 @@ import type {
   TaskRecord,
   TurnCheck,
 } from '@paldock/contracts';
-import { P1_DEFAULTS } from '@paldock/domain';
+import { P1_DEFAULTS, taskKey } from '@paldock/domain';
 import { runCheck } from './check-runner.js';
 import { addWorktree, branchCommit, headCommit, stageAndDiffStat } from './git.js';
 import { redact } from './redact.js';
@@ -70,7 +70,7 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 
 /**
  * 执行器监管：启动 Run、把执行器事件写成状态与事件、处理审批与取消、断线后按 turn 核对、
- * Run 结束后收集证据。确定性规则都在这里，模型说「完成」只会让子任务进入待验收。
+ * Run 结束后收集证据。确定性规则都在这里，模型说「完成」只会让子任务进入待命中（等用户继续或结束）。
  */
 export class RunSupervisor {
   /** 按 subtaskId 索引：同一子任务同时最多一次 Run。 */
@@ -228,8 +228,8 @@ export class RunSupervisor {
   private async ensureWorktree(live: LiveRun): Promise<string> {
     if (live.subtask.worktreePath) return live.subtask.worktreePath;
     const workspace = this.deps.store.tasks.getWorkspace(live.task.workspaceId)!;
-    // 12 位十六进制（48 位）作为目录与分支名，统一小写
-    const slug = live.task.id.replace(/^task_/, '').replaceAll('-', '').slice(0, 12).toLowerCase();
+    // 12 位十六进制（48 位）作为目录与分支名
+    const slug = taskKey(live.task.id).slice(0, 12);
     const path = join(this.deps.dataRoot, 'worktrees', slug);
     const branch = `${this.limits.branchPrefix}${slug}`;
     const base = await this.worktreeBase(live.task, workspace.rootPath);
@@ -391,7 +391,7 @@ export class RunSupervisor {
     else this.finish(live, 'failed', 'blocked', reason);
   }
 
-  /** turn 完成：Run 成功，收集证据后子任务进入待验收（不直接成功）。证据收集期间仍占用名额、仍可取消。 */
+  /** turn 完成：Run 成功，收集证据后子任务进入待命中（不直接成功）。证据收集期间仍占用名额、仍可取消。 */
   private async finishSucceeded(live: LiveRun, finalMessage: string | null): Promise<void> {
     if (this.live.get(live.subtask.id) !== live || live.run.status === 'succeeded') return;
     const { store } = this.deps;
@@ -401,7 +401,7 @@ export class RunSupervisor {
       ...this.resultBase(live, finalMessage, `收集证据失败：${errorText(error)}`),
       checkStatus: 'error' as const,
     }));
-    // 退出时检查命令已被中止（记为 cancelled），仍照常保存证据并进入待验收，不让子任务停在「执行中」
+    // 退出时检查命令已被中止（记为 cancelled），仍照常保存证据并进入待命中，不让子任务停在「执行中」
     const cancelled = live.cancelRequested && !this.stopping;
     this.publish(
       store.transaction(() => [

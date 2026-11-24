@@ -31,14 +31,13 @@ export async function repositoryRoot(path: string): Promise<string> {
   return (await git(path, ['rev-parse', '--show-toplevel'])).trim();
 }
 
-export async function headCommit(repo: string): Promise<string> {
-  return (await git(repo, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
+/** 引用当前指向的提交；不存在时抛 GitError。 */
+async function resolveCommit(repo: string, ref: string): Promise<string> {
+  return (await git(repo, ['rev-parse', '--verify', `${ref}^{commit}`])).trim();
 }
 
-/** 分支当前指向的提交；分支不存在时抛 GitError。 */
-export async function branchCommit(repo: string, branch: string): Promise<string> {
-  return (await git(repo, ['rev-parse', '--verify', `refs/heads/${branch}^{commit}`])).trim();
-}
+export const headCommit = (repo: string) => resolveCommit(repo, 'HEAD');
+export const branchCommit = (repo: string, branch: string) => resolveCommit(repo, `refs/heads/${branch}`);
 
 /**
  * 在 base 提交上新建分支并检出到 worktreePath，返回分支实际的起点。可重入：上次已建好分支

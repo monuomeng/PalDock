@@ -75,12 +75,11 @@ export async function newTaskView(fromTaskId?: string): Promise<HTMLElement> {
     submit.disabled = true;
     try {
       const detail = await call('task.create', {
-        rootPath: project.value,
+        ...(source ? { continuedFromTaskId: source.task.id } : { rootPath: project.value }),
         goal: field<HTMLTextAreaElement>(form, '#goal').value,
         ...(executable ? { check: { executable, args } } : {}),
         checkConfirmed: field<HTMLInputElement>(form, '#check-confirmed').checked,
         idempotencyKey,
-        ...(source ? { continuedFromTaskId: source.task.id } : {}),
       });
       navigate(taskLink(detail.task.id));
     } catch (e) {
