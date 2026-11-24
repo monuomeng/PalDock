@@ -17,6 +17,8 @@ const repo = join(work, 'demo repo');
 const env = {
   ...process.env,
   PALDOCK_DATA_ROOT: dataRoot,
+  // 独立的 userData：不与本机已安装、正在运行的 PalDock 争单实例锁
+  PALDOCK_USER_DATA: join(work, 'user-data'),
   PALDOCK_CODEX_PATH: join(root, 'packages', 'runtime-codex', 'mock', 'mock-app-server.mjs'),
   // 模拟执行器把 thread 存在 CODEX_HOME 下（CODEX_HOME 在执行器环境变量白名单里）
   CODEX_HOME: join(work, 'mock-home'),

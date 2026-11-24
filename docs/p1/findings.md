@@ -57,3 +57,17 @@
 推送后 GitHub Actions 两个平台都失败：`tests/integration/p1-flow.test.ts` 的用例报「请选择仓库根目录」。原因是 runner 上临时目录路径与 git 返回的路径写法不同——Windows 是 8.3 短名（`C:\Users\RUNNER~1\…`），macOS 的 `/var/folders/…` 是 `/private/var/…` 的符号链接——而本机临时目录没有短名，所以本地没测出来。修复：校验项目目录时先把两边都转成真实路径（`realpathSync.native`）再比较；新增一个 Windows 用例用 8.3 短名 + 大写路径复现（修复前得到与 CI 相同的错误）。同时把 actions 升到 Node 24 版本（checkout@v5、setup-node@v5、pnpm/action-setup@v6），消除 Node 20 弃用警告。macOS 上修复后的结果以下一次 CI 为准。
 
 用户实测安装版：关闭窗口后无残留进程、单实例通过；真实 Codex 任务因测试仓库还没有任何提交而在创建 worktree 时失败。现在建任务时就检查，没有提交的仓库直接提示「请先提交一次再建任务」。
+
+## 安装版复测（2026-11-24，用户本机）
+
+程序装在 `D:\software\PalDock`，数据目录 `D:\software\PalDockCache`。
+
+| 项 | 结果 |
+|---|---|
+| 关闭窗口后进程 | 无残留（PalDock 与 codex 进程都退出） |
+| 单实例 | 运行中再次打开会把已有窗口调到前面 |
+| 真实 Codex | 第一次因测试仓库没有任何提交、无法创建 worktree 而失败；提交后复测，在 worktree 中执行成功。这验证了安装版里执行器经 `PalDock.exe` + `ELECTRON_RUN_AS_NODE=1` 启动真实 Codex 的路径 |
+
+**数据目录默认位置**：按用户要求，首次启动时默认建议安装目录旁边的 `PalDockData`，并拒绝安装目录及系统、程序目录（卸载或升级会删除安装目录）。
+
+**端到端检查与已安装的 PalDock 冲突**：本机运行着已安装的 PalDock 时，`e2e-check` 启动的开发版窗口会被单实例锁挡住（立即退出）。新增环境变量 `PALDOCK_USER_DATA`（仅用于开发和测试）给开发版独立的 userData，检查脚本默认使用，不再与已安装版本互相影响。

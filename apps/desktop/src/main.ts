@@ -5,6 +5,7 @@ import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'el
 import { COMMAND_NAMES, ErrorCode, type CommandName, type EphemeralEvent, type PersistentEvent, type RendererResult } from '@paldock/contracts';
 import { IpcClient } from '@paldock/platform';
 import { APP_ORIGIN, registerAppScheme, serveRenderer } from './app-protocol.js';
+import { defaultDataRoot, installDirOf, rejectDataRoot } from './data-root.js';
 import { startPowerDiagnostics } from './power-diagnostics.js';
 import { ServiceHost, type HostStatus } from './service-host.js';
 
@@ -16,6 +17,8 @@ const RENDERER_URL = `${APP_ORIGIN}/index.html`;
 const RENDERER_COMMANDS = new Set<string>(COMMAND_NAMES);
 
 registerAppScheme();
+// 测试与开发用：独立的 userData（单实例锁、bootstrap.json 都在这里），不和本机已安装的 PalDock 冲突
+if (process.env.PALDOCK_USER_DATA) app.setPath('userData', process.env.PALDOCK_USER_DATA);
 
 let window: BrowserWindow | undefined;
 let host: ServiceHost | undefined;
@@ -37,15 +40,30 @@ async function resolveDataRoot(): Promise<string | undefined> {
   try {
     return (JSON.parse(readFileSync(pointer, 'utf8')) as { dataRoot: string }).dataRoot;
   } catch {
-    const picked = await dialog.showOpenDialog({
-      title: '选择 PalDock 数据目录（建议放在 D 盘等非系统盘）',
-      properties: ['openDirectory', 'createDirectory'],
-    });
-    const chosen = picked.filePaths[0];
-    if (picked.canceled || !chosen) return undefined;
+    const chosen = await pickDataRoot();
+    if (!chosen) return undefined;
     mkdirSync(dirname(pointer), { recursive: true });
     writeFileSync(pointer, JSON.stringify({ dataRoot: chosen }));
     return chosen;
+  }
+}
+
+/** 首次启动选数据目录：默认在安装目录旁边，选到安装目录或系统目录里时说明原因并重选。 */
+async function pickDataRoot(): Promise<string | undefined> {
+  const installDir = installDirOf(app.getPath('exe'), app.isPackaged);
+  const suggested = defaultDataRoot(installDir);
+  for (;;) {
+    const picked = await dialog.showOpenDialog({
+      title: '选择 PalDock 数据目录（任务记录、worktree 和备份都放在这里）',
+      ...(suggested ? { defaultPath: suggested } : {}),
+      buttonLabel: '使用这个目录',
+      properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
+    });
+    const chosen = picked.filePaths[0];
+    if (picked.canceled || !chosen) return undefined;
+    const reason = rejectDataRoot(chosen, installDir);
+    if (!reason) return chosen;
+    await dialog.showMessageBox({ type: 'warning', title: '不能使用这个目录', message: reason });
   }
 }
 
