@@ -50,7 +50,7 @@ export function pairingCard(code: string): Card {
   return card('请在电脑上确认绑定', 'warning', [
     '这个账号还没有绑定到 PalDock。',
     `配对码：${code.slice(0, 4)}-${code.slice(4)}`,
-    '请在电脑上打开 PalDock「设置 → 渠道 → 待绑定」，核对配对码后确认。配对码 1 小时内有效。',
+    '请在电脑上打开 PalDock「设置 → 待确认的配对」，核对配对码后确认。配对码 1 小时内有效。',
   ]);
 }
 

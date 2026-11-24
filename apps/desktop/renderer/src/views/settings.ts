@@ -152,7 +152,7 @@ function pairingSection(pairings: PairingRecord[], act: Act): HTMLElement {
             h(
               'li',
               { class: 'panel' },
-              h('strong', { class: 'code' }, p.code),
+              h('strong', { class: 'code' }, `${p.code.slice(0, 4)}-${p.code.slice(4)}`),
               ` ${PROVIDER_LABEL[p.provider]} · ${p.displayName} · ${time(p.expiresAt)} 前有效`,
               h(
                 'div',

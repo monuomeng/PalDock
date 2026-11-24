@@ -9,6 +9,8 @@ interface ApiResponse<T> {
   code?: number;
   msg?: string;
   data?: T;
+  /** 机器人信息接口（/open-apis/bot/v3/info）的结果不在 data 里，而在顶层 bot 字段。 */
+  bot?: { open_id?: string };
 }
 
 /**
@@ -21,13 +23,17 @@ export function createLarkTransport(appId: string, appSecret: string, timeoutMs:
   let ws: Lark.WSClient | undefined;
 
   async function call<T>(method: 'GET' | 'POST' | 'PATCH', url: string, data?: unknown, params?: Record<string, string>): Promise<T | undefined> {
+    return (await request<T>(method, url, data, params)).data;
+  }
+
+  async function request<T>(method: 'GET' | 'POST' | 'PATCH', url: string, data?: unknown, params?: Record<string, string>): Promise<ApiResponse<T>> {
     let response: ApiResponse<T>;
     try {
       response = await client.request<ApiResponse<T>>({ method, url, data, params, timeout: timeoutMs });
     } catch (error) {
       throw classifyFeishuError(error);
     }
-    if (response.code === 0) return response.data;
+    if (response.code === 0) return response;
     const outcome = RATE_LIMITED.has(response.code ?? -1) ? 'retry' : 'failed';
     throw new ChannelDeliveryError(outcome, `飞书返回错误 ${response.code}：${(response.msg ?? '').slice(0, 200)}`);
   }
@@ -62,8 +68,7 @@ export function createLarkTransport(appId: string, appSecret: string, timeoutMs:
       await call('PATCH', `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, { content });
     },
     async botOpenId() {
-      const data = await call<{ bot?: { open_id?: string } }>('GET', '/open-apis/bot/v3/info');
-      return data?.bot?.open_id;
+      return (await request('GET', '/open-apis/bot/v3/info')).bot?.open_id;
     },
     async userName(openId) {
       const data = await call<{ user?: { name?: string } }>('GET', `/open-apis/contact/v3/users/${encodeURIComponent(openId)}`, undefined, {
