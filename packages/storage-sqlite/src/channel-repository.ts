@@ -42,7 +42,8 @@ const SQL = {
   upsertAccount: `
     INSERT INTO channel_accounts (id, provider, account, tenant_key, external_id, display_name, status, created_at, updated_at)
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'unbound', ?7, ?7)
-    ON CONFLICT (provider, account, tenant_key, external_id) DO UPDATE SET display_name = excluded.display_name
+    ON CONFLICT (provider, account, tenant_key, external_id) DO UPDATE
+       SET display_name = CASE WHEN excluded.display_name = '' THEN display_name ELSE excluded.display_name END
     RETURNING ${COLUMNS.account()}`,
   selectAccount: `SELECT ${COLUMNS.account()} FROM channel_accounts WHERE id = ?`,
   selectAccounts: `SELECT ${COLUMNS.account()} FROM channel_accounts ORDER BY created_at`,

@@ -69,16 +69,19 @@ export class FeishuAdapter implements ChannelAdapter {
 
   private async onMessage(data: MessageEvent): Promise<void> {
     const parsed = parseMessage(data, this.ctx);
-    if (!parsed || !this.sink) return;
+    const sink = this.sink; // 查名字期间可能被停止：仍交给停止前的 sink，由管线按渠道状态处理
+    if (!parsed || !sink) return;
     const displayName = await this.displayName(parsed.sender.externalId);
-    this.sink.inbound({ ...parsed, sender: { ...parsed.sender, displayName } });
+    sink.inbound({ ...parsed, sender: { ...parsed.sender, displayName } });
   }
 
   /** 卡片回调要在 3 秒内响应：只落库，返回一个提示，结果另发卡片。 */
   private async onCardAction(data: CardActionEvent): Promise<unknown> {
     const parsed = parseCardAction(data, this.ctx);
     if (!parsed || !this.sink) return {};
-    this.sink.inbound({ ...parsed, sender: { ...parsed.sender, displayName: data.operator?.name ?? '' } });
+    // 回调里通常没有名字；空名字不会覆盖已记下的名字
+    const displayName = data.operator?.name ?? this.names.get(parsed.sender.externalId) ?? '';
+    this.sink.inbound({ ...parsed, sender: { ...parsed.sender, displayName } });
     return { toast: { type: 'info', content: '已收到，处理中' } };
   }
 

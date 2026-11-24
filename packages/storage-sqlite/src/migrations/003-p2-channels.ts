@@ -115,6 +115,8 @@ ALTER TABLE outbox ADD COLUMN sent_at TEXT;
 -- 启动恢复与渠道停用：找发送中、待发送的行
 CREATE INDEX outbox_sending ON outbox (channel) WHERE status = 'sending';
 CREATE INDEX outbox_pending_by_channel ON outbox (channel) WHERE status = 'pending';
+-- 同主题的新卡片取代还没发出的旧卡片（例如审批卡片重试中，审批已被处理）
+CREATE INDEX outbox_pending_by_subject ON outbox (target, subject) WHERE status = 'pending';
 
 -- 审批升级扫描：只看还没升级的待审批
 CREATE INDEX approvals_pending_unescalated ON approvals (requested_at) WHERE status = 'pending' AND escalated_at IS NULL;

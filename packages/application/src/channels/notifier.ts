@@ -8,6 +8,8 @@ export interface NotifierDeps {
   /** 写 outbox 并唤醒投递。 */
   send(conversation: ConversationRecord, card: Card, subject?: string): void;
   presence(): DesktopPresence;
+  /** 已连接（适配器在运行）的渠道；停用或出错的渠道不作为升级目标。 */
+  attached(provider: ChannelProvider): boolean;
   now: () => Date;
   limits: P2Limits;
 }
@@ -50,7 +52,7 @@ export class ChannelNotifier {
     const subtask = tasks.getSubtask(subtaskId);
     const task = subtask && tasks.getTask(subtask.taskId);
     const conversation = task?.originConversationId ? this.channels.getConversation(task.originConversationId) : undefined;
-    if (!subtask || !task || !conversation) return;
+    if (!subtask || !task || !conversation || !this.reachable(conversation)) return;
     const latest = runs.latestRun(subtask.id);
     const result = latest && runs.getResult(latest.id);
     // 验收按钮只发到单聊；群里只通知
@@ -64,6 +66,17 @@ export class ChannelNotifier {
     this.deps.send(conversation, taskProgressCard(task, to, subtask.statusReason, result, review));
   }
 
+  /** 会话仍然可以收通知：单聊的账号没被解绑，群仍在白名单里。 */
+  private reachable(conversation: ConversationRecord): boolean {
+    if (conversation.kind === 'group') return conversation.groupAllowed;
+    return conversation.ownerAccountId !== null && this.channels.getAccount(conversation.ownerAccountId)?.status === 'active';
+  }
+
+  /** 升级目标：已绑定账号的单聊里，渠道正在运行的那些。 */
+  private escalationTargets(): ConversationRecord[] {
+    return this.channels.activeDirectConversations().filter((c) => this.deps.attached(c.provider));
+  }
+
   private action(conversation: ConversationRecord, kind: 'accept_review' | 'rework_review' | 'approve' | 'deny', targetId: string, version: number, ttlMs: number) {
     return this.channels.createAction({ conversationId: conversation.id, kind, targetId, targetVersion: version, ttlMs }).token;
   }
@@ -74,15 +87,17 @@ export class ChannelNotifier {
     const context = this.channels.approvalContext(approvalId);
     if (!context?.approval.escalatedAt || context.approval.status === 'pending') return;
     const card = approvalDecidedCard(context, context.approval.status, context.approval.decidedVia);
+    const subject = approvalSubject(approvalId);
+    // 只更新收到过（或正排队要收）审批卡片的会话
     for (const conversation of this.channels.activeDirectConversations()) {
-      this.deps.send(conversation, card, approvalSubject(approvalId));
+      if (this.deps.store.outbox.hasSubject(conversation.id, subject)) this.deps.send(conversation, card, subject);
     }
   }
 
   /** 定时调用：把满足升级条件的待审批发到所有已绑定的单聊；没有可发的单聊时不标记，绑定后再升级。 */
   escalate(): void {
     // 先看有没有可发的单聊（便宜的查询），没有时不做联表扫描
-    const targets = this.channels.activeDirectConversations();
+    const targets = this.escalationTargets();
     if (targets.length === 0) return;
     const presence = this.deps.presence();
     const nowMs = this.deps.now().getTime();

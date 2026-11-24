@@ -208,6 +208,8 @@ export interface OutboxPort {
   enqueue(provider: ChannelProvider, conversationId: string, card: Card, subject?: string | null): number;
   claimDue(): OutboxItem | undefined;
   messageRef(conversationId: string, subject: string): string | undefined;
+  /** 这个会话里该主题的卡片已发出或在待发队列里。 */
+  hasSubject(conversationId: string, subject: string): boolean;
   markSent(item: OutboxItem, messageRef: string): void;
   markRetry(id: number, delayMs: number, error: string): void;
   markFinal(id: number, status: 'unknown' | 'failed', error: string): void;

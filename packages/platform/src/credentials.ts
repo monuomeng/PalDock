@@ -85,6 +85,17 @@ function securityInteractive(command: string): Promise<void> {
   });
 }
 
+/** 删掉某个服务下的全部条目（delete-generic-password 一次只删一条，没有时报错）。 */
+async function deleteKeychainItems(target: string): Promise<void> {
+  for (let i = 0; i < 20; i++) {
+    try {
+      await exec('/usr/bin/security', ['delete-generic-password', '-s', target], { timeout: TIMEOUT_MS });
+    } catch {
+      return;
+    }
+  }
+}
+
 const unsupported = () => new Error('凭据库目前只支持 Windows 与 macOS');
 
 export async function readCredential(target: string): Promise<Credential | undefined> {
@@ -109,7 +120,10 @@ export async function writeCredential(target: string, credential: Credential): P
     return;
   }
   if (process.platform === 'darwin') {
-    return securityInteractive(`add-generic-password -U -s ${quote(target)} -a ${quote(credential.user)} -w ${quote(credential.secret)}`);
+    // 钥匙串按「服务 + 账户」区分条目，`-U` 只覆盖账户相同的那条；飞书换了 App ID（账户）时会多出一条，
+    // 而读取只取第一条。所以先删掉这个服务下的所有条目再写。
+    await deleteKeychainItems(target);
+    return securityInteractive(`add-generic-password -s ${quote(target)} -a ${quote(credential.user)} -w ${quote(credential.secret)}`);
   }
   throw unsupported();
 }
@@ -121,10 +135,7 @@ export async function deleteCredential(target: string): Promise<void> {
       await powershell(WIN_DELETE, { PALDOCK_CRED_TARGET: target });
       return;
     }
-    if (process.platform === 'darwin') {
-      await exec('/usr/bin/security', ['delete-generic-password', '-s', target], { timeout: TIMEOUT_MS });
-      return;
-    }
+    if (process.platform === 'darwin') return await deleteKeychainItems(target);
   } catch {
     return;
   }

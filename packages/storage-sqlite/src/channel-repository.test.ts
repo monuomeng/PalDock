@@ -164,6 +164,18 @@ describe('outbox', () => {
     expect(store.db.get(`SELECT status, last_error AS e FROM outbox WHERE id = ?`, id)).toEqual({ status: 'failed', e: '渠道已停用' });
   });
 
+  it('同主题的新卡片取代还没发出的旧卡片；hasSubject 认已发出或排队中的', () => {
+    const { conversation } = seedDm();
+    expect(store.outbox.hasSubject(conversation.id, 'approval:1')).toBe(false);
+    const old = store.outbox.enqueue('feishu', conversation.id, card, 'approval:1');
+    store.outbox.markRetry(store.outbox.claimDue()!.id, 2_000, 'network'); // 重试中
+    expect(store.outbox.hasSubject(conversation.id, 'approval:1')).toBe(true);
+    const fresh = store.outbox.enqueue('feishu', conversation.id, { ...card, title: '已批准' }, 'approval:1');
+    expect(store.db.get(`SELECT status FROM outbox WHERE id = ?`, old)).toEqual({ status: 'failed' });
+    expect(store.outbox.claimDue()).toMatchObject({ id: fresh, card: { title: '已批准' } });
+    expect(plan(`UPDATE outbox SET status = 'failed' WHERE status = 'pending' AND target = 'c' AND subject = 's'`)).toContain('outbox_pending_by_subject');
+  });
+
   it('启动恢复把发送中的消息记为 unknown，不重发', () => {
     const { conversation } = seedDm();
     const id = store.outbox.enqueue('feishu', conversation.id, card);

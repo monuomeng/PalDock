@@ -101,7 +101,7 @@ export class ChannelService {
       log: deps.log,
       process: (envelope) => processor.process(envelope),
     });
-    this.notifier = new ChannelNotifier({ ...common, send, presence: () => this.presence });
+    this.notifier = new ChannelNotifier({ ...common, send, presence: () => this.presence, attached: (p) => this.hub.isAttached(p) });
   }
 
   /** 启动已启用的渠道（不阻塞服务启动）与升级扫描。 */
@@ -109,6 +109,8 @@ export class ChannelService {
     this.hub.start();
     for (const settings of this.deps.store.channels.listSettings()) {
       if (settings.enabled) void this.apply(settings);
+      // 停用的飞书也在设置页显示已保存的 App ID（启用的在启动时读到）
+      else if (settings.provider === 'feishu') void this.loadAppId();
     }
     this.escalationTimer = setInterval(() => this.escalate(), this.limits.escalationScanMs);
     this.escalationTimer.unref();
@@ -159,17 +161,27 @@ export class ChannelService {
 
   /** 保存设置：先写凭据（只写不回显），再写设置并按新设置重启或停用渠道。 */
   async configure(input: ChannelConfigInput): Promise<ChannelOverview[]> {
-    const target = credentialTarget(input.provider);
-    if (input.forgetCredential) {
-      await this.deps.credentials.remove(target);
-      this.appIds.delete(input.provider);
-    } else if (input.credential) {
-      await this.deps.credentials.write(target, input.credential);
-    }
-    const change = this.deps.store.channels.updateSettings(input.provider, input.expectedVersion, input.enabled, input.proxyUrl);
+    const { provider } = input;
+    // 先过版本校验：设置页过时的保存整体被拒，不会只写进凭据
+    const change = this.deps.store.channels.updateSettings(provider, input.expectedVersion, input.enabled, input.proxyUrl);
     this.deps.publish(change.events);
-    await this.apply(change.record);
+    try {
+      if (input.forgetCredential) {
+        await this.deps.credentials.remove(credentialTarget(provider));
+        this.appIds.delete(provider);
+      } else if (input.credential) {
+        await this.deps.credentials.write(credentialTarget(provider), input.credential);
+        if (provider === 'feishu') this.appIds.set(provider, input.credential.user);
+      }
+    } finally {
+      await this.apply(change.record);
+    }
     return this.overview();
+  }
+
+  private async loadAppId(): Promise<void> {
+    const credential = await this.deps.credentials.read(credentialTarget('feishu')).catch(() => undefined);
+    if (credential) this.appIds.set('feishu', credential.user);
   }
 
   private apply(settings: ChannelSettingsRecord): Promise<void> {

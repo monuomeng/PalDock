@@ -98,6 +98,10 @@ export class ChannelHub {
     this.setState(provider, 'error', detail);
   }
 
+  isAttached(provider: ChannelProvider): boolean {
+    return this.adapters.has(provider);
+  }
+
   status(provider: ChannelProvider): ChannelStatus | undefined {
     return this.statuses.get(provider);
   }
@@ -112,8 +116,14 @@ export class ChannelHub {
     queueMicrotask(() => {
       this.kickQueued = false;
       if (this.stopped) return;
-      this.draining ??= this.drainInbox().finally(() => (this.draining = undefined));
-      this.dispatching ??= this.dispatchOutbox().finally(() => (this.dispatching = undefined));
+      // 存储出错（例如数据库忙）只记日志，下次唤醒或定时兜底再试，不让服务因未处理的拒绝退出
+      const settle = (name: string) => (error: unknown) => this.deps.log(`${name} failed: ${errorText(error)}`);
+      this.draining ??= this.drainInbox()
+        .catch(settle('inbox'))
+        .finally(() => (this.draining = undefined));
+      this.dispatching ??= this.dispatchOutbox()
+        .catch(settle('outbox'))
+        .finally(() => (this.dispatching = undefined));
     });
   }
 
@@ -130,6 +140,7 @@ export class ChannelHub {
 
   /** 适配器回调：校验后整体写入 inbox（平台事件 ID 去重），返回后适配器才向平台确认。 */
   private ingest(adapter: ChannelAdapter, raw: InboundEnvelope): void {
+    if (this.stopped) return; // 数据库可能已关闭；平台会补投
     const parsed = InboundEnvelope.safeParse(raw);
     if (!parsed.success || parsed.data.address.provider !== adapter.provider || parsed.data.address.account !== adapter.account) {
       this.deps.log(`${adapter.provider} dropped malformed inbound event`);

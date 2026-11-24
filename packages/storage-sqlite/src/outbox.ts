@@ -11,6 +11,13 @@ const SQL = {
     UPDATE outbox SET status = 'sending', attempts = attempts + 1
      WHERE id = (SELECT id FROM outbox WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY next_attempt_at, id LIMIT 1)
     RETURNING ${COLUMNS.outbox()}`,
+  // 以下两条走部分索引 outbox_pending_by_subject
+  supersede: `UPDATE outbox SET status = 'failed', last_error = '已被同主题的新卡片取代' WHERE status = 'pending' AND target = ? AND subject = ?`,
+  hasSubject: `
+    SELECT 1 FROM channel_messages WHERE conversation_id = ? AND subject = ?
+    UNION ALL
+    SELECT 1 FROM outbox WHERE status = 'pending' AND target = ? AND subject = ?
+    LIMIT 1`,
   markSent: `UPDATE outbox SET status = 'sent', sent_at = ?, last_error = NULL WHERE id = ?`,
   upsertRef: `
     INSERT INTO channel_messages (conversation_id, subject, message_ref, updated_at) VALUES (?, ?, ?, ?)
@@ -34,9 +41,17 @@ export class Outbox implements OutboxPort {
     private readonly clock: Clock,
   ) {}
 
+  /** 有主题时，同会话同主题还没发出的旧卡片作废：发出去的只会是最新内容，也不会在新卡片之后才到。 */
   enqueue(provider: ChannelProvider, conversationId: string, card: Card, subject: string | null = null): number {
-    const at = this.clock.iso();
-    return this.db.get<{ id: number }>(SQL.insert, provider, conversationId, subject, JSON.stringify(card), at, at)!.id;
+    return this.db.transaction(() => {
+      const at = this.clock.iso();
+      if (subject) this.db.run(SQL.supersede, conversationId, subject);
+      return this.db.get<{ id: number }>(SQL.insert, provider, conversationId, subject, JSON.stringify(card), at, at)!.id;
+    });
+  }
+
+  hasSubject(conversationId: string, subject: string): boolean {
+    return this.db.get(SQL.hasSubject, conversationId, subject, conversationId, subject) !== undefined;
   }
 
   claimDue(): OutboxItem | undefined {

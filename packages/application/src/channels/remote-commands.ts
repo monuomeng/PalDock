@@ -241,7 +241,7 @@ export class RemoteCommands implements InboundHandler {
     const token = ctx.conversation.awaitingToken!;
     this.channels.setAwaiting(ctx.conversation.id, null);
     const action = this.channels.useAction(token, ctx.conversation.id);
-    if (!action) return this.proposeTask(ctx, note);
+    if (!action) return this.say(ctx, warning('退回意见没有用上', '这次验收已经在别处处理，或者等待意见的时间已过。这条消息没有建任务，需要的话请重新发送。'));
     try {
       await this.deps.tasks.decideReview(action.targetId, action.targetVersion!, 'rework', note);
       return this.say(ctx, notice('已退回重做', '执行器会按你的意见修改，完成后再通知你。'));

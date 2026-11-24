@@ -288,6 +288,48 @@ describe('外部建任务与结果回发', () => {
     expect(detail.runs[0]!.reviews[0]).toMatchObject({ decision: 'rework', note: '文件名改成 b.txt' });
   });
 
+  it('点了「退回重做」后验收已在桌面处理：下一条消息不当作意见，也不当作新任务', async () => {
+    await enableFeishu();
+    await pair('wang');
+    await registerWorkspace();
+    adapter.say('wang', '写个文件');
+    adapter.click('wang', buttonOf(await cardTitled('新建任务？'), '新建并开始'));
+    const review = await waitFor(() => adapter.cards().find((c) => c.buttons.some((b) => b.label === '退回重做')), '待验收卡片');
+    adapter.click('wang', buttonOf(review, '退回重做'));
+    await cardTitled('请直接回复退回原因');
+    const [task] = (await call('task.list', { limit: 10 })).filter((t) => t.task.originConversationId);
+    const detail = await call('task.get', { taskId: task!.task.id });
+    await call('review.decide', { subtaskId: detail.subtask.id, expectedVersion: detail.subtask.version, decision: 'accept' });
+    adapter.say('wang', '文件名改成 b.txt');
+    await cardTitled('退回意见没有用上');
+    expect(adapter.sent.filter((s) => s.card.title === '新建任务？')).toHaveLength(1);
+  });
+
+  it('解绑后，这个人发起的任务不再往他的单聊发进度', async () => {
+    await enableFeishu();
+    await pair('wang');
+    await registerWorkspace();
+    adapter.say('wang', '[mock:command] 装依赖');
+    adapter.click('wang', buttonOf(await cardTitled('新建任务？'), '新建并开始'));
+    const [task] = await waitFor(async () => {
+      const list = (await call('task.list', { limit: 10 })).filter((t) => t.task.originConversationId);
+      return list.length > 0 && list;
+    }, '外部任务');
+    const detail = await waitFor(async () => {
+      const d = await call('task.get', { taskId: task!.task.id });
+      return d.runs.flatMap((r) => r.approvals).some((a) => a.status === 'pending') && d;
+    }, '等待审批');
+    const [account] = await call('channel.accounts', {});
+    await call('channel.setAccountStatus', { accountId: account!.id, expectedVersion: account!.version, status: 'revoked' });
+    const sent = adapter.sent.length;
+    const edits = adapter.edits.length;
+    const approval = detail.runs.flatMap((r) => r.approvals).find((a) => a.status === 'pending')!;
+    await call('approval.decide', { approvalId: approval.id, expectedVersion: approval.version, decision: 'allow_once' });
+    await waitFor(async () => (await call('task.get', { taskId: task!.task.id })).subtask.status === 'review' || undefined, '待验收');
+    await new Promise((r) => setTimeout(r, 200));
+    expect([adapter.sent.length, adapter.edits.length]).toEqual([sent, edits]);
+  });
+
   it('不点确认就不建任务；取消命令要二次确认', async () => {
     await enableFeishu();
     await pair('wang');
@@ -349,6 +391,19 @@ describe('审批升级', () => {
     const decided = await cardTitled('审批已拒绝');
     expect(decided.lines.at(-1)).toBe('在电脑上已拒绝');
     expect(adapter.edits.some((e) => e.card === decided)).toBe(true);
+  });
+
+  it('渠道停用时不升级（也不标记已升级）；重新启用后照常升级', async () => {
+    await enableFeishu();
+    await pair('wang');
+    await waitingApproval('[mock:command] 装依赖');
+    const [feishu] = await call('channel.overview', {});
+    const [off] = await call('channel.configure', { provider: 'feishu', expectedVersion: feishu!.settings.version, enabled: false });
+    service.setPresence({ locked: true, idle: false });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(events.some((e) => e.type === 'approval.escalated')).toBe(false);
+    await call('channel.configure', { provider: 'feishu', expectedVersion: off!.settings.version, enabled: true });
+    await cardTitled('电脑上有一个审批等你处理');
   });
 
   it('桌面在场且未到 3 分钟时不升级；没有已绑定的单聊时也不升级', async () => {
