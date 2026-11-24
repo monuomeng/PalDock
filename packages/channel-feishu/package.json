@@ -3,8 +3,15 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.76.0",
+    "@paldock/contracts": "workspace:*",
     "@paldock/platform": "workspace:*",
     "@paldock/storage-sqlite": "workspace:*"
   }

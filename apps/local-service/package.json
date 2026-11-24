@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@paldock/application": "workspace:*",
+    "@paldock/channel-feishu": "workspace:*",
     "@paldock/contracts": "workspace:*",
     "@paldock/domain": "workspace:*",
     "@paldock/platform": "workspace:*",

@@ -45,6 +45,9 @@ importers:
       '@paldock/application':
         specifier: workspace:*
         version: link:../../packages/application
+      '@paldock/channel-feishu':
+        specifier: workspace:*
+        version: link:../../packages/channel-feishu
       '@paldock/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -81,6 +84,9 @@ importers:
       '@larksuiteoapi/node-sdk':
         specifier: 1.76.0
         version: 1.76.0
+      '@paldock/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@paldock/platform':
         specifier: workspace:*
         version: link:../platform

@@ -3,5 +3,5 @@
   "compilerOptions": { "rootDir": "src", "outDir": "dist" },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"],
-  "references": [{ "path": "../../packages/application" },{ "path": "../../packages/runtime-codex" },{ "path": "../../packages/contracts" },{ "path": "../../packages/domain" },{ "path": "../../packages/storage-sqlite" },{ "path": "../../packages/platform" }]
+  "references": [{ "path": "../../packages/application" },{ "path": "../../packages/runtime-codex" },{ "path": "../../packages/contracts" },{ "path": "../../packages/domain" },{ "path": "../../packages/storage-sqlite" },{ "path": "../../packages/platform" },{ "path": "../../packages/channel-feishu" }]
 }

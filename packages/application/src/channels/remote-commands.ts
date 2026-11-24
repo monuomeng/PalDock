@@ -65,8 +65,9 @@ export class RemoteCommands implements InboundHandler {
   async text(ctx: InboundContext, text: string): Promise<InboundOutcome> {
     const trimmed = text.trim();
     if (trimmed.startsWith('/')) return this.command(ctx, trimmed);
+    // 图片、文件等非文字消息由适配器转成空文本
+    if (trimmed.length === 0) return this.say(ctx, notice('暂时只支持文字消息'));
     if (ctx.conversation.awaitingToken) return this.completeRework(ctx, trimmed);
-    if (trimmed.length === 0) return 'done';
     return this.proposeTask(ctx, trimmed);
   }
 
@@ -242,7 +243,6 @@ export class RemoteCommands implements InboundHandler {
     this.channels.setAwaiting(ctx.conversation.id, null);
     const action = this.channels.useAction(token, ctx.conversation.id);
     if (!action) return this.proposeTask(ctx, note);
-    if (!note) return this.say(ctx, notice('退回原因不能为空', '请重新点「退回重做」。'));
     try {
       await this.deps.tasks.decideReview(action.targetId, action.targetVersion!, 'rework', note);
       return this.say(ctx, notice('已退回重做', '执行器会按你的意见修改，完成后再通知你。'));
