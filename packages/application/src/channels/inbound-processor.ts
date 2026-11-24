@@ -7,13 +7,12 @@ import type {
   PersistentEvent,
   StorePort,
 } from '@paldock/contracts';
-import { P2_DEFAULTS, type P2Limits } from '@paldock/domain';
+import type { P2Limits } from '@paldock/domain';
 import { pairingCard } from './cards.js';
 import type { InboundOutcome } from './channel-hub.js';
 
 /** 处理一条消息需要的上下文：已识别的渠道账号与会话。 */
 export interface InboundContext {
-  envelope: InboundEnvelope;
   account: ChannelAccountRecord;
   conversation: ConversationRecord;
 }
@@ -30,8 +29,8 @@ export interface InboundProcessorDeps {
   publish(events: PersistentEvent[]): void;
   /** 回复卡片：写 outbox 并唤醒投递。 */
   reply(conversation: ConversationRecord, card: Card): void;
-  now?: () => number;
-  limits?: Partial<P2Limits>;
+  now: () => Date;
+  limits: P2Limits;
 }
 
 /**
@@ -40,14 +39,13 @@ export interface InboundProcessorDeps {
  * 每一步拒绝都写审计事件，不往下走；外部文本在这里之后仍是不可信内容。
  */
 export class InboundProcessor {
-  private readonly limits: P2Limits;
-  private readonly now: () => number;
   /** 每个渠道账号最近一分钟内的消息时间戳（内存即可：重启后清零不影响安全）。 */
   private readonly recent = new Map<string, number[]>();
 
-  constructor(private readonly deps: InboundProcessorDeps) {
-    this.limits = { ...P2_DEFAULTS, ...deps.limits };
-    this.now = deps.now ?? Date.now;
+  constructor(private readonly deps: InboundProcessorDeps) {}
+
+  private get limits(): P2Limits {
+    return this.deps.limits;
   }
 
   async process(envelope: InboundEnvelope): Promise<InboundOutcome> {
@@ -64,7 +62,7 @@ export class InboundProcessor {
       if (!conversation.groupAllowed) return reject('group_not_allowed');
       if (body.kind === 'text' && !body.mentionsBot) return reject('not_mentioned');
     }
-    const ctx = { envelope, account, conversation };
+    const ctx = { account, conversation };
     return body.kind === 'action' ? this.deps.handler.action(ctx, body.token) : this.deps.handler.text(ctx, body.text);
   }
 
@@ -83,7 +81,7 @@ export class InboundProcessor {
   }
 
   private withinRate(accountId: string): boolean {
-    const now = this.now();
+    const now = this.deps.now().getTime();
     const window = (this.recent.get(accountId) ?? []).filter((t) => now - t < 60_000);
     const ok = window.length < this.limits.inboundPerMinute;
     if (ok) window.push(now);

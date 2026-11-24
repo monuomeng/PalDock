@@ -1,4 +1,4 @@
-import { ChannelDeliveryError } from '@paldock/contracts';
+import { ChannelDeliveryError, classifyNetworkError } from '@paldock/contracts';
 import { Agent, fetch, ProxyAgent, type Dispatcher } from 'undici';
 
 /** Bot API 返回 ok=false 时的错误；description 来自 Telegram，不含 Token。 */
@@ -72,22 +72,15 @@ function sanitize(error: unknown, redact: (text: string) => string): Error {
   return result;
 }
 
-/** 连接没建立起来（含代理拒绝建立隧道）：请求肯定没到 Telegram，可重试。 */
-const CONNECT_FAILURES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT']);
-const isTunnelFailure = (message: string) => message.includes('HTTP Tunneling');
-
-/** Bot API 错误 → 投递结果：429、5xx、连不上可重试；超时与连接中断不确定是否已发出；其余 4xx 不重试。 */
+/** Bot API 错误 → 投递结果：429、5xx、连不上（含代理拒绝建立隧道）可重试；超时与连接中断不确定是否已发出；其余 4xx 不重试。 */
 export function classifyTelegramError(error: unknown): ChannelDeliveryError {
   if (error instanceof ChannelDeliveryError) return error;
-  if (error instanceof TelegramApiError) {
-    if (error.status === 429 || error.status >= 500) return new ChannelDeliveryError('retry', error.message);
-    return new ChannelDeliveryError('failed', error.message);
-  }
-  const e = error as { name?: string; code?: string; message?: string };
-  const message = (e.message ?? String(error)).slice(0, 200);
-  if ((e.code && CONNECT_FAILURES.has(e.code)) || isTunnelFailure(message)) return new ChannelDeliveryError('retry', `网络不可用：${message}`);
-  if (e.name === 'TimeoutError') return new ChannelDeliveryError('unknown', 'Telegram 接口超时');
-  return new ChannelDeliveryError('unknown', `连接中断：${message}`);
+  if (error instanceof TelegramApiError) return classifyNetworkError({ status: error.status, message: error.message });
+  const e = error as { code?: string; message?: string };
+  const message = `Telegram：${(e.message ?? String(error)).slice(0, 200)}`;
+  // undici 的代理隧道失败没有专门的错误码（UND_ERR_ABORTED 也用于其他中止），只能看说明
+  if (message.includes('HTTP Tunneling')) return new ChannelDeliveryError('retry', `代理不可用：${message}`);
+  return classifyNetworkError({ ...(e.code ? { code: e.code } : {}), message });
 }
 
 /** 编辑内容与原消息相同时 Telegram 返回 400，按成功处理。 */

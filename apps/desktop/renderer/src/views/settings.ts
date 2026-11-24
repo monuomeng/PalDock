@@ -41,7 +41,7 @@ export async function settingsView(rerender: () => void): Promise<HTMLElement> {
     call('workspace.list', {}),
   ]);
   const error = h('p', { class: 'error', role: 'alert' });
-  /** 执行一个修改，失败时显示原因；成功后由事件触发重绘，这里也主动重绘一次。 */
+  /** 执行一个修改，失败时显示原因；成功后重绘（拒绝配对等操作不产生事件）。 */
   const act = (run: () => Promise<unknown>) => async () => {
     error.textContent = '';
     try {

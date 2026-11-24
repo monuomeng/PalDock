@@ -76,7 +76,13 @@ describe('配对', () => {
     const second = store.channels.openPairing(account, conversation.id, 60_000, 2)!;
     expect(second.code).not.toBe(first.code);
     expect(store.channels.listPairings().map((p) => p.code)).toEqual([second.code]);
+    // 上限按全部待确认的配对算：第二个陌生账号还能拿到，第三个拿不到
+    const other = seedDm('ou_2');
+    expect(store.channels.openPairing(other.account, other.conversation.id, 60_000, 2)).toBeDefined();
+    const third = seedDm('ou_3');
+    expect(store.channels.openPairing(third.account, third.conversation.id, 60_000, 2)).toBeUndefined();
     expect(plan(`SELECT code FROM pairing_requests WHERE status = 'pending' AND account_id = 'a' AND expires_at > ''`)).toContain('pairing_pending');
+    expect(plan(`SELECT count(*) FROM pairing_requests WHERE status = 'pending' AND expires_at > ''`)).toContain('pairing_pending');
   });
 
   it('确认后账号绑定到本机所有者，其余待处理的配对作废；配对码只能用一次', () => {

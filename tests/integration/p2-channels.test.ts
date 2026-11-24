@@ -122,7 +122,7 @@ beforeEach(async () => {
     runtime: new CodexAdapter({ configuredPath: MOCK_APP_SERVER_PATH, extraEnv: { MOCK_CODEX_HOME: join(root, 'mock-home') }, cancelWaitMs: 3_000 }),
     limits: { confirmIntervalMs: 50, expiryScanMs: 50, outputCheckpointMs: 50 },
     channels: {
-      createAdapter: () => adapter,
+      createAdapter: async () => adapter,
       credentials,
       limits: { outboxSpacingMs: 0, escalationScanMs: 50, outboxRetryBaseMs: 20 },
     },

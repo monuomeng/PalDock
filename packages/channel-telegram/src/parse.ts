@@ -60,7 +60,7 @@ function address(bot: BotIdentity, chat: TgChat, kind: ConversationKind): Channe
 
 /**
  * 群里只认明确发给机器人的消息：@机器人、回复机器人的消息、或 /命令@机器人。
- * 去掉文本里的 @机器人，命令后缀 @机器人 留给命令层处理。
+ * 去掉文本里的 @机器人 和命令后缀 @机器人（/help@bot → /help），命令层只看到平台无关的文本。
  */
 function textOf(message: TgMessage, bot: BotIdentity): { text: string; mentionsBot: boolean } {
   const text = message.text ?? '';
@@ -76,6 +76,8 @@ function textOf(message: TgMessage, bot: BotIdentity): { text: string; mentionsB
       stripped = stripped.slice(0, entity.offset) + stripped.slice(entity.offset + entity.length);
     } else if (entity.type === 'bot_command' && part.toLowerCase().endsWith(handle)) {
       mentionsBot = true;
+      const end = entity.offset + entity.length;
+      stripped = stripped.slice(0, end - handle.length) + stripped.slice(end);
     }
   }
   return { text: stripped.replace(/\s+/g, ' ').trim(), mentionsBot };

@@ -1,4 +1,4 @@
-import type { RemoteApprovalLevel, RiskLevel } from '@paldock/contracts';
+import type { ApprovalKind, RemoteApprovalLevel, RiskLevel } from '@paldock/contracts';
 
 /** 远程审批等级决定升级到外部渠道后能批准哪些风险级别；L0 只提醒。 */
 const REMOTELY_APPROVABLE: Readonly<Record<RemoteApprovalLevel, ReadonlySet<RiskLevel>>> = {
@@ -7,8 +7,9 @@ const REMOTELY_APPROVABLE: Readonly<Record<RemoteApprovalLevel, ReadonlySet<Risk
   L2: new Set(['low', 'medium', 'high']),
 };
 
-export function canApproveRemotely(level: RemoteApprovalLevel, risk: RiskLevel): boolean {
-  return REMOTELY_APPROVABLE[level].has(risk);
+/** 外部渠道能否批准这条审批：看项目等级与风险；权限扩展在任何一端都只能拒绝。拒绝总是允许，不经这里。 */
+export function canApproveRemotely(level: RemoteApprovalLevel, approval: { riskLevel: RiskLevel; kind: ApprovalKind }): boolean {
+  return approval.kind !== 'permissions' && REMOTELY_APPROVABLE[level].has(approval.riskLevel);
 }
 
 /** 用户 2026-11-24 确认 3 分钟（07 待决事项 5）。 */

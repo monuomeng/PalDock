@@ -171,7 +171,7 @@ export interface ChannelStorePort {
   listGroups(): ConversationRecord[];
   activeDirectConversations(): ConversationRecord[];
   setConversation(id: string, expectedVersion: number, settings: { groupAllowed: boolean; defaultWorkspaceId: string | null }): Change<ConversationRecord>;
-  setAwaiting(conversationId: string, token: string | null): ConversationRecord | undefined;
+  setAwaiting(conversationId: string, token: string | null): void;
   openPairing(
     account: ChannelAccountRecord,
     conversationId: string,

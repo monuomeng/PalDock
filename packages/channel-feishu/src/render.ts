@@ -1,7 +1,6 @@
 import type { Card, ConversationKind } from '@paldock/contracts';
 
 const TEMPLATE = { info: 'blue', success: 'green', warning: 'orange', danger: 'red' } as const;
-const BUTTON_TYPE = { primary: 'primary', danger: 'danger', default: 'default' } as const;
 
 /** 按钮回传的值：动作令牌，以及会话类型（卡片回调里只有 chat ID，没有单聊/群聊之分）。 */
 export interface ButtonValue {
@@ -21,7 +20,7 @@ export function renderCard(card: Card, kind: ConversationKind): string {
       actions: card.buttons.map((b) => ({
         tag: 'button',
         text: { tag: 'plain_text', content: b.label },
-        type: BUTTON_TYPE[b.style],
+        type: b.style, // 飞书按钮的 type 与 Card 的 style 同名
         value: { t: b.token, k: kind } satisfies ButtonValue,
       })),
     });

@@ -97,6 +97,21 @@ export class ChannelDeliveryError extends Error {
   }
 }
 
+/** 连接没建立起来的网络错误码：请求肯定没到平台，可以重试。 */
+const CONNECT_FAILURES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT']);
+
+/**
+ * 各渠道共用的网络层错误分类（平台自己的错误码由适配器先处理）：
+ * 连不上可重试；HTTP 429 / 5xx 可重试；其余网络错误（超时、连接中断）不确定是否已发出。
+ */
+export function classifyNetworkError(error: { code?: string; status?: number; message: string }): ChannelDeliveryError {
+  const { code, status, message } = error;
+  if (code && CONNECT_FAILURES.has(code)) return new ChannelDeliveryError('retry', `网络不可用：${message}`);
+  if (status === 429 || (status !== undefined && status >= 500)) return new ChannelDeliveryError('retry', `平台暂时不可用（${status}）：${message}`);
+  if (status !== undefined) return new ChannelDeliveryError('failed', `平台拒绝了请求（${status}）：${message}`);
+  return new ChannelDeliveryError('unknown', `网络中断或超时：${message}`);
+}
+
 export interface ChannelAdapter {
   readonly provider: ChannelProvider;
   /** 渠道账号（飞书 App ID、Telegram bot ID），是 inbox 队列名与会话键的一部分。 */
@@ -132,7 +147,6 @@ export type ChannelActionKind = z.infer<typeof ChannelActionKind>;
 
 /** 入站被拒绝的原因，写入审计事件。 */
 export const InboundRejection = z.enum([
-  'malformed',
   'unbound',
   'revoked',
   'pairing_limit',

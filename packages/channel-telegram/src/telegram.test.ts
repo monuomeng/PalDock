@@ -29,7 +29,9 @@ describe('Telegram 更新解析', () => {
     expect(mention?.body).toEqual({ kind: 'text', text: '/tasks', mentionsBot: true });
     expect(mention?.address.kind).toBe('group');
     expect(parseUpdate(text({ chat: group, text: '好的', reply_to_message: { from: { id: 42 } } }), bot)?.body).toMatchObject({ mentionsBot: true });
-    expect(parseUpdate(text({ chat: group, text: '/tasks@paldockbot', entities: [{ type: 'bot_command', offset: 0, length: 17 }] }), bot)?.body).toMatchObject({
+    expect(parseUpdate(text({ chat: group, text: '/status@paldockbot abc', entities: [{ type: 'bot_command', offset: 0, length: 18 }] }), bot)?.body).toEqual({
+      kind: 'text',
+      text: '/status abc',
       mentionsBot: true,
     });
     expect(parseUpdate(text({ chat: group, text: '@other hi', entities: [{ type: 'mention', offset: 0, length: 6 }] }), bot)?.body).toMatchObject({

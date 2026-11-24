@@ -48,10 +48,12 @@ describe('state machines', () => {
 
 describe('approval policy', () => {
   it('远程审批等级', () => {
-    expect(canApproveRemotely('L0', 'low')).toBe(false);
-    expect(canApproveRemotely('L1', 'medium')).toBe(true);
-    expect(canApproveRemotely('L1', 'high')).toBe(false);
-    expect(canApproveRemotely('L2', 'high')).toBe(true);
+    const of = (riskLevel: 'low' | 'medium' | 'high', kind: 'command' | 'permissions' = 'command') => ({ riskLevel, kind });
+    expect(canApproveRemotely('L0', of('low'))).toBe(false);
+    expect(canApproveRemotely('L1', of('medium'))).toBe(true);
+    expect(canApproveRemotely('L1', of('high'))).toBe(false);
+    expect(canApproveRemotely('L2', of('high'))).toBe(true);
+    expect(canApproveRemotely('L2', of('low', 'permissions'))).toBe(false);
   });
 
   it('桌面优先，满足任一条件才升级', () => {

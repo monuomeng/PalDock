@@ -1,5 +1,5 @@
 import type { Card, ChannelProvider, ConversationRecord, EscalationCandidate, PersistentEvent, StorePort, SubtaskStatus } from '@paldock/contracts';
-import { canApproveRemotely, P2_DEFAULTS, shouldEscalateApproval, type DesktopPresence, type P2Limits } from '@paldock/domain';
+import { canApproveRemotely, shouldEscalateApproval, type DesktopPresence, type P2Limits } from '@paldock/domain';
 import { approvalCard, approvalDecidedCard, taskProgressCard } from './cards.js';
 
 export interface NotifierDeps {
@@ -8,8 +8,8 @@ export interface NotifierDeps {
   /** 写 outbox 并唤醒投递。 */
   send(conversation: ConversationRecord, card: Card, subject?: string): void;
   presence(): DesktopPresence;
-  now?: () => Date;
-  limits?: Partial<P2Limits>;
+  now: () => Date;
+  limits: P2Limits;
 }
 
 /** 从外部建的任务在这些节点通知来源会话。 */
@@ -25,12 +25,10 @@ const approvalSubject = (approvalId: string) => `approval:${approvalId}`;
  * - 审批在任何一端处理后，作废外部卡片上的按钮并更新卡片。
  */
 export class ChannelNotifier {
-  private readonly limits: P2Limits;
-  private readonly now: () => Date;
+  constructor(private readonly deps: NotifierDeps) {}
 
-  constructor(private readonly deps: NotifierDeps) {
-    this.limits = { ...P2_DEFAULTS, ...deps.limits };
-    this.now = deps.now ?? (() => new Date());
+  private get limits(): P2Limits {
+    return this.deps.limits;
   }
 
   private get channels() {
@@ -83,14 +81,14 @@ export class ChannelNotifier {
 
   /** 定时调用：把满足升级条件的待审批发到所有已绑定的单聊；没有可发的单聊时不标记，绑定后再升级。 */
   escalate(): void {
+    // 先看有没有可发的单聊（便宜的查询），没有时不做联表扫描
+    const targets = this.channels.activeDirectConversations();
+    if (targets.length === 0) return;
     const presence = this.deps.presence();
-    const nowMs = this.now().getTime();
+    const nowMs = this.deps.now().getTime();
     const candidates = this.channels
       .escalationCandidates()
       .filter((c) => shouldEscalateApproval(Date.parse(c.approval.requestedAt), nowMs, presence, this.limits.escalationWaitMs));
-    if (candidates.length === 0) return;
-    const targets = this.channels.activeDirectConversations();
-    if (targets.length === 0) return;
     const providers = [...new Set(targets.map((t) => t.provider))] as ChannelProvider[];
     for (const candidate of candidates) {
       this.deps.store.transaction(() => {
@@ -104,7 +102,7 @@ export class ChannelNotifier {
 
   private sendApproval(conversation: ConversationRecord, c: EscalationCandidate, nowMs: number): void {
     const { approval } = c;
-    const remote = canApproveRemotely(c.remoteApprovalLevel, approval.riskLevel) && approval.kind !== 'permissions';
+    const remote = canApproveRemotely(c.remoteApprovalLevel, approval);
     const ttlMs = Math.max(0, Date.parse(approval.expiresAt) - nowMs);
     // 拒绝总是允许；不能远程批准时只发提醒，不放按钮（避免只有「拒绝」一个按钮引起误会）
     const buttons = remote

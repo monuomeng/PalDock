@@ -11,7 +11,7 @@ import {
   type OutboxItem,
   type StorePort,
 } from '@paldock/contracts';
-import { P2_DEFAULTS, type P2Limits } from '@paldock/domain';
+import type { P2Limits } from '@paldock/domain';
 
 export type InboundOutcome = 'done' | 'rejected';
 
@@ -21,8 +21,8 @@ export interface ChannelHubDeps {
   log(message: string): void;
   /** 处理一条已落库的入站事件（身份、准入、路由、命令），见 InboundProcessor。 */
   process(envelope: InboundEnvelope): Promise<InboundOutcome>;
-  now?: () => Date;
-  limits?: Partial<P2Limits>;
+  now: () => Date;
+  limits: P2Limits;
 }
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 300);
@@ -39,21 +39,21 @@ export const conversationKey = (a: ChannelAddress) => [a.provider, a.account, a.
 export class ChannelHub {
   private readonly adapters = new Map<ChannelProvider, ChannelAdapter>();
   private readonly statuses = new Map<ChannelProvider, ChannelStatus>();
-  private readonly limits: P2Limits;
-  private readonly now: () => Date;
   private draining: Promise<void> | undefined;
   private dispatching: Promise<void> | undefined;
   private timer: NodeJS.Timeout | undefined;
   private stopped = false;
+  private kickQueued = false;
 
-  constructor(private readonly deps: ChannelHubDeps) {
-    this.limits = { ...P2_DEFAULTS, ...deps.limits };
-    this.now = deps.now ?? (() => new Date());
+  constructor(private readonly deps: ChannelHubDeps) {}
+
+  private get limits(): P2Limits {
+    return this.deps.limits;
   }
 
-  /** 定时兜底：租约过期的入站事件、到期重试的出站消息。 */
+  /** 定时兜底：租约过期的入站事件、到期重试的出站消息；没有连接任何渠道时不做事。 */
   start(): void {
-    this.timer = setInterval(() => this.kick(), 5_000);
+    this.timer = setInterval(() => this.adapters.size > 0 && this.kick(), 5_000);
     this.timer.unref();
     this.kick();
   }
@@ -98,25 +98,29 @@ export class ChannelHub {
     this.setState(provider, 'error', detail);
   }
 
-  isAttached(provider: ChannelProvider): boolean {
-    return this.adapters.has(provider);
-  }
-
   status(provider: ChannelProvider): ChannelStatus | undefined {
     return this.statuses.get(provider);
   }
 
-  /** 有新的入站或出站工作：各自串行跑一轮，已在跑时不重复启动。 */
+  /**
+   * 有新的入站或出站工作：各自串行跑一轮，已在跑时不重复启动。
+   * 推迟到当前同步代码之后再领取，调用方可以在事务里放心调用（事务提交后才会看到新行）。
+   */
   kick(): void {
-    if (this.stopped) return;
-    this.draining ??= this.drainInbox().finally(() => (this.draining = undefined));
-    this.dispatching ??= this.dispatchOutbox().finally(() => (this.dispatching = undefined));
+    if (this.stopped || this.kickQueued) return;
+    this.kickQueued = true;
+    queueMicrotask(() => {
+      this.kickQueued = false;
+      if (this.stopped) return;
+      this.draining ??= this.drainInbox().finally(() => (this.draining = undefined));
+      this.dispatching ??= this.dispatchOutbox().finally(() => (this.dispatching = undefined));
+    });
   }
 
   private setState(provider: ChannelProvider, state: ChannelState, detail: string | null): void {
     const previous = this.statuses.get(provider);
     if (previous?.state === state && previous.detail === detail) return;
-    const at = this.now().toISOString();
+    const at = this.deps.now().toISOString();
     // 从断线或出错恢复：之后一段时间内平台可能补投延迟的消息，界面据此提示
     const recovered = state === 'connected' && (previous?.state === 'reconnecting' || previous?.state === 'error');
     const status: ChannelStatus = { provider, state, detail, since: at, recoveredAt: recovered ? at : (previous?.recoveredAt ?? null) };
@@ -179,14 +183,13 @@ export class ChannelHub {
     try {
       const ref = item.subject ? store.outbox.messageRef(item.conversationId, item.subject) : undefined;
       if (ref) {
-        const edited = await adapter.edit(address, ref, item.card).then(
-          () => true,
-          (error: unknown) => {
-            if (error instanceof ChannelDeliveryError && error.outcome === 'failed') return false;
-            throw error;
-          },
-        );
-        if (edited) return store.outbox.markSent(item, ref);
+        try {
+          await adapter.edit(address, ref, item.card);
+          return store.outbox.markSent(item, ref);
+        } catch (error) {
+          // 原卡片不能再更新（被删、过期）时改发新卡片
+          if (!(error instanceof ChannelDeliveryError && error.outcome === 'failed')) throw error;
+        }
       }
       store.outbox.markSent(item, await adapter.send(address, item.card));
     } catch (error) {

@@ -9,7 +9,7 @@ import {
   type TaskRecord,
   type WorkspaceRecord,
 } from '@paldock/contracts';
-import { canApproveRemotely, P2_DEFAULTS, type P2Limits } from '@paldock/domain';
+import { canApproveRemotely, type P2Limits } from '@paldock/domain';
 import type { TaskService } from '../task-service.js';
 import {
   confirmCancelCard,
@@ -31,7 +31,7 @@ export interface RemoteCommandsDeps {
   publish(events: PersistentEvent[]): void;
   /** 回复卡片；subject 非空时更新本会话里同主题的那张卡片。 */
   reply(conversation: ConversationRecord, card: Card, subject?: string): void;
-  limits?: Partial<P2Limits>;
+  limits: P2Limits;
 }
 
 /** 群里只能看状态和建任务；取消、审批、验收只在单聊（计划 P2-08）。 */
@@ -47,10 +47,10 @@ const errorText = (error: unknown) => (error instanceof CodedError ? error.messa
  * 以及卡片按钮背后的一次性动作。所有改变状态的操作都调用与桌面相同的用例（TaskService）。
  */
 export class RemoteCommands implements InboundHandler {
-  private readonly limits: P2Limits;
+  constructor(private readonly deps: RemoteCommandsDeps) {}
 
-  constructor(private readonly deps: RemoteCommandsDeps) {
-    this.limits = { ...P2_DEFAULTS, ...deps.limits };
+  private get limits(): P2Limits {
+    return this.deps.limits;
   }
 
   private get channels() {
@@ -72,9 +72,8 @@ export class RemoteCommands implements InboundHandler {
   }
 
   private command(ctx: InboundContext, text: string): InboundOutcome {
-    // Telegram 群里的命令可能带 @机器人名，例如 /help@paldock_bot
     const [head = '', ...rest] = text.split(/\s+/);
-    const name = head.slice(1).split('@', 1)[0]!.toLowerCase();
+    const name = head.slice(1).toLowerCase();
     const arg = rest.join(' ').trim();
     const group = ctx.conversation.kind === 'group';
     switch (name) {
@@ -230,7 +229,7 @@ export class RemoteCommands implements InboundHandler {
     const context = this.channels.approvalContext(action.targetId);
     if (!context || context.approval.status !== 'pending') throw new CodedError('conflict', '这个审批已经处理过了');
     const approve = action.kind === 'approve';
-    if (approve && (!canApproveRemotely(context.remoteApprovalLevel, context.approval.riskLevel) || context.approval.kind === 'permissions')) {
+    if (approve && !canApproveRemotely(context.remoteApprovalLevel, context.approval)) {
       throw new CodedError('bad_request', '这个审批只能在电脑上批准');
     }
     // 成功后卡片由审批决定事件统一更新（桌面、各渠道一致），这里不另外回复

@@ -34,9 +34,9 @@ export const P2_DEFAULTS = {
   escalationScanMs: 15_000,
   /** 系统空闲多久算「空闲」（升级条件之一）。 */
   idleThresholdSeconds: 5 * 60,
-  /** 配对码有效期与每个渠道账号同时待处理的上限。 */
+  /** 配对码有效期；全部渠道同时待确认的配对上限（每个账号只有一个，沿用未过期的）。 */
   pairingTtlMs: 60 * 60 * 1000,
-  maxPendingPairings: 3,
+  maxPendingPairings: 5,
   /** 每个渠道账号每分钟最多处理的入站消息，超出的丢弃并记审计。 */
   inboundPerMinute: 10,
   /** 入站事件的处理租约；进程崩溃后超时的事件被重新领取。 */

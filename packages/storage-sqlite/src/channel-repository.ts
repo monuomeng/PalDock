@@ -27,6 +27,16 @@ const OWNER = 'principal_owner';
 /** 配对码字母表：去掉 0/O、1/I/L 等容易看错的字符。 */
 const PAIRING_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
+/** 审批连同项目等级和任务标题（升级卡片与远程审批要用）。 */
+const CANDIDATE_SELECT = `
+    SELECT ${COLUMNS.approval('a.')}, w.remote_approval_level AS remoteApprovalLevel, w.name AS workspaceName,
+           t.id AS taskId, t.title AS taskTitle
+      FROM approvals a
+      JOIN runs r ON r.id = a.run_id
+      JOIN subtasks s ON s.id = r.subtask_id
+      JOIN tasks t ON t.id = s.task_id
+      JOIN workspaces w ON w.id = t.workspace_id`;
+
 const SQL = {
   // 显示名会变：已存在时只更新显示名，版本不变（版本只随状态变化）
   upsertAccount: `
@@ -65,11 +75,11 @@ const SQL = {
     UPDATE external_conversations SET group_allowed = ?, default_workspace_id = ?, version = version + 1
      WHERE id = ? AND version = ?
     RETURNING ${COLUMNS.conversation()}`,
-  setAwaiting: `UPDATE external_conversations SET awaiting_token = ? WHERE id = ? RETURNING ${COLUMNS.conversation()}`,
+  setAwaiting: `UPDATE external_conversations SET awaiting_token = ? WHERE id = ?`,
   // 以下三条都走部分索引 pairing_pending（status = 'pending'）
   selectOpenPairing: `
     SELECT code FROM pairing_requests WHERE status = 'pending' AND account_id = ? AND expires_at > ? ORDER BY created_at DESC LIMIT 1`,
-  countOpenPairings: `SELECT count(*) AS n FROM pairing_requests WHERE status = 'pending' AND account_id = ? AND expires_at > ?`,
+  countOpenPairings: `SELECT count(*) AS n FROM pairing_requests WHERE status = 'pending' AND expires_at > ?`,
   selectPairings: `
     SELECT ${COLUMNS.pairing('p.')}, a.provider, a.display_name AS displayName
       FROM pairing_requests p JOIN channel_accounts a ON a.id = p.account_id
@@ -100,26 +110,9 @@ const SQL = {
   upsertCursor: `
     INSERT INTO channel_cursors (provider, account, cursor, updated_at) VALUES (?, ?, ?, ?)
     ON CONFLICT (provider, account) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at`,
-  // 升级扫描走部分索引 approvals_pending_unescalated；联表取项目等级和任务标题
-  escalationCandidates: `
-    SELECT ${COLUMNS.approval('a.')}, w.remote_approval_level AS remoteApprovalLevel, w.name AS workspaceName,
-           t.id AS taskId, t.title AS taskTitle
-      FROM approvals a
-      JOIN runs r ON r.id = a.run_id
-      JOIN subtasks s ON s.id = r.subtask_id
-      JOIN tasks t ON t.id = s.task_id
-      JOIN workspaces w ON w.id = t.workspace_id
-     WHERE a.status = 'pending' AND a.escalated_at IS NULL
-     ORDER BY a.requested_at`,
-  approvalContext: `
-    SELECT ${COLUMNS.approval('a.')}, w.remote_approval_level AS remoteApprovalLevel, w.name AS workspaceName,
-           t.id AS taskId, t.title AS taskTitle
-      FROM approvals a
-      JOIN runs r ON r.id = a.run_id
-      JOIN subtasks s ON s.id = r.subtask_id
-      JOIN tasks t ON t.id = s.task_id
-      JOIN workspaces w ON w.id = t.workspace_id
-     WHERE a.id = ?`,
+  // 升级扫描走部分索引 approvals_pending_unescalated
+  escalationCandidates: `${CANDIDATE_SELECT} WHERE a.status = 'pending' AND a.escalated_at IS NULL ORDER BY a.requested_at`,
+  approvalContext: `${CANDIDATE_SELECT} WHERE a.id = ?`,
   markEscalated: `
     UPDATE approvals SET escalated_at = ? WHERE id = ? AND status = 'pending' AND escalated_at IS NULL RETURNING id`,
 } as const;
@@ -222,14 +215,13 @@ export class ChannelRepository implements ChannelStorePort {
     });
   }
 
-  setAwaiting(conversationId: string, token: string | null): ConversationRecord | undefined {
-    const row = this.db.get<ConversationRow>(SQL.setAwaiting, token, conversationId);
-    return row && toConversation(row);
+  setAwaiting(conversationId: string, token: string | null): void {
+    this.db.run(SQL.setAwaiting, token, conversationId);
   }
 
   /**
-   * 陌生账号的配对码：已有未过期的就沿用（不刷屏），否则在待处理数未达上限时新建。
-   * 返回 undefined 表示已达上限。
+   * 陌生账号的配对码：已有未过期的就沿用（不刷屏）；否则在全部渠道待确认的配对未达上限时新建，
+   * 防止陌生人轮换账号把桌面的待确认列表刷满。返回 undefined 表示已达上限。
    */
   openPairing(
     account: ChannelAccountRecord,
@@ -241,7 +233,7 @@ export class ChannelRepository implements ChannelStorePort {
       const now = this.clock.iso();
       const open = this.db.get<{ code: string }>(SQL.selectOpenPairing, account.id, now);
       if (open) return { code: open.code, events: [] };
-      if (this.db.get<{ n: number }>(SQL.countOpenPairings, account.id, now)!.n >= maxPending) return undefined;
+      if (this.db.get<{ n: number }>(SQL.countOpenPairings, now)!.n >= maxPending) return undefined;
       const code = pairingCode();
       this.db.run(SQL.insertPairing, code, account.id, conversationId, now, this.clock.isoAfter(ttlMs));
       return { code, events: [this.events.append(account.id, { type: 'channel.pairing_requested', payload: { provider: account.provider } })] };

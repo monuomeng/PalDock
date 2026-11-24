@@ -162,8 +162,7 @@ class CodexRun implements RuntimeRun {
         { threadId: thread.id, input: [{ type: 'text', text: request.prompt, text_elements: [] }] },
         timeout,
       );
-      this.turnId = turn.id;
-      this.emit({ type: 'turn', turnId: turn.id });
+      this.adoptTurn(turn.id);
       const early = this.earlyCompletions.get(turn.id);
       if (early) this.complete(early);
     } catch (error) {
@@ -213,12 +212,23 @@ class CodexRun implements RuntimeRun {
     return params.threadId === this.threadId && (params.turnId === undefined || params.turnId === this.turnId);
   }
 
+  /**
+   * 记下这次 Run 的 turn（只记一次）。turn/start 的响应和随后的 turn/started、输出通知可能在同一批数据里到达，
+   * 通知会先于 await 之后的代码处理，所以两处都可能先拿到 turn ID。
+   */
+  private adoptTurn(turnId: string): void {
+    if (this.turnId) return;
+    this.turnId = turnId;
+    this.emit({ type: 'turn', turnId });
+  }
+
   private onNotification(method: string, raw: unknown): void {
     const params = (raw ?? {}) as Record<string, unknown> & { threadId?: string; turnId?: string };
     switch (method) {
       case 'turn/started': {
         const turn = params.turn as CodexTurn | undefined;
-        if (params.threadId !== this.threadId || (this.turnId && turn?.id !== this.turnId)) return;
+        if (params.threadId !== this.threadId || !turn?.id || (this.turnId && turn.id !== this.turnId)) return;
+        this.adoptTurn(turn.id);
         this.started = true;
         this.release(this.startedWaiters);
         return;

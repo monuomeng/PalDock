@@ -1,5 +1,6 @@
 import {
   ChannelDeliveryError,
+  classifyNetworkError,
   type Card,
   type ChannelAdapter,
   type ChannelAddress,
@@ -25,8 +26,10 @@ export interface FeishuTransport {
   userName(openId: string): Promise<string | undefined>;
 }
 
-/** 用户名查询结果缓存：同一个人只查一次，查不到也记下，避免每条消息都打一次接口。 */
+/** 用户名查询结果缓存：同一个人只查一次，避免每条消息都打一次接口。 */
 const NAME_CACHE_LIMIT = 500;
+/** 查名字最多等这么久：消息要先落库平台才算收到，不能被通讯录接口拖住；超时就用 open_id 末尾，下次再查。 */
+const NAME_LOOKUP_MS = 1_500;
 
 /**
  * 飞书单聊与群聊适配器：WSClient 长连接收 im.message.receive_v1 和 card.action.trigger（无需公网地址），
@@ -36,7 +39,7 @@ export class FeishuAdapter implements ChannelAdapter {
   readonly provider = 'feishu' as const;
   private sink: ChannelSink | undefined;
   private ctx: ParseContext;
-  private readonly names = new Map<string, string | undefined>();
+  private readonly names = new Map<string, string>();
 
   constructor(
     readonly account: string,
@@ -47,8 +50,11 @@ export class FeishuAdapter implements ChannelAdapter {
 
   async start(sink: ChannelSink): Promise<void> {
     this.sink = sink;
-    // 机器人 open_id 只用来判断群里是否 @ 了它；拿不到不影响单聊
-    this.ctx = { account: this.account, botOpenId: await this.transport.botOpenId().catch(() => undefined) };
+    // 机器人 open_id 只用来判断群里是否 @ 了它；拿不到不影响单聊，与建连并行
+    void this.transport.botOpenId().then(
+      (botOpenId) => (this.ctx = { account: this.account, botOpenId }),
+      () => undefined,
+    );
     await this.transport.connect({
       message: (data) => this.onMessage(data),
       cardAction: (data) => this.onCardAction(data),
@@ -77,12 +83,19 @@ export class FeishuAdapter implements ChannelAdapter {
   }
 
   private async displayName(openId: string): Promise<string> {
-    if (!this.names.has(openId)) {
-      if (this.names.size >= NAME_CACHE_LIMIT) this.names.clear();
-      this.names.set(openId, await this.transport.userName(openId).catch(() => undefined));
+    let name = this.names.get(openId);
+    if (!name) {
+      let timer: NodeJS.Timeout | undefined;
+      const timeout = new Promise<undefined>((resolve) => (timer = setTimeout(() => resolve(undefined), NAME_LOOKUP_MS)));
+      name = await Promise.race([this.transport.userName(openId).catch(() => undefined), timeout]);
+      clearTimeout(timer);
+      if (name) {
+        if (this.names.size >= NAME_CACHE_LIMIT) this.names.clear();
+        this.names.set(openId, name);
+      }
     }
     // 拿不到名字时显示 open_id 末 6 位，便于在桌面核对是谁
-    return this.names.get(openId) ?? `飞书用户 …${openId.slice(-6)}`;
+    return name ?? `飞书用户 …${openId.slice(-6)}`;
   }
 
   send(address: ChannelAddress, card: Card): Promise<string> {
@@ -94,15 +107,14 @@ export class FeishuAdapter implements ChannelAdapter {
   }
 }
 
-/** 飞书接口错误 → 投递结果：限流与服务端错误可重试，超时不确定，其余（权限、参数、被移出群）不重试。 */
+/** 飞书接口（axios）错误 → 投递结果：限流与服务端错误可重试，超时与连接中断不确定，其余 4xx（权限、参数、被移出群）不重试。 */
 export function classifyFeishuError(error: unknown): ChannelDeliveryError {
   if (error instanceof ChannelDeliveryError) return error;
-  const e = error as { code?: string | number; response?: { status?: number }; message?: string };
+  const e = error as { code?: unknown; response?: { status?: number }; message?: string };
   const status = e.response?.status;
-  const message = (e.message ?? String(error)).slice(0, 200);
-  if (e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT') return new ChannelDeliveryError('unknown', `飞书接口超时：${message}`);
-  if (e.code === 'ECONNREFUSED' || e.code === 'ENOTFOUND' || e.code === 'EAI_AGAIN') return new ChannelDeliveryError('retry', `网络不可用：${message}`);
-  if (status === 429 || (status !== undefined && status >= 500)) return new ChannelDeliveryError('retry', `飞书接口暂时不可用（${status}）`);
-  if (e.code === 'ECONNRESET' || e.code === 'EPIPE') return new ChannelDeliveryError('unknown', `连接中断：${message}`);
-  return new ChannelDeliveryError('failed', `飞书拒绝了请求：${message}`);
+  return classifyNetworkError({
+    ...(typeof e.code === 'string' ? { code: e.code } : {}),
+    ...(status !== undefined ? { status } : {}),
+    message: `飞书：${(e.message ?? String(error)).slice(0, 200)}`,
+  });
 }

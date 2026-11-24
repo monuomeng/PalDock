@@ -45,7 +45,7 @@ export type AdapterFactory = (
   credential: ChannelCredential,
   settings: ChannelSettingsRecord,
   cursor: ChannelCursor,
-) => ChannelAdapter;
+) => Promise<ChannelAdapter>;
 
 export const credentialTarget = (provider: ChannelProvider) => `paldock/${provider}`;
 
@@ -90,23 +90,18 @@ export class ChannelService {
   constructor(private readonly deps: ChannelServiceDeps) {
     this.limits = { ...P2_DEFAULTS, ...deps.limits };
     this.now = deps.now ?? (() => new Date());
-    const { store, publish } = deps;
-    const common = { store, publish, ...(deps.limits ? { limits: deps.limits } : {}) };
-    const commands = new RemoteCommands({ ...common, tasks: deps.tasks, reply: (c, card, subject) => this.send(c, card, subject) });
-    const processor = new InboundProcessor({ ...common, handler: commands, reply: (c, card) => this.send(c, card) });
+    // 限额与时钟在这里定一次，管线各部分共用
+    const common = { store: deps.store, publish: deps.publish, limits: this.limits, now: this.now };
+    const send = (c: ConversationRecord, card: Card, subject?: string) => this.send(c, card, subject);
+    const commands = new RemoteCommands({ ...common, tasks: deps.tasks, reply: send });
+    const processor = new InboundProcessor({ ...common, handler: commands, reply: send });
     this.hub = new ChannelHub({
       ...common,
       publishEphemeral: deps.publishEphemeral,
       log: deps.log,
       process: (envelope) => processor.process(envelope),
-      ...(deps.now ? { now: deps.now } : {}),
     });
-    this.notifier = new ChannelNotifier({
-      ...common,
-      send: (c, card, subject) => this.deps.store.outbox.enqueue(c.provider, c.id, card, subject ?? null),
-      presence: () => this.presence,
-      ...(deps.now ? { now: deps.now } : {}),
-    });
+    this.notifier = new ChannelNotifier({ ...common, send, presence: () => this.presence });
   }
 
   /** 启动已启用的渠道（不阻塞服务启动）与升级扫描。 */
@@ -128,7 +123,6 @@ export class ChannelService {
   /** 应用层写入的持久事件也送到这里：从外部建的任务的进度、审批的处理结果。 */
   onEvents(events: PersistentEvent[]): void {
     this.notifier.onEvents(events);
-    this.hub.kick();
   }
 
   /** 桌面状态来自 Electron 主进程（powerMonitor）；锁屏或空闲时待审批立即满足升级条件。 */
@@ -140,9 +134,9 @@ export class ChannelService {
 
   escalate(): void {
     this.notifier.escalate();
-    this.hub.kick();
   }
 
+  /** 写 outbox 并唤醒投递（唤醒推迟到当前事务之后）。 */
   private send(conversation: ConversationRecord, card: Card, subject?: string): void {
     this.deps.store.outbox.enqueue(conversation.provider, conversation.id, card, subject ?? null);
     this.hub.kick();
@@ -196,13 +190,16 @@ export class ChannelService {
     const credential = await this.deps.credentials.read(credentialTarget(provider)).catch(() => undefined);
     if (!credential) return this.hub.reportError(provider, '没有找到凭据，请在设置里填写');
     if (provider === 'feishu') this.appIds.set(provider, credential.user);
+    const { channels } = this.deps.store;
+    const cursor: ChannelCursor = { get: (account) => channels.getCursor(provider, account), set: (account, value) => channels.setCursor(provider, account, value) };
+    let adapter: ChannelAdapter;
     try {
-      const { channels } = this.deps.store;
-      const cursor: ChannelCursor = { get: (account) => channels.getCursor(provider, account), set: (account, value) => channels.setCursor(provider, account, value) };
-      await this.hub.attach(this.deps.createAdapter(provider, credential, settings, cursor));
-    } catch {
-      // 原因已记在渠道状态上（hub.attach），界面会显示
+      adapter = await this.deps.createAdapter(provider, credential, settings, cursor);
+    } catch (error) {
+      return this.hub.reportError(provider, `渠道启动失败：${(error as Error).message}`.slice(0, 300));
     }
+    // 启动失败的原因已记在渠道状态上（hub.attach），界面会显示
+    await this.hub.attach(adapter).catch(() => undefined);
   }
 
   listPairings(): PairingRecord[] {
