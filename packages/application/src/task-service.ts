@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import {
   CodedError,
@@ -15,7 +15,7 @@ import {
 } from '@paldock/contracts';
 import { subtaskMachine } from '@paldock/domain';
 import { isInside, samePath } from '@paldock/platform';
-import { commitStaged, repositoryRoot } from './git.js';
+import { commitStaged, headCommit, repositoryRoot } from './git.js';
 import { firstRunPrompt, resumePrompt, reworkPrompt, titleOf } from './prompts.js';
 import type { RunSupervisor } from './run-supervisor.js';
 import { moveTask, requireSubtask } from './transitions.js';
@@ -43,6 +43,15 @@ function systemDirectories(): string[] {
   const env = process.env;
   const windows = [env.SystemRoot, env.ProgramFiles, env['ProgramFiles(x86)'], env.ProgramData].filter((p): p is string => !!p);
   return process.platform === 'win32' ? windows : ['/System', '/Library', '/usr', '/bin', '/sbin', '/etc', '/private'];
+}
+
+/** 真实路径（解开符号链接与 8.3 短名）；路径不存在时退回 resolve。 */
+function canonical(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return resolve(path);
+  }
 }
 
 /** 被中断且有原生会话的 Run 才能续做（新 Run 指回它、沿用同一 thread）。 */
@@ -113,15 +122,22 @@ export class TaskService {
     if (!isAbsolute(path) || !existsSync(path) || !statSync(path).isDirectory()) {
       throw new CodedError('bad_request', '项目目录不存在');
     }
-    const full = resolve(path);
-    if (isInside(this.deps.dataRoot, full) || isInside(full, this.deps.dataRoot)) {
+    // 比较前统一成真实路径：Windows 临时目录常是 8.3 短名（RUNNER~1），macOS 的 /var 是 /private/var 的链接，
+    // 而 git 返回的是长名、真实路径（CI 实测）
+    const full = canonical(path);
+    const dataRoot = canonical(this.deps.dataRoot);
+    if (isInside(dataRoot, full) || isInside(full, dataRoot)) {
       throw new CodedError('bad_request', '项目目录不能与 PalDock 数据目录重叠');
     }
     if (systemDirectories().some((dir) => isInside(dir, full))) throw new CodedError('bad_request', '不能选择系统目录');
     const root = await repositoryRoot(full).catch(() => {
       throw new CodedError('bad_request', '所选目录不是 git 仓库');
     });
-    if (!samePath(root, full)) throw new CodedError('bad_request', `请选择仓库根目录：${root}`);
+    if (!samePath(canonical(root), full)) throw new CodedError('bad_request', `请选择仓库根目录：${root}`);
+    // 没有任何提交就无法建 worktree，建任务时就说清楚，而不是等执行时才失败（用户实测）
+    await headCommit(full).catch(() => {
+      throw new CodedError('bad_request', '这个仓库还没有任何提交，请先提交一次再建任务');
+    });
     return full;
   }
 

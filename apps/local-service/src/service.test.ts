@@ -29,6 +29,7 @@ beforeEach(async () => {
   repo = join(dir, 'repo');
   mkdirSync(repo);
   execFileSync('git', ['init', '-q', repo]);
+  execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init']);
   token = createToken();
   ipcPath = createIpcPath(join(dir, 'data'));
   mkdirSync(join(dir, 'data'));
@@ -95,6 +96,11 @@ describe('本地服务 IPC', () => {
     await expect(client.request('task.create', { rootPath: join(dir, 'missing'), goal: 'g', idempotencyKey: 'key-cccccccc' })).rejects.toMatchObject({
       code: 'bad_request',
     });
+    // 没有任何提交的仓库在建任务时就被拒绝，而不是等执行时创建 worktree 失败
+    const empty = join(dir, 'empty');
+    mkdirSync(empty);
+    execFileSync('git', ['init', '-q', empty]);
+    await expect(client.request('task.create', { rootPath: empty, goal: 'g', idempotencyKey: 'key-eeeeeeee' })).rejects.toThrow(/还没有任何提交/);
     await client.close();
   });
 

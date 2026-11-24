@@ -175,6 +175,15 @@ describe('P1 主流程', () => {
     expect(((await call('task.list', { limit: 10 })) as unknown[]).length).toBe(1);
   });
 
+  it.runIf(process.platform === 'win32')('项目路径用 8.3 短名或不同大小写时仍认作仓库根目录（CI 实测）', async () => {
+    const short = execFileSync('cmd', ['/d', '/s', '/c', `"for %I in ("${repo}") do @echo %~sI"`], {
+      encoding: 'utf8',
+      windowsVerbatimArguments: true,
+    }).trim();
+    const created = await create('短名路径', { rootPath: short.toUpperCase() });
+    expect(created.workspace.rootPath.toLowerCase()).toBe(repo.toLowerCase());
+  });
+
   it('拒绝非 git 仓库、子目录和数据根', async () => {
     const plain = join(root, 'plain');
     mkdirSync(plain);

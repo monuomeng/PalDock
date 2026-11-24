@@ -51,3 +51,9 @@
 | 免安装目录 `win-unpacked` 实机 | 启动后连上本地服务；管理界面从 asar 内经 `paldock://` 加载；用模拟执行器建任务跑到待验收，证明本地服务在 asar 里由 `utilityProcess` 正常启动，执行器经打包后的 `PalDock.exe` + `ELECTRON_RUN_AS_NODE=1` 启动（P0 未实测的一项） |
 | 安装程序本身 | **未运行**：安装会写开始菜单和注册表，留给用户在自己的机器上试；卸载行为按 electron-builder 的 NSIS 默认（删除安装目录，不删 `%APPDATA%\PalDock` 与数据目录） |
 | 未做 | 代码签名（SmartScreen 会提示未知发布者）、应用图标（用的是 Electron 默认图标）、自动更新 |
+
+## CI 首次运行（2026-11-24）
+
+推送后 GitHub Actions 两个平台都失败：`tests/integration/p1-flow.test.ts` 的用例报「请选择仓库根目录」。原因是 runner 上临时目录路径与 git 返回的路径写法不同——Windows 是 8.3 短名（`C:\Users\RUNNER~1\…`），macOS 的 `/var/folders/…` 是 `/private/var/…` 的符号链接——而本机临时目录没有短名，所以本地没测出来。修复：校验项目目录时先把两边都转成真实路径（`realpathSync.native`）再比较；新增一个 Windows 用例用 8.3 短名 + 大写路径复现（修复前得到与 CI 相同的错误）。同时把 actions 升到 Node 24 版本（checkout@v5、setup-node@v5、pnpm/action-setup@v6），消除 Node 20 弃用警告。macOS 上修复后的结果以下一次 CI 为准。
+
+用户实测安装版：关闭窗口后无残留进程、单实例通过；真实 Codex 任务因测试仓库还没有任何提交而在创建 worktree 时失败。现在建任务时就检查，没有提交的仓库直接提示「请先提交一次再建任务」。
