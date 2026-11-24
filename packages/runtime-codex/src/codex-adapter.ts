@@ -8,7 +8,7 @@ import type {
   TurnCheck,
 } from '@paldock/contracts';
 import { childEnv, nodeRuntimeEnv } from '@paldock/platform';
-import { codexVersion, resolveCodexCommand } from './discover.js';
+import { codexVersion, meetsMinimum, MIN_CODEX_VERSION, resolveCodexCommand } from './discover.js';
 import { JsonRpcStdioClient, RpcError, type RpcHandlers } from './json-rpc.js';
 import { approvalResponse, finalTurnEvent, toApprovalRequest, toTurnCheck, type CodexTurn } from './event-mapping.js';
 
@@ -54,12 +54,28 @@ export class CodexAdapter implements RuntimeAdapter {
     const cmd = resolveCodexCommand(this.configuredPath);
     if (!cmd) return { runtime: this.name, available: false, reason: '未找到 codex 可执行文件', capabilities: CAPABILITIES };
     const version = await codexVersion(cmd);
-    return version
-      ? { runtime: this.name, available: true, version, capabilities: CAPABILITIES }
-      : { runtime: this.name, available: false, reason: '无法运行 codex --version', capabilities: CAPABILITIES };
+    if (!version) return { runtime: this.name, available: false, reason: '无法运行 codex --version', capabilities: CAPABILITIES };
+    if (!meetsMinimum(version)) {
+      const reason = `Codex ${version} 版本过低，需要 ${MIN_CODEX_VERSION} 或更高，请升级（npm i -g @openai/codex）`;
+      return { runtime: this.name, available: false, version, reason, capabilities: CAPABILITIES };
+    }
+    return { runtime: this.name, available: true, version, capabilities: CAPABILITIES };
+  }
+
+  /** 每个适配器只检查一次版本；不满足时不缓存，升级后下一次 Run 重新检查。 */
+  private supported: Promise<void> | undefined;
+  private ensureSupported(): Promise<void> {
+    this.supported ??= this.discover().then((d) => {
+      if (!d.available) {
+        this.supported = undefined;
+        throw new Error(d.reason);
+      }
+    });
+    return this.supported;
   }
 
   async start(request: RunStartRequest, onEvent: (event: RuntimeEvent) => void): Promise<RuntimeRun> {
+    await this.ensureSupported();
     const run = new CodexRun(this.open.bind(this), this.options, onEvent);
     await run.start(request);
     return run;

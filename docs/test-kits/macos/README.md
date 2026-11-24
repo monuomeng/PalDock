@@ -63,6 +63,7 @@ PalDock 是一个本地优先的 AI 桌面助手，主机支持 Windows 和 macO
 | 5 Electron | 窗口连上服务；渲染进程拿不到 Node；命令白名单；**套接字文件权限为 600**；建任务→执行→回显→验收、审批、取消；服务被结束后 3 秒自动重启并可恢复任务；单实例；禁止跳转外部网址；关闭窗口后锁文件和套接字被清理（P1 起改用 `scripts/p1/e2e-check.mjs`） | `p1-e2e-check.json` 中 `failed: 0` |
 | 6 worktree | 默认不区分大小写的 APFS 上，只差大小写的分支名和文件名会冲突；深层路径可用 | 记录事实即可，`INFO` 不算失败 |
 | 7 执行器发现 | 能否在 PATH 上找到 Codex / Claude Code 及登录状态（不发起对话） | 未安装时报告 `available: false` 属正常 |
+| 7b 钥匙串 | P2 渠道凭据（飞书 App Secret、Telegram Bot Token）存在登录钥匙串：用随机假秘密写入、读回、覆盖、删除 | `p2-credential-check.json` 中 `failed: 0`；若弹出钥匙串授权框，选「允许」并记下 |
 | 8 电源事件 | Electron `powerMonitor` 在 macOS 上实际发出的事件 | `power-diagnostics.log` 中应出现 `lock-screen`、`unlock-screen`、`idle-state`（active → idle → active），睡眠时有 `suspend` / `resume` |
 
 ## 结果包内容
@@ -73,7 +74,8 @@ PalDock 是一个本地优先的 AI 桌面助手，主机支持 Windows 和 macO
 - `run.log`：每一步的命令、输出和退出码
 - `p1-e2e-check.json`、`p0-worktree-check.json`：逐项结果
 - `codex-discovery.json`、`claude-discovery.json`：执行器发现结果（只有版本和是否登录）
-- `power-diagnostics.log`、`power-app.log`：第 8 步的事件记录
+- `p2-credential-check.json`：钥匙串读写结果（不含秘密）
+- `power-diagnostics.log`、`power-app.log`：第 8 步的事件记录（P2 的审批升级依赖其中的锁屏与空闲状态）
 
 ## 常见问题
 

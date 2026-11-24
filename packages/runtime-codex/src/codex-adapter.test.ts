@@ -61,7 +61,7 @@ const ofType = <T extends RuntimeEvent['type']>(events: RuntimeEvent[], type: T)
 
 describe('Codex 适配器（模拟 app-server）', () => {
   it('发现：模拟执行器报告版本与能力', async () => {
-    expect(await adapter().discover()).toMatchObject({ available: true, version: '0.0.0-mock', capabilities: { cancel: true } });
+    expect(await adapter().discover()).toMatchObject({ available: true, version: '0.166.0-mock', capabilities: { cancel: true } });
   });
 
   it('正常流程：thread、turn、流式输出、完成并带最后一条回复', async () => {

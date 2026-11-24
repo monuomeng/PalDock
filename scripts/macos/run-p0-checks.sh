@@ -52,6 +52,10 @@ step "7. 执行器发现（零成本，只读版本和登录状态；未安装�
 run node packages/runtime-codex/dist/probe.js > "$OUT/codex-discovery.json" 2>&1 || true
 run node packages/runtime-claude/dist/probe.js > "$OUT/claude-discovery.json" 2>&1 || true
 
+step "7b. 系统钥匙串读写（P2 渠道凭据；只用随机假秘密，结束时删除）"
+run node scripts/p2/credential-check.mjs
+[ -f p2-credential-check.json ] && cp p2-credential-check.json "$OUT/"
+
 if [ "$SKIP_MANUAL" -eq 0 ]; then
   step "8. 电源与空闲事件（需要人操作）"
   DATA="$(mktemp -d -t pd-power)"

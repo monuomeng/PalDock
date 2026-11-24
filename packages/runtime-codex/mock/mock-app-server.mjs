@@ -29,7 +29,7 @@ mkdirSync(threadsDir, { recursive: true });
 const startDelayMs = Number(process.env.MOCK_CODEX_START_DELAY_MS ?? 0);
 
 if (process.argv.includes('--version')) {
-  process.stdout.write('codex-cli 0.0.0-mock\n');
+  process.stdout.write('codex-cli 0.166.0-mock\n');
   process.exit(0);
 }
 
