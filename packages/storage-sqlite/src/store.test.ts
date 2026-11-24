@@ -13,6 +13,7 @@ const now = () => clock;
 const advance = (ms: number) => (clock = new Date(clock.getTime() + ms));
 
 let store: Store;
+const LATEST = MIGRATIONS.at(-1)!.version;
 
 beforeEach(async () => {
   clock = new Date('2026-11-23T08:00:00.000Z');
@@ -356,22 +357,22 @@ describe('迁移与备份', () => {
 
   it('文件库启用 WAL；重复打开不重复迁移', async () => {
     const first = await openStore(dir, now);
-    expect(first.migration).toEqual({ from: 0, to: 2 });
+    expect(first.migration).toEqual({ from: 0, to: LATEST });
     expect(first.db.get('PRAGMA journal_mode')).toEqual({ journal_mode: 'wal' });
     first.close();
 
     const second = await openStore(dir, now);
-    expect(second.migration).toEqual({ from: 2, to: 2 });
+    expect(second.migration).toEqual({ from: LATEST, to: LATEST });
     second.close();
   });
 
-  it('v1 的库带数据升级到 v2：先备份，原有行保留，原生会话列改名', async () => {
+  it('v1 的库带数据升级到最新：先备份，原有行保留，原生会话列改名', async () => {
     const db = Database.open(join(dir, 'paldock.db'));
     await migrate(db, { now, migrations: MIGRATIONS.slice(0, 1) });
     db.run(`INSERT INTO workspaces (id, name, root_path, created_at) VALUES ('w', 'n', 'D:/p', 't')`);
     db.run(`INSERT INTO tasks (id, workspace_id, title, status, created_at, updated_at) VALUES ('t', 'w', '旧任务', 'draft', 't', 't')`);
     const result = await migrate(db, { backupDir: join(dir, 'backups'), now });
-    expect(result).toMatchObject({ from: 1, to: 2 });
+    expect(result).toMatchObject({ from: 1, to: LATEST });
     expect(result.backupPath).toBeDefined();
     expect(db.get(`SELECT title, goal, check_command FROM tasks`)).toEqual({ title: '旧任务', goal: '', check_command: null });
     expect(db.all(`SELECT name FROM pragma_table_info('runs') WHERE name LIKE 'native_%' ORDER BY cid`)).toEqual([
@@ -388,7 +389,7 @@ describe('迁移与备份', () => {
     await expect(migrate(db, { backupDir: join(dir, 'backups'), now, migrations: broken })).rejects.toThrow();
 
     expect(readdirSync(join(dir, 'backups'))).toHaveLength(1);
-    expect(db.get(`SELECT max(version) AS v FROM schema_migrations`)).toEqual({ v: 2 });
+    expect(db.get(`SELECT max(version) AS v FROM schema_migrations`)).toEqual({ v: LATEST });
     expect(db.get(`SELECT name FROM sqlite_master WHERE name = 'ok_part'`)).toBeUndefined();
     db.close();
   });

@@ -34,13 +34,15 @@ const SQL = {
   reopenInbox: `
     UPDATE inbox SET status = 'pending', lease_until = NULL
      WHERE status = 'processing'`,
+  // 发送中被打断的出站消息可能已经到达平台：记为 unknown，不重发（走 outbox_sending）
+  unknownOutbox: `UPDATE outbox SET status = 'unknown', last_error = ? WHERE status = 'sending'`,
 } as const;
 
 /**
  * 服务启动时（此时没有任何执行器连接、排队也只在内存里）和正常退出前运行，同一事务：
  * - 未结束的 Run 置为 interrupted，挂起的审批置为 cancelled（执行器侧请求已失效，恢复后会重新请求）；
  * - 执行中或还在排队的子任务和任务一律置为 blocked，出现在「待我处理」里，由用户选择恢复、重新开始或放弃；
- * - 处理中的入站事件放回队列重做。
+ * - 处理中的入站事件放回队列重做；发送中的出站消息记为 unknown，不重发。
  * 外部副作用是否已发生在这里无法判定，交给后续核实。
  */
 export function interruptActiveWork(db: Database, events: EventLog, clock: Clock, reason: string): RecoveryReport {
@@ -67,6 +69,7 @@ export function interruptActiveWork(db: Database, events: EventLog, clock: Clock
     return {
       interruptedRuns: active.map(({ id, subtaskId, nativeThreadId }) => ({ id, subtaskId, nativeThreadId })),
       reopenedInbox: db.run(SQL.reopenInbox),
+      unknownOutbox: db.run(SQL.unknownOutbox, reason),
       events: emitted,
     };
   });

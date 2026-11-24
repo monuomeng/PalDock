@@ -5,3 +5,4 @@ export * from './redact.js';
 export * from './risk.js';
 export * from './run-supervisor.js';
 export * from './task-service.js';
+export * from './channels/index.js';

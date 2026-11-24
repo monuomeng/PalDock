@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ChannelAccountStatus, ChannelProvider, ChannelState, InboundRejection } from './channels.js';
 import {
   ApprovalChannel,
   ApprovalKind,
@@ -10,6 +11,7 @@ import {
   RunStatus,
   SCHEMA_VERSION,
   SubtaskStatus,
+  RemoteApprovalLevel,
   TaskStatus,
 } from './states.js';
 
@@ -62,6 +64,29 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
     type: z.literal('run.notice'),
     payload: z.object({ code: RunNoticeCode, detail: z.string().max(500) }),
   }),
+  /** 审批已升级到外部单聊；聚合 ID 为 approvalId。 */
+  z.object({ type: z.literal('approval.escalated'), payload: z.object({ channels: z.array(ChannelProvider) }) }),
+  /** 项目设置（远程审批等级）变更；聚合 ID 为 workspaceId。 */
+  z.object({ type: z.literal('workspace.settings_changed'), payload: z.object({ remoteApprovalLevel: RemoteApprovalLevel }) }),
+  /** 外部入站被拒绝（审计）；聚合 ID 为会话 ID，会话还没建立时为 `provider:account`。 */
+  z.object({
+    type: z.literal('channel.inbound_rejected'),
+    payload: z.object({ provider: ChannelProvider, reason: InboundRejection }),
+  }),
+  /** 陌生账号发来消息，生成了配对码；聚合 ID 为渠道账号 ID。 */
+  z.object({ type: z.literal('channel.pairing_requested'), payload: z.object({ provider: ChannelProvider }) }),
+  /** 渠道账号绑定、拒绝或解绑；聚合 ID 为渠道账号 ID。 */
+  z.object({
+    type: z.literal('channel.account_changed'),
+    payload: z.object({ provider: ChannelProvider, from: ChannelAccountStatus, to: ChannelAccountStatus }),
+  }),
+  /** 渠道启用、停用或凭据变更；聚合 ID 为 provider。 */
+  z.object({ type: z.literal('channel.settings_changed'), payload: z.object({ provider: ChannelProvider, enabled: z.boolean() }) }),
+  /** 会话设置（群白名单、默认项目）变更；聚合 ID 为会话 ID。 */
+  z.object({
+    type: z.literal('channel.conversation_changed'),
+    payload: z.object({ groupAllowed: z.boolean(), defaultWorkspaceId: Id.nullable() }),
+  }),
 ]);
 export type PersistentEventBody = z.infer<typeof PersistentEventBody>;
 
@@ -82,5 +107,13 @@ export const EphemeralEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('run.output_delta'), runId: Id, text: z.string() }),
   z.object({ type: z.literal('run.heartbeat'), runId: Id, at: z.iso.datetime() }),
   z.object({ type: z.literal('service.health'), status: z.enum(['ok', 'degraded']) }),
+  z.object({
+    type: z.literal('channel.status'),
+    provider: ChannelProvider,
+    state: ChannelState,
+    detail: z.string().nullable(),
+    since: z.iso.datetime(),
+    recoveredAt: z.iso.datetime().nullable(),
+  }),
 ]);
 export type EphemeralEvent = z.infer<typeof EphemeralEvent>;

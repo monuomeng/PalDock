@@ -32,6 +32,7 @@ onParentMessage(async (raw) => {
   if (!parsed.success) return log('ignored invalid parent message');
   const message = parsed.data;
 
+  if (message.type === 'presence') return service?.setPresence(message);
   if (message.type === 'shutdown') {
     await service?.stop();
     process.exit(ServiceExitCode.ok);

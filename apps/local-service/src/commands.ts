@@ -1,4 +1,4 @@
-import type { TaskService } from '@paldock/application';
+import type { ChannelService, TaskService } from '@paldock/application';
 import type { CommandArgs, CommandName, CommandResultOf } from '@paldock/contracts';
 import type { Store } from '@paldock/storage-sqlite';
 import type { z } from 'zod';
@@ -11,7 +11,7 @@ export type Handlers = {
 export type ServiceInfo = CommandResultOf<'service.status'>;
 
 /** 命令 → 用例的映射。每个处理函数只做参数到用例调用的转换，不含业务规则。 */
-export function createHandlers(store: Store, tasks: TaskService, info: ServiceInfo): Handlers {
+export function createHandlers(store: Store, tasks: TaskService, channels: ChannelService, info: ServiceInfo): Handlers {
   return {
     'service.status': () => info,
     'task.create': ({ rootPath, goal, check, checkConfirmed, idempotencyKey }) =>
@@ -28,5 +28,23 @@ export function createHandlers(store: Store, tasks: TaskService, info: ServiceIn
     'attention.markRead': ({ itemKind, itemId }) => store.attention.markRead(itemKind, itemId),
     'messages.search': ({ query, limit }) => store.messages.search(query, limit),
     'maintenance.backup': () => store.backup(),
+    'workspace.list': () => store.tasks.listWorkspaces(),
+    'workspace.setRemoteApprovalLevel': ({ workspaceId, expectedVersion, level }) => tasks.setRemoteApprovalLevel(workspaceId, expectedVersion, level),
+    'channel.overview': () => channels.overview(),
+    'channel.configure': ({ provider, expectedVersion, enabled, proxyUrl, appId, secret, forgetCredential }) =>
+      channels.configure({
+        provider,
+        expectedVersion,
+        enabled,
+        proxyUrl,
+        forgetCredential,
+        ...(secret ? { credential: { user: provider === 'feishu' ? appId! : 'bot', secret } } : {}),
+      }),
+    'channel.pairings': () => channels.listPairings(),
+    'channel.decidePairing': ({ code, approve }) => channels.decidePairing(code, approve),
+    'channel.accounts': () => channels.listAccounts(),
+    'channel.setAccountStatus': ({ accountId, expectedVersion, status }) => channels.setAccountStatus(accountId, expectedVersion, status),
+    'channel.groups': () => channels.listGroups(),
+    'channel.setGroupAllowed': ({ conversationId, expectedVersion, allowed }) => channels.setGroupAllowed(conversationId, expectedVersion, allowed),
   };
 }

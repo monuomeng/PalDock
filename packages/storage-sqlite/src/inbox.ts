@@ -1,3 +1,4 @@
+import type { InboxPort } from '@paldock/contracts';
 import type { Clock } from './clock.js';
 import type { Database } from './database.js';
 
@@ -39,7 +40,7 @@ const SQL = {
 } as const;
 
 /** 入站先落库再处理；以（队列, 平台事件 ID）为主键去重，重启后依然有效。 */
-export class Inbox {
+export class Inbox implements InboxPort {
   constructor(
     private readonly db: Database,
     private readonly clock: Clock,

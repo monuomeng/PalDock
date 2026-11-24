@@ -43,6 +43,8 @@ export interface TaskRecord {
   status: TaskStatus;
   checkCommand: CheckCommand | null;
   checkConfirmedAt: string | null;
+  /** 从外部渠道建的任务：结果回发到这个会话。 */
+  originConversationId: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -103,6 +105,8 @@ export interface ApprovalRecord {
   requestedAt: string;
   expiresAt: string;
   decidedVia: ApprovalChannel | null;
+  /** 已升级到外部单聊的时间。 */
+  escalatedAt: string | null;
   version: number;
 }
 

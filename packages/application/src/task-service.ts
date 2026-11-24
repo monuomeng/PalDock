@@ -2,9 +2,11 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import {
   CodedError,
+  type ApprovalChannel,
   type ApprovalDecision,
   type CheckCommand,
   type PersistentEvent,
+  type RemoteApprovalLevel,
   type ReviewDecision,
   type RunRecord,
   type StorePort,
@@ -26,6 +28,8 @@ export interface CreateTaskInput {
   check?: CheckCommand | undefined;
   checkConfirmed: boolean;
   idempotencyKey: string;
+  /** 从外部渠道建任务时的来源会话，结果回发到这里。 */
+  originConversationId?: string;
 }
 
 export interface TaskServiceDeps {
@@ -103,6 +107,7 @@ export class TaskService {
       checkCommand: input.check ?? null,
       checkConfirmed: input.checkConfirmed,
       idempotencyKey: input.idempotencyKey,
+      originConversationId: input.originConversationId ?? null,
     });
     this.publish(events);
     this.deps.supervisor.enqueue(record.subtask.id, { prompt: firstRunPrompt(input.goal) });
@@ -134,6 +139,10 @@ export class TaskService {
     return full;
   }
 
+  setRemoteApprovalLevel(workspaceId: string, expectedVersion: number, level: RemoteApprovalLevel): void {
+    this.publish(this.store.tasks.setRemoteApprovalLevel(workspaceId, expectedVersion, level).events);
+  }
+
   listTasks(limit: number): TaskSummary[] {
     return this.store.tasks.listTasks(limit);
   }
@@ -155,14 +164,14 @@ export class TaskService {
     if (!this.deps.supervisor.cancel(subtask.id)) this.close(subtask, 'cancelled', '用户取消');
   }
 
-  /** 先到者为准（版本号）；权限扩展在 P1 只能拒绝。 */
-  decideApproval(approvalId: string, expectedVersion: number, decision: ApprovalDecision): void {
+  /** 先到者为准（版本号）；权限扩展只能拒绝。via 记录决定来自桌面还是哪个外部渠道。 */
+  decideApproval(approvalId: string, expectedVersion: number, decision: ApprovalDecision, via: ApprovalChannel = 'desktop'): void {
     const approval = this.store.runs.getApproval(approvalId);
     if (!approval) throw new CodedError('not_found', '审批不存在');
     if (decision === 'allow_once' && approval.kind === 'permissions') {
-      throw new CodedError('bad_request', 'P1 不支持批准权限扩展，只能拒绝');
+      throw new CodedError('bad_request', '暂不支持批准权限扩展，只能拒绝');
     }
-    const change = this.store.runs.decideApproval(approval.id, expectedVersion, decision === 'allow_once' ? 'approved' : 'denied', 'desktop');
+    const change = this.store.runs.decideApproval(approval.id, expectedVersion, decision === 'allow_once' ? 'approved' : 'denied', via);
     this.publish(change.events);
     this.deps.supervisor.forwardDecision(change.record, decision);
   }

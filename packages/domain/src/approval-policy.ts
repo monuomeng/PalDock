@@ -11,7 +11,7 @@ export function canApproveRemotely(level: RemoteApprovalLevel, risk: RiskLevel):
   return REMOTELY_APPROVABLE[level].has(risk);
 }
 
-/** 占位默认值，待用户确认（07 待决事项 5）。 */
+/** 用户 2026-11-24 确认 3 分钟（07 待决事项 5）。 */
 export const DEFAULT_ESCALATION_WAIT_MS = 3 * 60 * 1000;
 
 export interface DesktopPresence {

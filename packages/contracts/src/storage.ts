@@ -1,3 +1,16 @@
+import type {
+  Card,
+  ChannelAccountRecord,
+  ChannelAccountStatus,
+  ChannelActionKind,
+  ChannelActionRecord,
+  ChannelAddress,
+  ChannelProvider,
+  ChannelSettingsRecord,
+  ConversationRecord,
+  InboundRejection,
+  PairingRecord,
+} from './channels.js';
 import type { PersistentEvent, RunNoticeCode } from './events.js';
 import type {
   ApprovalRecord,
@@ -20,6 +33,7 @@ import type {
   ApprovalStatus,
   AttentionKind,
   MessageRole,
+  RemoteApprovalLevel,
   ReviewDecision,
   RiskLevel,
   RunStatus,
@@ -45,6 +59,8 @@ export interface NewTask {
   checkCommand: CheckCommand | null;
   checkConfirmed: boolean;
   idempotencyKey: string;
+  /** 从外部渠道建任务时的来源会话。 */
+  originConversationId?: string | null;
 }
 
 export interface CreatedTask {
@@ -85,12 +101,15 @@ export interface InterruptedRun {
 export interface RecoveryReport {
   interruptedRuns: InterruptedRun[];
   reopenedInbox: number;
+  unknownOutbox: number;
   events: PersistentEvent[];
 }
 
 export interface TaskStorePort {
   ensureWorkspace(name: string, rootPath: string): WorkspaceRecord;
   getWorkspace(id: string): WorkspaceRecord | undefined;
+  listWorkspaces(): WorkspaceRecord[];
+  setRemoteApprovalLevel(id: string, expectedVersion: number, level: RemoteApprovalLevel): Change<WorkspaceRecord>;
   createTask(input: NewTask): Change<CreatedTask>;
   findTaskByIdempotencyKey(key: string): TaskRecord | undefined;
   getTask(id: string): TaskRecord | undefined;
@@ -123,11 +142,93 @@ export interface RunStorePort {
   addNotice(runId: string, code: RunNoticeCode, detail: string): PersistentEvent;
 }
 
+export interface NewChannelAction {
+  conversationId: string;
+  kind: ChannelActionKind;
+  targetId: string;
+  /** 目标（审批、子任务）在下发卡片时的版本；点击时按它做先到者为准。 */
+  targetVersion?: number | null;
+  payload?: string | null;
+  ttlMs: number;
+}
+
+/** 待升级的审批及其所在项目的远程审批等级、任务标题。 */
+export interface EscalationCandidate {
+  approval: ApprovalRecord;
+  remoteApprovalLevel: RemoteApprovalLevel;
+  workspaceName: string;
+  taskId: string;
+  taskTitle: string;
+}
+
+export interface ChannelStorePort {
+  upsertAccount(address: ChannelAddress, externalId: string, displayName: string): ChannelAccountRecord;
+  getAccount(id: string): ChannelAccountRecord | undefined;
+  listAccounts(): ChannelAccountRecord[];
+  setAccountStatus(id: string, expectedVersion: number, to: ChannelAccountStatus): Change<ChannelAccountRecord>;
+  upsertConversation(address: ChannelAddress, ownerAccountId: string | null, title: string): ConversationRecord;
+  getConversation(id: string): ConversationRecord | undefined;
+  listGroups(): ConversationRecord[];
+  activeDirectConversations(): ConversationRecord[];
+  setConversation(id: string, expectedVersion: number, settings: { groupAllowed: boolean; defaultWorkspaceId: string | null }): Change<ConversationRecord>;
+  setAwaiting(conversationId: string, token: string | null): ConversationRecord | undefined;
+  openPairing(
+    account: ChannelAccountRecord,
+    conversationId: string,
+    ttlMs: number,
+    maxPending: number,
+  ): { code: string; events: PersistentEvent[] } | undefined;
+  listPairings(): PairingRecord[];
+  decidePairing(code: string, approve: boolean): Change<{ account: ChannelAccountRecord; conversationId: string }>;
+  createAction(input: NewChannelAction): ChannelActionRecord;
+  useAction(token: string, conversationId: string): ChannelActionRecord | undefined;
+  voidActions(targetId: string): number;
+  listSettings(): ChannelSettingsRecord[];
+  updateSettings(provider: ChannelProvider, expectedVersion: number, enabled: boolean, proxyUrl: string | null): Change<ChannelSettingsRecord>;
+  getCursor(provider: ChannelProvider, account: string): string | undefined;
+  setCursor(provider: ChannelProvider, account: string, cursor: string): void;
+  escalationCandidates(): EscalationCandidate[];
+  approvalContext(approvalId: string): EscalationCandidate | undefined;
+  markEscalated(approvalId: string, channels: ChannelProvider[]): PersistentEvent | undefined;
+  audit(aggregateId: string, provider: ChannelProvider, reason: InboundRejection): PersistentEvent;
+}
+
+/** 待投递的出站卡片。 */
+export interface OutboxItem {
+  id: number;
+  provider: ChannelProvider;
+  conversationId: string;
+  subject: string | null;
+  card: Card;
+  attempts: number;
+}
+
+export interface OutboxPort {
+  /** subject 非空时：同一会话里该主题已有卡片就更新它，否则发新卡片。 */
+  enqueue(provider: ChannelProvider, conversationId: string, card: Card, subject?: string | null): number;
+  claimDue(): OutboxItem | undefined;
+  messageRef(conversationId: string, subject: string): string | undefined;
+  markSent(item: OutboxItem, messageRef: string): void;
+  markRetry(id: number, delayMs: number, error: string): void;
+  markFinal(id: number, status: 'unknown' | 'failed', error: string): void;
+  /** 渠道停用：待发送的一律失败，不在重新启用时补发。 */
+  failPending(provider: ChannelProvider, error: string): number;
+}
+
+export interface InboxPort {
+  accept(queue: string, eventId: string, conversationKey: string, payload: string): boolean;
+  claim(leaseMs: number): { queue: string; eventId: string; conversationKey: string; payload: string; attempts: number } | undefined;
+  finish(queue: string, eventId: string, outcome: 'done' | 'rejected'): boolean;
+}
+
 export interface StorePort {
   tasks: TaskStorePort;
   runs: RunStorePort;
   messages: { append(sessionId: string, role: MessageRole, body: string, runId?: string | null): Change<MessageRecord> };
   attention: { list(): AttentionItem[]; markRead(kind: AttentionKind, itemId: string): void };
+  channels: ChannelStorePort;
+  outbox: OutboxPort;
+  inbox: InboxPort;
   /** 多个写入合成一个事务（内层用 SAVEPOINT）。 */
   transaction<T>(fn: () => T): T;
   interruptActiveWork(reason: string): RecoveryReport;

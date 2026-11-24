@@ -1,15 +1,17 @@
-import type {
-  Change,
-  CreatedTask,
-  NewTask,
-  SessionRecord,
-  SubtaskRecord,
-  SubtaskStatus,
-  TaskRecord,
-  TaskStatus,
-  TaskStorePort,
-  TaskSummary,
-  WorkspaceRecord,
+import {
+  CodedError,
+  type Change,
+  type CreatedTask,
+  type NewTask,
+  type SessionRecord,
+  type SubtaskRecord,
+  type SubtaskStatus,
+  type TaskRecord,
+  type TaskStatus,
+  type TaskStorePort,
+  type TaskSummary,
+  type RemoteApprovalLevel,
+  type WorkspaceRecord,
 } from '@paldock/contracts';
 import { subtaskMachine, taskMachine } from '@paldock/domain';
 import type { Clock } from './clock.js';
@@ -25,9 +27,14 @@ const SQL = {
     ON CONFLICT (root_path) DO UPDATE SET name = name
     RETURNING ${COLUMNS.workspace()}`,
   selectWorkspace: `SELECT ${COLUMNS.workspace()} FROM workspaces WHERE id = ?`,
+  // 项目数量很少（每个仓库一行），整表按创建顺序读
+  selectWorkspaces: `SELECT ${COLUMNS.workspace()} FROM workspaces ORDER BY created_at`,
+  setRemoteApprovalLevel: `
+    UPDATE workspaces SET remote_approval_level = ?, version = version + 1 WHERE id = ? AND version = ?
+    RETURNING ${COLUMNS.workspace()}`,
   insertTask: `
-    INSERT INTO tasks (id, workspace_id, title, goal, status, check_command, check_confirmed_at, idempotency_key, created_at, updated_at)
-    VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6, ?7, ?8, ?8)
+    INSERT INTO tasks (id, workspace_id, title, goal, status, check_command, check_confirmed_at, idempotency_key, origin_conversation_id, created_at, updated_at)
+    VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6, ?7, ?9, ?8, ?8)
     RETURNING ${COLUMNS.task()}`,
   // 条件与部分索引 tasks_by_idempotency_key 一致（= 隐含 IS NOT NULL）
   selectTaskByKey: `SELECT ${COLUMNS.task()} FROM tasks WHERE idempotency_key = ?`,
@@ -94,6 +101,22 @@ export class TaskRepository implements TaskStorePort {
     return this.db.get<WorkspaceRecord>(SQL.selectWorkspace, id);
   }
 
+  listWorkspaces(): WorkspaceRecord[] {
+    return this.db.all<WorkspaceRecord>(SQL.selectWorkspaces);
+  }
+
+  /** 远程审批等级只能在桌面修改（命令只对管理窗口开放）；先到者为准。 */
+  setRemoteApprovalLevel(id: string, expectedVersion: number, level: RemoteApprovalLevel): Change<WorkspaceRecord> {
+    return this.db.transaction(() => {
+      const record = this.db.get<WorkspaceRecord>(SQL.setRemoteApprovalLevel, level, id, expectedVersion);
+      if (!record) throw new CodedError(this.getWorkspace(id) ? 'conflict' : 'not_found', '项目不存在或已被修改');
+      return {
+        record,
+        events: [this.events.append(id, { type: 'workspace.settings_changed', payload: { remoteApprovalLevel: level } })],
+      };
+    });
+  }
+
   /** 任务、开发子任务和它的助手会话同一事务创建；P1 不经草稿与计划确认，直接排队。 */
   createTask(input: NewTask): Change<CreatedTask> {
     return this.db.transaction(() => {
@@ -109,6 +132,7 @@ export class TaskRepository implements TaskStorePort {
           input.checkCommand && input.checkConfirmed ? at : null,
           input.idempotencyKey,
           at,
+          input.originConversationId ?? null,
         )!,
       );
       const subtask = this.db.get<SubtaskRecord>(SQL.insertSubtask, newId('sub'), task.id, input.role, input.goal, at)!;

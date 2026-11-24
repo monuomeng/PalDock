@@ -1,7 +1,14 @@
 import { z } from 'zod';
 import { EphemeralEvent, PersistentEvent } from './events.js';
-import { CheckCommand, type AttentionItem, type MessageRecord, type TaskDetail, type TaskSummary } from './records.js';
-import { ApprovalDecision, AttentionKind, ReviewDecision, SCHEMA_VERSION } from './states.js';
+import {
+  ChannelProvider,
+  type ChannelAccountRecord,
+  type ChannelOverview,
+  type ConversationRecord,
+  type PairingRecord,
+} from './channels.js';
+import { CheckCommand, type AttentionItem, type MessageRecord, type TaskDetail, type TaskSummary, type WorkspaceRecord } from './records.js';
+import { ApprovalDecision, AttentionKind, RemoteApprovalLevel, ReviewDecision, SCHEMA_VERSION } from './states.js';
 
 /** 单帧上限；超长帧直接断开，防止本机客户端撑爆内存。 */
 export const MAX_FRAME_BYTES = 1024 * 1024;
@@ -42,6 +49,40 @@ export const CommandArgs = {
   'attention.markRead': z.object({ itemKind: AttentionKind, itemId: Id }),
   'messages.search': z.object({ query: z.string().min(1).max(200), limit: z.number().int().positive().max(100).default(20) }),
   'maintenance.backup': z.object({}),
+  'workspace.list': z.object({}),
+  /** 远程审批等级只能在桌面修改：这条命令只在管理窗口里有入口，外部渠道没有对应命令。 */
+  'workspace.setRemoteApprovalLevel': z.object({ workspaceId: Id, expectedVersion: Version, level: RemoteApprovalLevel }),
+  'channel.overview': z.object({}),
+  'channel.configure': z
+    .object({
+      provider: ChannelProvider,
+      expectedVersion: Version,
+      enabled: z.boolean(),
+      /** 只支持 http(s) 代理；空串表示不用代理。 */
+      proxyUrl: z
+        .string()
+        .trim()
+        .max(500)
+        .refine((v) => v === '' || /^https?:\/\/[^\s/]+(:\d+)?\/?$/.test(v), { message: '代理地址格式应为 http://主机:端口' })
+        .transform((v) => v || null)
+        .default(''),
+      /** 飞书 App ID；与 secret 一起填写时更新凭据。 */
+      appId: z.string().trim().min(1).max(200).optional(),
+      /** 飞书 App Secret 或 Telegram Bot Token；只写不回显。 */
+      secret: z.string().trim().min(1).max(500).optional(),
+      forgetCredential: z.boolean().default(false),
+    })
+    .strict()
+    .refine((v) => v.provider !== 'feishu' || (v.secret === undefined) === (v.appId === undefined), {
+      message: '飞书需要同时填写 App ID 和 App Secret',
+    }),
+  'channel.pairings': z.object({}),
+  'channel.decidePairing': z.object({ code: z.string().regex(/^[A-Z0-9]{8}$/), approve: z.boolean() }),
+  'channel.accounts': z.object({}),
+  /** 解绑（revoked），或让已解绑的账号可以重新配对（unbound）。 */
+  'channel.setAccountStatus': z.object({ accountId: Id, expectedVersion: Version, status: z.enum(['revoked', 'unbound']) }),
+  'channel.groups': z.object({}),
+  'channel.setGroupAllowed': z.object({ conversationId: Id, expectedVersion: Version, allowed: z.boolean() }),
 } as const;
 export type CommandName = keyof typeof CommandArgs;
 export const COMMAND_NAMES = Object.keys(CommandArgs) as [CommandName, ...CommandName[]];
@@ -63,6 +104,16 @@ export interface CommandResults {
   'attention.markRead': void;
   'messages.search': MessageRecord[];
   'maintenance.backup': { path: string };
+  'workspace.list': WorkspaceRecord[];
+  'workspace.setRemoteApprovalLevel': void;
+  'channel.overview': ChannelOverview[];
+  'channel.configure': ChannelOverview[];
+  'channel.pairings': PairingRecord[];
+  'channel.decidePairing': void;
+  'channel.accounts': ChannelAccountRecord[];
+  'channel.setAccountStatus': void;
+  'channel.groups': ConversationRecord[];
+  'channel.setGroupAllowed': void;
 }
 export type CommandResultOf<N extends CommandName> = CommandResults[N];
 

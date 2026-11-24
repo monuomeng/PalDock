@@ -7,6 +7,8 @@ import { z } from 'zod';
 export const ParentToService = z.discriminatedUnion('type', [
   z.object({ type: z.literal('init'), dataRoot: z.string().min(1), ipcPath: z.string().min(1), token: z.string().min(32) }),
   z.object({ type: z.literal('shutdown') }),
+  /** 桌面状态（powerMonitor）：只在变化时发送；审批升级据此判断用户是否在电脑前。 */
+  z.object({ type: z.literal('presence'), locked: z.boolean(), idle: z.boolean() }),
 ]);
 export type ParentToService = z.infer<typeof ParentToService>;
 

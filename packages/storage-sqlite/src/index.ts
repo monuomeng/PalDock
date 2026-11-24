@@ -2,23 +2,27 @@ import { join } from 'node:path';
 import type { RecoveryReport, StorePort } from '@paldock/contracts';
 import { AttentionQueries } from './attention.js';
 import { backupDataRoot, type BackupResult } from './backup.js';
+import { ChannelRepository } from './channel-repository.js';
 import { Clock } from './clock.js';
 import { Database } from './database.js';
 import { EventLog } from './event-log.js';
 import { Inbox } from './inbox.js';
 import { MessageStore } from './messages.js';
 import { migrate, type MigrateResult } from './migrations/index.js';
+import { Outbox } from './outbox.js';
 import { interruptActiveWork } from './recovery.js';
 import { RunRepository } from './run-repository.js';
 import { TaskRepository } from './task-repository.js';
 
 export type { AttentionQueries } from './attention.js';
 export type { BackupResult } from './backup.js';
+export type { ChannelRepository } from './channel-repository.js';
 export { Clock } from './clock.js';
 export { Database } from './database.js';
 export type { EventLog } from './event-log.js';
 export type { Inbox, InboxItem } from './inbox.js';
 export type { MessageStore } from './messages.js';
+export type { Outbox } from './outbox.js';
 export { MIGRATIONS, migrate, type MigrateResult, type Migration } from './migrations/index.js';
 export { ACTIVE_RUN_STATUSES, interruptActiveWork } from './recovery.js';
 export type { RunRepository } from './run-repository.js';
@@ -32,6 +36,8 @@ export interface Store extends StorePort {
   inbox: Inbox;
   attention: AttentionQueries;
   messages: MessageStore;
+  channels: ChannelRepository;
+  outbox: Outbox;
   migration: MigrateResult;
   /** 中断所有未结束的工作（启动恢复、正常退出前）。 */
   interruptActiveWork(reason: string): RecoveryReport;
@@ -57,6 +63,8 @@ export async function openStore(dataRoot: string | ':memory:', now: () => Date =
     inbox: new Inbox(db, clock),
     attention: new AttentionQueries(db, clock),
     messages: new MessageStore(db, events, clock),
+    channels: new ChannelRepository(db, events, clock),
+    outbox: new Outbox(db, clock),
     migration,
     interruptActiveWork: (reason) => interruptActiveWork(db, events, clock, reason),
     backup: () => {

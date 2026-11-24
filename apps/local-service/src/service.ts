@@ -1,5 +1,5 @@
 import type { Server, Socket } from 'node:net';
-import { RunSupervisor, TaskService } from '@paldock/application';
+import { ChannelService, RunSupervisor, TaskService, type AdapterFactory, type CredentialPort } from '@paldock/application';
 import {
   ClientFrame,
   CodedError,
@@ -13,12 +13,13 @@ import {
   type ServerFrame,
 } from '@paldock/contracts';
 import { acquirePidLock, listenIpc, readFrames, serializeFrame, tokensEqual, writeFrame } from '@paldock/platform';
-import { P1_DEFAULTS } from '@paldock/domain';
+import { P1_DEFAULTS, type P2Limits } from '@paldock/domain';
 import { CodexAdapter } from '@paldock/runtime-codex';
 import { openStore, type Store } from '@paldock/storage-sqlite';
+import { createAdapter, systemCredentials } from './channels.js';
 import { createHandlers, type Handlers } from './commands.js';
 
-export const SERVICE_VERSION = '0.1.0-p1';
+export const SERVICE_VERSION = '0.2.0-p2';
 const HELLO_TIMEOUT_MS = 5_000;
 const REPLAY_BATCH = 500;
 
@@ -37,6 +38,8 @@ export interface ServiceOptions {
   runtime?: RuntimeAdapter;
   /** 覆盖占位默认值（测试用）。 */
   limits?: ConstructorParameters<typeof RunSupervisor>[0]['limits'];
+  /** 外部渠道的适配器工厂、凭据库与默认值；缺省为飞书/Telegram 适配器与系统凭据库（测试注入假的）。 */
+  channels?: { createAdapter?: AdapterFactory; credentials?: CredentialPort; limits?: Partial<P2Limits> };
 }
 
 type Outcome = { value: unknown } | { error: { code: ErrorCode; message: string } };
@@ -54,6 +57,7 @@ export class LocalService {
 
   private handlers!: Handlers;
   private supervisor!: RunSupervisor;
+  private channels!: ChannelService;
 
   private constructor(
     private readonly store: Store,
@@ -78,7 +82,11 @@ export class LocalService {
           ...(process.env.PALDOCK_CODEX_PATH ? { configuredPath: process.env.PALDOCK_CODEX_PATH } : {}),
           cancelWaitMs: P1_DEFAULTS.cancelWaitForTurnMs,
         });
-      const publish = (events: PersistentEvent[]) => service.broadcast(events);
+      // 持久事件同时送给管理窗口和外部渠道（从外部建的任务的进度、审批处理结果）
+      const publish = (events: PersistentEvent[]) => {
+        service.broadcast(events);
+        service.channels.onEvents(events);
+      };
       service.supervisor = new RunSupervisor({
         store,
         runtime,
@@ -89,13 +97,24 @@ export class LocalService {
         ...(options.limits ? { limits: options.limits } : {}),
       });
       const tasks = new TaskService({ store, supervisor: service.supervisor, dataRoot, publish });
-      service.handlers = createHandlers(store, tasks, {
+      service.channels = new ChannelService({
+        store,
+        tasks,
+        credentials: options.channels?.credentials ?? systemCredentials,
+        createAdapter: options.channels?.createAdapter ?? createAdapter,
+        publish,
+        publishEphemeral: (event) => service.broadcastEphemeral(event),
+        log,
+        ...(options.channels?.limits ? { limits: options.channels.limits } : {}),
+      });
+      service.handlers = createHandlers(store, tasks, service.channels, {
         version: SERVICE_VERSION,
         startedAt: new Date().toISOString(),
         interruptedRuns,
         runtime: runtime.name,
       });
       service.supervisor.start();
+      service.channels.start();
       service.server = await listenIpc(ipcPath, (socket) => service.accept(socket));
       log(`migration v${store.migration.from}→v${store.migration.to}, interrupted runs: ${interruptedRuns}`);
       return service;
@@ -182,8 +201,14 @@ export class LocalService {
     for (const client of this.clients) client.write(text);
   }
 
-  /** 正常退出：先结束执行器进程树，再让未结束的 Run 进入 interrupted 并落库，最后关闭连接、数据库和锁。 */
+  /** 桌面状态由 Electron 主进程经控制通道送来。 */
+  setPresence(presence: { locked: boolean; idle: boolean }): void {
+    this.channels.setPresence({ uiRunning: true, ...presence });
+  }
+
+  /** 正常退出：先停渠道（不再接收外部消息），再结束执行器进程树，让未结束的 Run 进入 interrupted 并落库，最后关闭连接、数据库和锁。 */
   async stop(): Promise<void> {
+    await this.channels.stop();
     await this.supervisor.stop();
     this.broadcast(this.store.interruptActiveWork('应用退出').events);
     for (const client of this.clients) client.end();

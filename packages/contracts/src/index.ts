@@ -1,4 +1,5 @@
 export * from './states.js';
+export * from './channels.js';
 export * from './events.js';
 export * from './ipc.js';
 export * from './records.js';

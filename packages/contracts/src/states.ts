@@ -50,6 +50,7 @@ export type RiskLevel = z.infer<typeof RiskLevel>;
 export const RemoteApprovalLevel = z.enum(['L0', 'L1', 'L2']);
 export type RemoteApprovalLevel = z.infer<typeof RemoteApprovalLevel>;
 
+/** 审批来源：桌面、外部渠道（与 ChannelProvider 同名）或策略（过期、Run 结束时自动取消）。 */
 export const ApprovalChannel = z.enum(['desktop', 'feishu', 'telegram', 'policy']);
 export type ApprovalChannel = z.infer<typeof ApprovalChannel>;
 
