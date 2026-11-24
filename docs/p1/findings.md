@@ -73,3 +73,17 @@
 **端到端检查与已安装的 PalDock 冲突**：本机运行着已安装的 PalDock 时，`e2e-check` 启动的开发版窗口会被单实例锁挡住（立即退出）。新增环境变量 `PALDOCK_USER_DATA`（仅用于开发和测试）给开发版独立的 userData，检查脚本默认使用，不再与已安装版本互相影响。
 
 **CI 第二轮（提交 `b238275`）**：Windows 只剩新加的 8.3 短名用例失败——期望值本身是 runner 的短名临时目录，没有展开成真实路径（测试写错，已改）。macOS 上系统目录拦截把 `/private/var/folders` 下的临时目录也拦了：校验前已把路径转成真实路径，而系统目录列表里有整个 `/private`。现在系统目录判断统一放在 `platform`（项目目录与数据目录共用），只列具体的系统目录（含 `/private/etc`，不再整个拦 `/private`），并加了「用户临时目录不算系统目录」的跨平台用例。
+
+## 锁屏与空闲事件（Windows，2026-11-24，用户本机）
+
+安装版用 `PALDOCK_DIAGNOSTICS=1` 启动，事件写入数据目录下的 `diagnostics.log`（P0-04 留下的未验证项）。没有测睡眠。
+
+| 事件 | 结果 |
+|---|---|
+| 空闲（60 秒无操作） | 收到：`idle-state` active → idle，时间与阈值吻合（启动后 60 秒） |
+| 锁屏 / 解锁 | 收到 `lock-screen`、`unlock-screen`，但**每次各两条**，间隔约 30 毫秒 |
+| 锁屏期间的空闲状态 | `getSystemIdleState` 返回 `locked`（idle → locked，解锁后 locked → active） |
+| 睡眠 / 唤醒 | 未测 |
+| `user-did-become-active` / `user-did-resign-active` | 未收到（这两个是 macOS 事件，Windows 上本来就没有） |
+
+**重复的锁屏事件**：诊断代码里每个事件只注册一次（`startPowerDiagnostics` 只在启动时调用一次），所以重复来自 Electron 在 Windows 上的事件本身。将来审批升级和推送积压要用的是「当前是否锁屏」这个状态，不应按事件次数计数：实现时以状态变化为准（已锁屏时再收到 lock-screen 忽略），或直接用 `getSystemIdleState` 的 `locked`。诊断日志本身照实记录，不做去重。
