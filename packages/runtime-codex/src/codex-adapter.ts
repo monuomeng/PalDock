@@ -7,8 +7,7 @@ import type {
   RuntimeRun,
   TurnCheck,
 } from '@paldock/contracts';
-import { childEnv, nodeRuntimeEnv } from '@paldock/platform';
-import { codexVersion, meetsMinimum, MIN_CODEX_VERSION, resolveCodexCommand } from './discover.js';
+import { codexVersion, commandEnv, meetsMinimum, MIN_CODEX_VERSION, resolveCodexCommand } from './discover.js';
 import { JsonRpcStdioClient, RpcError, type RpcHandlers } from './json-rpc.js';
 import { approvalResponse, finalTurnEvent, toApprovalRequest, toTurnCheck, type CodexTurn } from './event-mapping.js';
 
@@ -103,7 +102,7 @@ export class CodexAdapter implements RuntimeAdapter {
   private async open(handlers: RpcHandlers): Promise<JsonRpcStdioClient> {
     const cmd = resolveCodexCommand(this.configuredPath);
     if (!cmd) throw new Error('未找到 codex 可执行文件');
-    const env = childEnv({ ...nodeRuntimeEnv(cmd.command), ...this.options.extraEnv });
+    const env = commandEnv(cmd, this.options.extraEnv);
     const rpc = new JsonRpcStdioClient(cmd.command, [...cmd.prefixArgs, 'app-server', '--listen', 'stdio://'], handlers, env);
     try {
       await rpc.request('initialize', { clientInfo: CLIENT_INFO, capabilities: { experimentalApi: false } }, this.options.requestTimeoutMs);
