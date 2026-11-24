@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { APPROVAL_STATUSES, RUN_STATUSES, SUBTASK_STATUSES, TASK_STATUSES, type SubtaskStatus } from '@paldock/contracts';
-import { DomainError, runMachine } from '@paldock/domain';
+import { DomainError, runMachine, taskIdPrefix, taskKey } from '@paldock/domain';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Database } from './database.js';
 import { MIGRATIONS, migrate } from './migrations/index.js';
@@ -104,6 +104,15 @@ describe('任务创建', () => {
       { task: { id: second.task.id } },
     ]);
     expect(plan(`SELECT id FROM subtasks ORDER BY updated_at DESC LIMIT 10`)).toContain('subtasks_by_activity');
+  });
+
+  it('按 ID 前缀找任务走主键范围（短编号、分支名里的编号）', () => {
+    const { task } = seedTask();
+    const key = taskKey(task.id);
+    expect(store.tasks.findTasksByIdPrefix(taskIdPrefix(key.slice(0, 6))!, 2).map((t) => t.id)).toEqual([task.id]);
+    expect(store.tasks.findTasksByIdPrefix(taskIdPrefix(key.slice(0, 12))!, 2).map((t) => t.id)).toEqual([task.id]);
+    expect(store.tasks.findTasksByIdPrefix(taskIdPrefix('0000000000')!, 2)).toEqual([]);
+    expect(plan(`SELECT id FROM tasks WHERE id >= 'task_a' AND id < 'task_a' || '~' LIMIT 2`)).toMatch(/USING (INTEGER )?PRIMARY KEY|sqlite_autoindex_tasks/);
   });
 
   it('接续的任务记下来源', () => {

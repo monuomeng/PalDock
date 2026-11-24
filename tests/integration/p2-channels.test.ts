@@ -260,6 +260,10 @@ describe('外部建任务与结果回发', () => {
     await cardTitled(new RegExp(`#${ref} `));
     const review = await waitFor(() => adapter.cards().find((c) => c.buttons.some((b) => b.label === '结束任务')), '待命中卡片');
     expect(review.lines.join('\n')).toContain('模拟执行完成');
+    // /done 后点「先不结束」只作废确认卡片，进度卡片上的「结束任务」仍然有效
+    adapter.say('wang', '/done');
+    adapter.click('wang', buttonOf(await cardTitled(`结束 #${ref}？`), '先不结束'));
+    await cardTitled('好的，任务继续待命。');
     adapter.click('wang', buttonOf(review, '结束任务'));
     await waitFor(() => adapter.cards().find((c) => c.lines.some((l) => l.startsWith('任务已结束'))), '已结束卡片');
 

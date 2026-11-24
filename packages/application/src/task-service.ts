@@ -263,7 +263,9 @@ export class TaskService {
         ...this.store.tasks.transitionTask(task.id, task.version, 'queued').events,
       ]),
     );
-    this.deps.supervisor.enqueue(subtaskId, { prompt: action === 'resume' ? resumePrompt(task.goal) : firstRunPrompt(task.goal), ...plan });
+    // 重新开始是新会话，接续任务要重新带上来源任务的上下文
+    const restart = () => (task.continuedFromTaskId ? this.continuation(task.continuedFromTaskId, task.goal).prompt : firstRunPrompt(task.goal));
+    this.deps.supervisor.enqueue(subtaskId, { prompt: action === 'resume' ? resumePrompt(task.goal) : restart(), ...plan });
   }
 
   /** 取消或放弃：被中断的最新 Run、子任务、任务同一事务进入终态。 */

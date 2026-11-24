@@ -44,6 +44,8 @@ const SQL = {
   // 条件与部分索引 tasks_by_idempotency_key 一致（= 隐含 IS NOT NULL）
   selectTaskByKey: `SELECT ${COLUMNS.task()} FROM tasks WHERE idempotency_key = ?`,
   selectTask: `SELECT ${COLUMNS.task()} FROM tasks WHERE id = ?`,
+  // 主键范围：'~' 排在十六进制数字和连字符之后
+  selectTasksByIdPrefix: `SELECT ${COLUMNS.task()} FROM tasks WHERE id >= ?1 AND id < ?1 || '~' ORDER BY id LIMIT ?2`,
   insertSubtask: `
     INSERT INTO subtasks (id, task_id, role, goal, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?5)
     RETURNING ${COLUMNS.subtask()}`,
@@ -183,6 +185,10 @@ export class TaskRepository implements TaskStorePort {
 
   listTasks(limit: number): TaskSummary[] {
     return this.summaries(SQL.listTasks, limit);
+  }
+
+  findTasksByIdPrefix(prefix: string, limit: number): TaskRecord[] {
+    return this.db.all<TaskRow>(SQL.selectTasksByIdPrefix, prefix, limit).map(toTask);
   }
 
   recentTasks(limit: number): TaskSummary[] {

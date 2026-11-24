@@ -121,6 +121,8 @@ export interface TaskStorePort {
   listTasks(limit: number): TaskSummary[];
   /** 按最近活动（子任务最后变化）倒序。 */
   recentTasks(limit: number): TaskSummary[];
+  /** ID 以 prefix 开头的任务（主键范围查询），最多 limit 个。 */
+  findTasksByIdPrefix(prefix: string, limit: number): TaskRecord[];
   setWorktree(subtaskId: string, worktreePath: string, branch: string, baseCommit: string): SubtaskRecord | undefined;
   transitionTask(id: string, expectedVersion: number, to: TaskStatus, reason?: string): Change<TaskRecord>;
   transitionSubtask(id: string, expectedVersion: number, to: SubtaskStatus, reason?: string): Change<SubtaskRecord>;
@@ -177,6 +179,8 @@ export interface ChannelStorePort {
   setConversation(id: string, expectedVersion: number, settings: { groupAllowed: boolean; defaultWorkspaceId: string | null }): Change<ConversationRecord>;
   setCurrentTask(conversationId: string, taskId: string | null): void;
   conversationsFocusedOn(taskId: string): ConversationRecord[];
+  /** 任务结束时清掉所有以它为当前任务的会话。 */
+  clearCurrentTask(taskId: string): void;
   openPairing(
     account: ChannelAccountRecord,
     conversationId: string,

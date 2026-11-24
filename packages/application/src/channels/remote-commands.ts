@@ -10,7 +10,7 @@ import {
   type TaskRecord,
   type WorkspaceRecord,
 } from '@paldock/contracts';
-import { canApproveRemotely, P1_DEFAULTS, taskKey, type P2Limits } from '@paldock/domain';
+import { canApproveRemotely, taskIdPrefix, type P2Limits } from '@paldock/domain';
 import type { CreateTaskInput, TaskService } from '../task-service.js';
 import {
   clip,
@@ -41,11 +41,8 @@ export interface RemoteCommandsDeps {
   limits: P2Limits;
 }
 
-/** 命令里的任务编号（#a1b2c3）或分支名（paldock/<12 位>）统一成 taskKey 的前缀。 */
-const refOf = (arg: string) => {
-  const ref = arg.replace(/^#/, '').toLowerCase();
-  return ref.startsWith(P1_DEFAULTS.branchPrefix) ? ref.slice(P1_DEFAULTS.branchPrefix.length) : ref;
-};
+/** 命令里的任务编号（#a1b2c3）或分支名（paldock/<12 位>，前缀可配置，取最后一段）统一成 taskKey 的前缀。 */
+const refOf = (arg: string) => arg.replace(/^#/, '').toLowerCase().split('/').at(-1) ?? '';
 
 /** 群里只能看状态和建任务；继续、结束、取消、审批只在单聊（计划 P2-08、P2-10）。 */
 const GROUP_ACTIONS = new Set<ChannelActionRecord['kind']>(['create_task', 'dismiss']);
@@ -192,17 +189,21 @@ export class RemoteCommands implements InboundHandler {
       const current = ctx.conversation.kind === 'dm' && ctx.conversation.currentTaskId ? this.deps.store.tasks.getTask(ctx.conversation.currentTaskId) : undefined;
       return current ? fn(current) : this.say(ctx, notice('请带上任务编号', '例如 /status #a1b2c3；发送 /tasks 查看编号。'));
     }
-    const matches = this.deps.store.tasks.listTasks(50).filter(({ task }) => taskKey(task.id).startsWith(ref));
+    const prefix = taskIdPrefix(ref);
+    const matches = prefix ? this.deps.store.tasks.findTasksByIdPrefix(prefix, 2) : [];
     if (matches.length !== 1) return this.say(ctx, notice(matches.length === 0 ? '没有找到这个任务' : '编号不唯一，请多写几位'));
-    return fn(matches[0]!.task);
+    return fn(matches[0]!);
   }
 
   /** /continue：不带参数列出最近的任务；带编号时设为当前任务，再带指令就直接继续。 */
   private async continueCommand(ctx: InboundContext, arg: string): Promise<InboundOutcome> {
     if (!arg) {
       const recent = this.deps.store.tasks.recentTasks(this.limits.taskListSize);
+      // 列表卡片上的按钮共用一个目标：选了一个，其余作废（要看别的再发 /continue）
+      const proposal = newProposalId();
       const select = (taskId: string) =>
-        this.channels.createAction({ conversationId: ctx.conversation.id, kind: 'select_task', targetId: taskId, ttlMs: this.limits.confirmActionTtlMs }).token;
+        this.channels.createAction({ conversationId: ctx.conversation.id, kind: 'select_task', targetId: proposal, payload: taskId, ttlMs: this.limits.confirmActionTtlMs })
+          .token;
       return this.say(ctx, recentTasksCard(recent, ctx.conversation.currentTaskId, this.deps.now(), select));
     }
     const [ref = '', ...rest] = arg.split(/\s+/);
@@ -225,11 +226,12 @@ export class RemoteCommands implements InboundHandler {
     if (!actions.review) {
       return this.say(ctx, notice(`#${taskRef(task.id)} 现在${SUBTASK_LABEL[subtask.status]}`, '只有待命中的任务能结束。'));
     }
-    // 两个按钮都以子任务为目标：点了其一另一个作废；任务离开待命时一并作废
-    const base = { conversationId: ctx.conversation.id, targetId: subtask.id, ttlMs: this.limits.confirmActionTtlMs };
-    const confirm = this.channels.createAction({ ...base, kind: 'accept_review', targetVersion: subtask.version });
+    // 以这张卡片为目标（不影响进度卡片上的「结束任务」）；子任务 ID 放在 payload，版本号核对先到者
+    const proposal = newProposalId();
+    const base = { conversationId: ctx.conversation.id, targetId: proposal, ttlMs: this.limits.confirmActionTtlMs };
+    const confirm = this.channels.createAction({ ...base, kind: 'accept_review', targetVersion: subtask.version, payload: subtask.id });
     const dismiss = this.channels.createAction({ ...base, kind: 'dismiss', payload: '好的，任务继续待命。' });
-    return this.say(ctx, confirmDoneCard(task, confirm.token, dismiss.token), subtask.id);
+    return this.say(ctx, confirmDoneCard(task, confirm.token, dismiss.token), proposal);
   }
 
   private confirmCancel(ctx: InboundContext, task: TaskRecord): InboundOutcome {
@@ -305,13 +307,10 @@ export class RemoteCommands implements InboundHandler {
       case 'approve':
       case 'deny':
         return this.decideApproval(ctx, action);
-      case 'accept_review': {
-        // 结束任务：提交到分支；结束的是当前任务时清掉，下一句话不再接着它做
-        await tasks.decideReview(action.targetId, action.targetVersion!, 'accept');
-        const taskId = this.deps.store.tasks.getSubtask(action.targetId)?.taskId;
-        if (taskId && ctx.conversation.currentTaskId === taskId) this.channels.setCurrentTask(ctx.conversation.id, null);
+      case 'accept_review':
+        // 进度卡片上的按钮以子任务为目标；/done 确认卡片以卡片为目标，子任务在 payload
+        await tasks.decideReview(action.payload ?? action.targetId, action.targetVersion!, 'accept');
         return;
-      }
       case 'continue_task': {
         const { subtask, actions } = this.select(ctx, action.targetId);
         const ref = `#${taskRef(action.targetId)}`;
@@ -320,7 +319,7 @@ export class RemoteCommands implements InboundHandler {
         return;
       }
       case 'select_task':
-        this.say(ctx, taskHistoryCard(this.select(ctx, action.targetId), this.deps.now()));
+        this.say(ctx, taskHistoryCard(this.select(ctx, action.payload!), this.deps.now()));
         return;
     }
   }

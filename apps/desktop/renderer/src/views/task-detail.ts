@@ -101,9 +101,10 @@ function actions({ task, subtask, actions: allowed }: TaskDetail, act: Act): HTM
 /** 待命中：写下一步指令继续（同一 worktree、同一执行器会话），或结束任务（提交到任务分支）。 */
 function reviewActions(subtask: SubtaskRecord, act: Act, cancel: HTMLElement | null): HTMLElement {
   const note = h('textarea', { id: 'review-note', rows: 3, 'data-keep': `review-${subtask.id}`, placeholder: '继续时必填：下一步要做什么' });
+  // 指令只随「继续」发出；「结束任务」不带它，避免写了指令却点错按钮被当成备注
   const decide = (decision: 'accept' | 'rework') =>
     act(() => {
-      const text = note.value.trim();
+      const text = decision === 'rework' ? note.value.trim() : '';
       return call('review.decide', { subtaskId: subtask.id, expectedVersion: subtask.version, decision, ...(text ? { note: text } : {}) });
     });
   return h(

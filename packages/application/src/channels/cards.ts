@@ -193,6 +193,7 @@ export function taskProgressCard(
   reason: string | null,
   result: RunResultRecord | undefined,
   review?: { end: string; next: string },
+  dm = review !== undefined,
 ): Card {
   const head = `#${taskRef(task.id)} ${clip(task.title, 60)}`;
   switch (status) {
@@ -212,7 +213,10 @@ export function taskProgressCard(
     case 'failed':
       return card(head, 'danger', [`失败：${clip(reason ?? '原因未知', 200)}`]);
     case 'succeeded':
-      return card(head, 'success', ['任务已结束，改动已提交到 PalDock 分支（未合并）。', `想接着做：/continue #${taskRef(task.id)} <指令>`]);
+      return card(head, 'success', [
+        '任务已结束，改动已提交到 PalDock 分支（未合并）。',
+        dm ? `想接着做：/continue #${taskRef(task.id)} <指令>` : '想接着做请到单聊或电脑上。',
+      ]);
     case 'cancelled':
       return card(head, 'info', ['已取消。']);
     default:

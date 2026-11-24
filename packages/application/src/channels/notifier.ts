@@ -10,7 +10,7 @@ import type {
   SubtaskStatus,
   TaskRecord,
 } from '@paldock/contracts';
-import { canApproveRemotely, shouldEscalateApproval, type DesktopPresence, type P2Limits } from '@paldock/domain';
+import { canApproveRemotely, shouldEscalateApproval, subtaskMachine, type DesktopPresence, type P2Limits } from '@paldock/domain';
 import { approvalCard, approvalDecidedCard, taskProgressCard } from './cards.js';
 
 export interface NotifierDeps {
@@ -63,6 +63,8 @@ export class ChannelNotifier {
     const subtask = tasks.getSubtask(subtaskId);
     const task = subtask && tasks.getTask(subtask.taskId);
     const subscribers = task ? this.subscribers(task) : [];
+    // 任务结束（不管在哪一端结束）后不再是任何单聊的当前任务：下一句话是新任务；想接着做要 /continue 选它
+    if (task && subtaskMachine.isTerminal(to)) this.channels.clearCurrentTask(task.id);
     if (!subtask || !task || subscribers.length === 0) return;
     // 证据只有待命中卡片要用
     const latest = to === 'review' ? runs.latestRun(subtask.id) : undefined;
@@ -86,7 +88,7 @@ export class ChannelNotifier {
             next: this.action(conversation, 'continue_task', task.id, null, this.limits.reviewActionTtlMs),
           }
         : undefined;
-    this.deps.send(conversation, taskProgressCard(task, to, subtask.statusReason, result, review));
+    this.deps.send(conversation, taskProgressCard(task, to, subtask.statusReason, result, review, conversation.kind === 'dm'));
   }
 
   /** 会话仍然可以收通知：单聊的账号没被解绑，群仍在白名单里。 */
