@@ -1,0 +1,35 @@
+# P2 实测记录
+
+记录时间 2026-11-24。只记录实际跑过的结果；还没在真实租户、真实 bot 或 Mac 上跑过的，写在「待实机」里。计划见 [P2 开发计划](../plan/p2-external-channels.md)，变更说明见 [docs/pr/p2-external-channels.md](../pr/p2-external-channels.md)。
+
+## 结论一览
+
+| 项 | 结果 |
+|---|---|
+| 离线测试 | `pnpm test` 198 项通过、2 项跳过（opt-in 实机测试），连续 5 次全绿。开发环境：Linux 容器，Node 22（CI 仍以 Windows + macOS 为准） |
+| P2 端到端（离线） | `tests/integration/p2-channels.test.ts` 15 项：本地服务 + 模拟 Codex + 假渠道适配器，覆盖配对、解绑、去重、限速、群白名单、外部建任务到验收、退回重做、取消、审批升级（锁屏 / 空闲 / L0 / 渠道停用）、出站失败分类、凭据只写不回显 |
+| 许可证 | 55 个生产依赖均为允许闭源分发的许可证；新增 `undici` 7.30.2（MIT），飞书 SDK 沿用 P0 的 1.76.0（MIT） |
+| 飞书 | 协议转换与卡片渲染有样本测试；**真实租户未跑**（见待实机） |
+| Telegram | 协议转换、长轮询、错误分类有测试；经代理访问 Bot API 的错误路径实测过（见下）；**真实 bot 未跑** |
+| 设置页 | 用假数据在 Chromium 里渲染检查过布局（深浅色变量沿用 P1）；真实 Electron 窗口未跑 |
+
+## 已经验证的
+
+**Telegram 经代理的错误路径**：在容器里用 undici `ProxyAgent` 调 `getMe`（假 token）。代理拒绝建立隧道时，undici 把原因放在第三层 `cause`（`RequestAbortedError: Proxy response (403) !== 200 when HTTP Tunneling`），外层只有 `fetch failed`。据此：错误说明取 cause 链最深一层、错误码取链上第一个字符串码，代理隧道失败归为「可重试」；错误文本里的 token 会被替换为 `<token>`。本地端口不通时为 `ECONNREFUSED`，同样可重试。
+
+**Codex 首段输出偶发丢失（P1 起的偶发失败测试）**：`codex-adapter.test.ts`「正常流程」和 P1 主流程测试在整套并发跑时偶尔少了第一段输出「正在」。原因：`turn/start` 的响应和随后的 `turn/started`、第一条 `item/agentMessage/delta` 常在同一批 stdout 数据里，JSON-RPC 客户端同步处理完整批，`await` 之后记 turn ID 的代码排在这些通知之后，于是第一段输出按「不是本 turn」被丢掉。真实 Codex 同样会这样。修复：在 `turn/started` 里也记下 turn ID（只记一次）。修复后连续 5 次整套全绿。
+
+**飞书机器人信息**：`/open-apis/bot/v3/info` 的结果在响应顶层 `bot` 字段，不在 `data` 里；原实现永远取不到机器人 open_id，群里退化为「任何 @ 都算」。已改正（P0 只测了单聊，没有用到这个接口）。
+
+## 待实机（需要你的测试租户、bot 和电脑）
+
+按计划「实机验收」的 6 条走一遍，重点是离线测不到的地方：
+
+1. **飞书卡片回调走长连接**：开发者后台按 [配置飞书自建应用](../ops/feishu-app.md) 第 3 步开「卡片回传交互」长连接后，点卡片按钮能否收到 `card.action.trigger`，以及 3 秒内回的 toast 是否显示。按钮值里带了会话类型（`k: dm|group`），因为回调里只有 chat ID。
+2. **飞书卡片更新**：审批处理后、确认卡片点完后，原卡片是否被 `PATCH` 成结果（`update_multi: true`）。
+3. **群聊 @机器人**：机器人 open_id 修正后，群里 @ 别人不算 @ 机器人。
+4. **Telegram 长轮询 + 代理**：在你的代理下 `getUpdates` 是否稳定；断网 3 分钟恢复后状态从「重连中」回到「已连接」，设置页出现「渠道刚恢复」提示；`/help@你的bot` 在群里能识别。
+5. **审批升级**：锁屏立即升级、桌面 3 分钟无人处理升级；手机批准后桌面弹窗关闭。
+6. **睡眠 / 唤醒（Windows）**：睡眠期间服务暂停，唤醒后飞书长连接与 Telegram 轮询是否自动恢复、升级计时是否正常。
+
+另外：macOS 的钥匙串读写、锁屏 / 空闲事件已加进 Mac 测试包（第 7b、8 步），等测试结果回来再补到这里。强杀服务后真实 Codex 是否残留、turn 中途崩溃的恢复，按计划是 opt-in 实测，本轮没跑（需要消耗额度，等你同意）。

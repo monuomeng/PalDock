@@ -1,6 +1,6 @@
 # P2 开发计划：外部渠道（飞书、Telegram）
 
-状态：**第一版，用户已批准（2026-11-24），实施中**。文末三点按计划所写执行；推送暂停，P2 全部完成后统一推送。负责人：Claude；分支 `claude/p2-external-channels`，基于 master（`ea2ee8f`，P1 已合入）。设计依据见 [架构](../02-architecture.md)「聊天渠道适配器」「审批路由与远程审批等级」、[ADR 0002](../adr/0002-process-topology-and-task-board.md)、[路线图](../03-roadmap.md)、[P0 实测记录](../p0/findings.md) 和 [P1 实测记录](../p1/findings.md)；完成后的前因后果写在 `docs/pr/p2-external-channels.md`。
+状态：**第一版，用户已批准（2026-11-24），代码完成，待实机验收**。实现与偏差见 [变更说明](../pr/p2-external-channels.md)、[P2 实测记录](../p2/findings.md)。文末三点按计划所写执行；推送暂停，P2 全部完成后统一推送。负责人：Claude；分支 `claude/p2-external-channels`，基于 master（`ea2ee8f`，P1 已合入）。设计依据见 [架构](../02-architecture.md)「聊天渠道适配器」「审批路由与远程审批等级」、[ADR 0002](../adr/0002-process-topology-and-task-board.md)、[路线图](../03-roadmap.md)、[P0 实测记录](../p0/findings.md) 和 [P1 实测记录](../p1/findings.md)；完成后的前因后果写在 `docs/pr/p2-external-channels.md`。
 
 ## 目标
 
