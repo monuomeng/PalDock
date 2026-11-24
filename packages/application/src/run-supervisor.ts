@@ -21,7 +21,7 @@ import type {
 } from '@paldock/contracts';
 import { P1_DEFAULTS } from '@paldock/domain';
 import { runCheck } from './check-runner.js';
-import { addWorktree, headCommit, stageAndDiffStat } from './git.js';
+import { addWorktree, branchCommit, headCommit, stageAndDiffStat } from './git.js';
 import { redact } from './redact.js';
 import { riskOf } from './risk.js';
 import { moveSubtask, moveTask } from './transitions.js';
@@ -232,14 +232,26 @@ export class RunSupervisor {
     const slug = live.task.id.replace(/^task_/, '').replaceAll('-', '').slice(0, 12).toLowerCase();
     const path = join(this.deps.dataRoot, 'worktrees', slug);
     const branch = `${this.limits.branchPrefix}${slug}`;
-    const base = await headCommit(workspace.rootPath).catch(() => {
-      throw new Error('项目还没有任何提交，无法创建 worktree');
-    });
+    const base = await this.worktreeBase(live.task, workspace.rootPath);
     mkdirSync(join(this.deps.dataRoot, 'worktrees'), { recursive: true });
     const start = await addWorktree(workspace.rootPath, path, branch, base);
     const updated = this.deps.store.tasks.setWorktree(live.subtask.id, path, branch, start);
     if (updated) live.subtask = updated;
     return path;
+  }
+
+  /** 新任务从项目 HEAD 出发；接续的任务从来源任务的分支出发（包含它提交的改动）。 */
+  private async worktreeBase(task: TaskRecord, repo: string): Promise<string> {
+    const source = task.continuedFromTaskId ? this.deps.store.tasks.getSubtaskOfTask(task.continuedFromTaskId) : undefined;
+    if (!source?.branch) {
+      return headCommit(repo).catch(() => {
+        throw new Error('项目还没有任何提交，无法创建 worktree');
+      });
+    }
+    const branch = source.branch;
+    return branchCommit(repo, branch).catch(() => {
+      throw new Error(`接续的任务分支 ${branch} 已不存在（可能已被删除），无法创建 worktree`);
+    });
   }
 
   private onEvent(live: LiveRun, event: RuntimeEvent): void {

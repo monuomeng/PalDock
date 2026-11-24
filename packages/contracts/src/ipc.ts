@@ -29,6 +29,8 @@ export const CommandArgs = {
       checkConfirmed: z.boolean().default(false),
       /** 客户端为每次提交生成；重复提交返回同一个任务。 */
       idempotencyKey: z.string().min(8).max(100),
+      /** 基于这个已结束的任务继续：项目必须相同，worktree 从它的分支出发。 */
+      continuedFromTaskId: z.string().min(1).max(100).optional(),
     })
     .strict(),
   'task.list': z.object({ limit: z.number().int().positive().max(500).default(100) }),
@@ -37,7 +39,7 @@ export const CommandArgs = {
   'approval.decide': z.object({ approvalId: Id, expectedVersion: Version, decision: ApprovalDecision }),
   'review.decide': z
     .object({ subtaskId: Id, expectedVersion: Version, decision: ReviewDecision, note: z.string().trim().max(2000).optional() })
-    .refine((v) => v.decision === 'accept' || (v.note?.length ?? 0) > 0, { message: '退回重做需要写明原因' }),
+    .refine((v) => v.decision === 'accept' || (v.note?.length ?? 0) > 0, { message: '继续时需要写下一步要做什么' }),
   /** 服务重启后被中断的子任务：恢复（续做同一 thread）、重新开始（新 thread）或放弃。 */
   'run.recover': z.object({ subtaskId: Id, expectedVersion: Version, action: z.enum(['resume', 'restart', 'abandon']) }),
   'run.checkOutput': z.object({ runId: Id }),

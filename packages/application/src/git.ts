@@ -35,6 +35,11 @@ export async function headCommit(repo: string): Promise<string> {
   return (await git(repo, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
 }
 
+/** 分支当前指向的提交；分支不存在时抛 GitError。 */
+export async function branchCommit(repo: string, branch: string): Promise<string> {
+  return (await git(repo, ['rev-parse', '--verify', `refs/heads/${branch}^{commit}`])).trim();
+}
+
 /**
  * 在 base 提交上新建分支并检出到 worktreePath，返回分支实际的起点。可重入：上次已建好分支
  * （例如建完 worktree 后、记录入库前进程退出）时复用该分支，起点取它与 base 的分叉点。

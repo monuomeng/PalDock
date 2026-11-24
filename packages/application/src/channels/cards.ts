@@ -6,6 +6,7 @@ import type {
   RiskLevel,
   RunResultRecord,
   SubtaskStatus,
+  TaskDetail,
   TaskRecord,
   TaskSummary,
   WorkspaceRecord,
@@ -23,7 +24,7 @@ export const SUBTASK_LABEL: Record<SubtaskStatus, string> = {
   waiting_approval: '等待审批',
   waiting_dependency: '等待依赖',
   blocked: '阻塞',
-  review: '待验收',
+  review: '待命中',
   succeeded: '已完成',
   failed: '失败',
   cancelled: '已取消',
@@ -59,15 +60,23 @@ export function pairedCard(): Card {
 }
 
 export function helpCard(group: boolean): Card {
-  const lines = [
-    '直接发一句话：在默认项目里新建任务（会先让你确认）。',
+  if (group) {
+    return card('PalDock 可用命令', 'info', [
+      '@我 说一句话：在默认项目里新建任务（会先让你确认）。',
+      '/projects 列出项目，/use <编号> 设置默认项目',
+      '/tasks 最近的任务，/status #编号 查看一个任务',
+      '群里不能继续、结束、取消任务或审批，请到单聊或电脑上处理。',
+    ]);
+  }
+  return card('PalDock 可用命令', 'info', [
+    '直接发一句话：当前任务待命中时就是它的下一步指令；没有当前任务时新建任务（会先让你确认）。',
+    '/new <目标> 另起一个新任务',
+    '/continue 列出最近的任务，选一个作为当前任务；/continue #编号 <指令> 直接继续它',
+    '/done 结束当前任务（改动提交到任务分支，不合并）',
     '/projects 列出项目，/use <编号> 设置默认项目',
-    '/tasks 最近的任务',
-    '/status #编号 查看一个任务',
-  ];
-  if (!group) lines.push('/cancel #编号 取消任务');
-  else lines.push('群里不能取消任务或审批，请到单聊或电脑上处理。');
-  return card('PalDock 可用命令', 'info', lines);
+    '/tasks 最近的任务，/status [#编号] 查看一个任务',
+    '/cancel #编号 取消任务',
+  ]);
 }
 
 export function projectsCard(workspaces: WorkspaceRecord[], defaultId: string | null): Card {
@@ -88,13 +97,79 @@ export function confirmCreateCard(workspace: WorkspaceRecord, goal: string, conf
   );
 }
 
-export function tasksCard(tasks: TaskSummary[]): Card {
+const mark = (taskId: string, currentId: string | null) => (taskId === currentId ? '（当前）' : '');
+
+export function tasksCard(tasks: TaskSummary[], currentId: string | null): Card {
   if (tasks.length === 0) return notice('还没有任务');
   return card(
     '最近的任务',
     'info',
-    tasks.map(({ task, subtaskStatus }) => `#${taskRef(task.id)} ${SUBTASK_LABEL[subtaskStatus]} · ${clip(task.title, 40)}`),
+    tasks.map(({ task, subtaskStatus }) => `#${taskRef(task.id)}${mark(task.id, currentId)} ${SUBTASK_LABEL[subtaskStatus]} · ${clip(task.title, 40)}`),
   );
+}
+
+/** 相对时间，手机上不用换算时区。 */
+export function ago(iso: string, now: Date): string {
+  const minutes = Math.floor((now.getTime() - Date.parse(iso)) / 60_000);
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟前`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} 小时前`;
+  return `${Math.floor(minutes / (24 * 60))} 天前`;
+}
+
+/** /continue 的列表：按最近活动排序，每个任务一个按钮，点了设为当前任务并显示它做过什么。 */
+export function recentTasksCard(tasks: TaskSummary[], currentId: string | null, now: Date, select: (taskId: string) => string): Card {
+  if (tasks.length === 0) return notice('还没有任务', '直接发一句话就能新建任务。');
+  const lines = tasks.map(
+    ({ task, subtaskStatus, lastActivityAt }) =>
+      `#${taskRef(task.id)}${mark(task.id, currentId)} ${SUBTASK_LABEL[subtaskStatus]} · ${ago(lastActivityAt, now)} · ${clip(task.title, 40)}`,
+  );
+  lines.push('点编号查看这个任务做过什么，并把它设为当前任务。');
+  return card('最近的任务', 'info', lines, tasks.map(({ task }) => button(`#${taskRef(task.id)}`, select(task.id))));
+}
+
+/** 每一轮收到的指令：第一轮是任务目标；之后是上一轮待命时用户给的下一步指令；中断后恢复、重新开始没有新指令。 */
+function instructionOf(detail: TaskDetail, index: number): string {
+  if (index === 0) return detail.task.goal;
+  const previous = detail.runs[index - 1]!;
+  const next = previous.reviews.find((r) => r.decision === 'rework')?.note;
+  if (next) return next;
+  return detail.runs[index]!.run.resumesRunId ? '（中断后恢复）' : '（重新开始）';
+}
+
+const NEXT_STEP: Partial<Record<SubtaskStatus, string>> = {
+  review: '直接回复就是下一步指令；/done 结束任务。',
+  succeeded: '任务已结束。回复一句话会基于它新建任务接着做。',
+  blocked: '任务被阻塞，请到电脑上恢复、重新开始或放弃。',
+  failed: '任务失败了。回复一句话会新建任务（会先让你确认）。',
+  cancelled: '任务已取消。回复一句话会新建任务（会先让你确认）。',
+};
+
+/** 一个任务做过什么：每一轮的指令、AI 的说明和改动，只列最近几轮。 */
+export function taskHistoryCard(detail: TaskDetail, now: Date, maxRounds = 5): Card {
+  const { task, subtask, workspace, runs } = detail;
+  const lines = [`项目：${workspace.name} · 状态：${SUBTASK_LABEL[subtask.status]}`];
+  if (subtask.branch) lines.push(`分支：${subtask.branch}`);
+  if (task.continuedFromTaskId) lines.push(`接续自 #${taskRef(task.continuedFromTaskId)}`);
+  const first = Math.max(0, runs.length - maxRounds);
+  if (first > 0) lines.push(`（共 ${runs.length} 轮，只显示最近 ${maxRounds} 轮）`);
+  if (runs.length === 0) lines.push(`目标：${clip(task.goal, 300)}`, '还没有开始执行。');
+  runs.forEach((run, index) => {
+    if (index < first) return;
+    lines.push('', `第 ${index + 1} 轮 · ${ago(run.run.startedAt, now)}`, `指令：${clip(instructionOf(detail, index), 200)}`);
+    if (run.result?.finalMessage) lines.push(`说明：${clip(run.result.finalMessage, 300)}`);
+    if (run.result?.diffStat) lines.push(`改动：${clip(run.result.diffStat.split('\n').at(-1) ?? '', 120)}`);
+    if (run.run.failureReason) lines.push(`原因：${clip(run.run.failureReason, 120)}`);
+  });
+  lines.push('', NEXT_STEP[subtask.status] ?? '正在执行，停下后再发指令。');
+  return card(`#${taskRef(task.id)} ${clip(task.title, 60)}`, 'info', lines);
+}
+
+export function confirmDoneCard(task: TaskRecord, confirm: string, dismiss: string): Card {
+  return card(`结束 #${taskRef(task.id)}？`, 'info', [clip(task.title, 200), '改动会提交到任务分支（不合并），任务结束。'], [
+    button('结束任务', confirm, 'primary'),
+    button('先不结束', dismiss),
+  ]);
 }
 
 export function taskCard(task: TaskRecord, workspace: WorkspaceRecord, status: SubtaskStatus, reason: string | null): Card {
@@ -109,24 +184,24 @@ export function confirmCancelCard(task: TaskRecord, confirm: string, dismiss: st
   ]);
 }
 
-/** 从外部建的任务进入关键节点时发回来源会话；待验收可在单聊里直接验收或退回。 */
+/** 从外部建的任务进入关键节点时发回来源会话；待命中时单聊里可以直接继续或结束。 */
 export function taskProgressCard(
   task: TaskRecord,
   status: SubtaskStatus,
   reason: string | null,
   result: RunResultRecord | undefined,
-  review?: { accept: string; rework: string },
+  review?: { end: string; next: string },
 ): Card {
   const head = `#${taskRef(task.id)} ${clip(task.title, 60)}`;
   switch (status) {
     case 'running':
       return card(head, 'info', ['开始执行。']);
     case 'review': {
-      const lines = ['已完成，等待验收。'];
+      const lines = ['这一轮做完了，待命中。'];
       if (result?.diffStat) lines.push(`改动：${clip(result.diffStat.split('\n').at(-1) ?? '', 200)}`);
       if (result?.finalMessage) lines.push(`说明：${clip(result.finalMessage, 600)}`);
-      if (!review) lines.push('请到单聊或电脑上验收。');
-      const buttons = review ? [button('验收通过', review.accept, 'primary'), button('退回重做', review.rework)] : [];
+      lines.push(review ? '直接回复就是下一步指令；/new 另起新任务。' : '请到单聊或电脑上继续或结束。');
+      const buttons = review ? [button('继续', review.next), button('结束任务', review.end, 'primary')] : [];
       return card(head, 'success', lines, buttons);
     }
     case 'blocked':
@@ -134,7 +209,7 @@ export function taskProgressCard(
     case 'failed':
       return card(head, 'danger', [`失败：${clip(reason ?? '原因未知', 200)}`]);
     case 'succeeded':
-      return card(head, 'success', ['已验收，改动已提交到 PalDock 分支（未合并）。']);
+      return card(head, 'success', ['任务已结束，改动已提交到 PalDock 分支（未合并）。', `想接着做：/continue #${taskRef(task.id)} <指令>`]);
     case 'cancelled':
       return card(head, 'info', ['已取消。']);
     default:

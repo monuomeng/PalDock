@@ -92,6 +92,36 @@ describe('任务创建', () => {
     });
   });
 
+  it('最近的任务按子任务最后一次变化排序，带最近活动时间；查询走索引', () => {
+    const first = seedTask();
+    advance(1_000);
+    const second = seedTask();
+    advance(1_000);
+    const moved = store.tasks.transitionSubtask(first.sub.id, first.sub.version, 'running').record;
+    expect(store.tasks.listTasks(10).map((t) => t.task.id)).toEqual([second.task.id, first.task.id]);
+    expect(store.tasks.recentTasks(10)).toMatchObject([
+      { task: { id: first.task.id }, lastActivityAt: moved.updatedAt },
+      { task: { id: second.task.id } },
+    ]);
+    expect(plan(`SELECT id FROM subtasks ORDER BY updated_at DESC LIMIT 10`)).toContain('subtasks_by_activity');
+  });
+
+  it('接续的任务记下来源', () => {
+    const source = seedTask();
+    const { task } = store.tasks.createTask({
+      workspaceId: source.ws.id,
+      title: '接着做',
+      goal: '接着做',
+      role: 'developer',
+      checkCommand: null,
+      checkConfirmed: false,
+      idempotencyKey: 'key-continue',
+      continuedFromTaskId: source.task.id,
+    }).record;
+    expect(task.continuedFromTaskId).toBe(source.task.id);
+    expect(store.tasks.getTask(task.id)?.continuedFromTaskId).toBe(source.task.id);
+  });
+
   it('worktree 只设置一次', () => {
     const { sub } = seedTask();
     expect(store.tasks.setWorktree(sub.id, 'D:/wt', 'paldock/x', 'abc')).toMatchObject({ worktreePath: 'D:/wt', version: 1 });

@@ -5,8 +5,8 @@ import { ATTENTION_LABEL, time } from '../format.js';
 import { navigate, taskLink } from '../router.js';
 
 /**
- * 首页「待我处理」：审批、待验收、阻塞、执行状态待确认，按时间排序。
- * 点开只记已读、不移除；处理完（审批决定、验收或退回、恢复）后由业务状态让条目消失。
+ * 首页「待我处理」：审批、待命中、阻塞、执行状态待确认，按时间排序。
+ * 点开只记已读、不移除；处理完（审批决定、继续或结束、恢复）后由业务状态让条目消失。
  */
 export async function attentionView(): Promise<HTMLElement> {
   const items = await call('attention.list', {});

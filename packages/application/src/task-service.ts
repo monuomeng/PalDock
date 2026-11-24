@@ -18,7 +18,7 @@ import {
 import { subtaskMachine } from '@paldock/domain';
 import { isInside, isSystemDirectory, samePath } from '@paldock/platform';
 import { commitStaged, headCommit, repositoryRoot } from './git.js';
-import { firstRunPrompt, resumePrompt, reworkPrompt, titleOf } from './prompts.js';
+import { continuationPrompt, firstRunPrompt, nextStepPrompt, resumePrompt, titleOf } from './prompts.js';
 import type { RunSupervisor } from './run-supervisor.js';
 import { moveTask, requireSubtask } from './transitions.js';
 
@@ -30,6 +30,8 @@ export interface CreateTaskInput {
   idempotencyKey: string;
   /** 从外部渠道建任务时的来源会话，结果回发到这里。 */
   originConversationId?: string;
+  /** 基于这个已结束的任务继续：项目必须相同，worktree 从它的分支出发。 */
+  continuedFromTaskId?: string | undefined;
 }
 
 export interface TaskServiceDeps {
@@ -56,12 +58,16 @@ function resumePlan(latest: RunRecord | undefined): { threadId: string; resumesR
   return latest?.status === 'interrupted' && latest.nativeThreadId ? { threadId: latest.nativeThreadId, resumesRunId: latest.id } : undefined;
 }
 
+/** 已结束且建过 worktree 的任务，分支上有它的结果，可以基于它新建任务继续。 */
+const canContinueFrom = (subtask: SubtaskRecord) => subtask.status === 'succeeded' && subtask.branch !== null;
+
 /** 当前允许的用户操作；界面只按它显示按钮，规则只在这里一处。 */
 function actionsOf(subtask: SubtaskRecord, latest: RunRecord | undefined): TaskActions {
   const blocked = subtask.status === 'blocked';
   return {
     cancel: !subtaskMachine.isTerminal(subtask.status),
     review: subtask.status === 'review',
+    continueFrom: canContinueFrom(subtask),
     resume: blocked && resumePlan(latest) !== undefined,
     restart: blocked,
     abandon: blocked,
@@ -99,6 +105,7 @@ export class TaskService {
     const raced = this.store.tasks.findTaskByIdempotencyKey(input.idempotencyKey);
     if (raced) return this.getTask(raced.id);
     const workspace = this.store.tasks.ensureWorkspace(basename(rootPath), rootPath);
+    const prompt = input.continuedFromTaskId ? this.continuationOf(input.continuedFromTaskId, workspace.id, input.goal) : firstRunPrompt(input.goal);
     const { record, events } = this.store.tasks.createTask({
       workspaceId: workspace.id,
       title: titleOf(input.goal),
@@ -108,11 +115,24 @@ export class TaskService {
       checkConfirmed: input.checkConfirmed,
       idempotencyKey: input.idempotencyKey,
       originConversationId: input.originConversationId ?? null,
+      continuedFromTaskId: input.continuedFromTaskId ?? null,
     });
     this.publish(events);
-    this.deps.supervisor.enqueue(record.subtask.id, { prompt: firstRunPrompt(input.goal) });
+    this.deps.supervisor.enqueue(record.subtask.id, { prompt });
     // 刚写入的记录都在手里（RETURNING），不回查；Run 由监管器异步创建
     return { task: record.task, workspace, subtask: record.subtask, runs: [], actions: actionsOf(record.subtask, undefined) };
+  }
+
+  /** 接续的来源必须是同一项目里已结束、有分支的任务；返回新任务第一轮的提示词。 */
+  private continuationOf(sourceTaskId: string, workspaceId: string, instruction: string): string {
+    const source = this.store.tasks.getTask(sourceTaskId);
+    const subtask = source && this.store.tasks.getSubtaskOfTask(source.id);
+    if (!source || !subtask) throw new CodedError('not_found', '要接续的任务不存在');
+    if (source.workspaceId !== workspaceId) throw new CodedError('bad_request', '只能在同一个项目里接续任务');
+    if (!canContinueFrom(subtask)) throw new CodedError('bad_request', '只能接续已结束（已提交到分支）的任务');
+    const latest = this.store.runs.latestRun(subtask.id);
+    const finalMessage = (latest && this.store.runs.getResult(latest.id)?.finalMessage) ?? null;
+    return continuationPrompt({ goal: source.goal, finalMessage }, instruction);
   }
 
   /** 项目必须是 git 仓库根目录，不能是系统目录或 PalDock 自己的数据根。 */
@@ -177,8 +197,8 @@ export class TaskService {
   }
 
   /**
-   * 验收：意见绑定到产生证据的那次（最新）Run。通过时把 worktree 的改动提交到 PalDock 分支（不合并）；
-   * 退回时新开一次 Run，沿用原生会话并带上意见，旧 Run 的证据保留。
+   * 待命中的任务：意见绑定到产生证据的那次（最新）Run。「结束任务」（accept）把 worktree 的改动提交到 PalDock 分支（不合并）；
+   * 「继续」（rework，必须带下一步指令）新开一次 Run，沿用 worktree 和原生会话，旧 Run 的证据保留。
    */
   async decideReview(subtaskId: string, expectedVersion: number, decision: ReviewDecision, note?: string): Promise<void> {
     this.assertNotCommitting(subtaskId);
@@ -202,7 +222,8 @@ export class TaskService {
       );
       return;
     }
-    const reason = note ?? '';
+    const reason = note?.trim() ?? '';
+    if (!reason) throw new CodedError('bad_request', '请写下一步要做什么');
     this.publish(
       this.store.transaction(() => [
         ...this.store.runs.addReview(run.id, 'rework', reason).events,
@@ -210,7 +231,7 @@ export class TaskService {
       ]),
     );
     this.deps.supervisor.enqueue(subtaskId, {
-      prompt: reworkPrompt(task.goal, reason),
+      prompt: nextStepPrompt(task.goal, reason),
       ...(run.nativeThreadId ? { threadId: run.nativeThreadId } : {}),
     });
   }

@@ -45,6 +45,8 @@ export interface TaskRecord {
   checkConfirmedAt: string | null;
   /** 从外部渠道建的任务：结果回发到这个会话。 */
   originConversationId: string | null;
+  /** 接续自哪个已结束的任务（worktree 从它的分支出发）。 */
+  continuedFromTaskId: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -155,6 +157,8 @@ export interface TaskSummary {
   task: TaskRecord;
   subtaskStatus: SubtaskStatus;
   latestRunStatus: RunStatus | null;
+  /** 子任务最后一次变化的时间（开始、待命、继续、结束等）。 */
+  lastActivityAt: string;
 }
 
 export interface RunDetail {
@@ -169,6 +173,8 @@ export interface RunDetail {
 export interface TaskActions {
   cancel: boolean;
   review: boolean;
+  /** 已结束且分支上有提交，可以基于它新建任务继续。 */
+  continueFrom: boolean;
   resume: boolean;
   restart: boolean;
   abandon: boolean;

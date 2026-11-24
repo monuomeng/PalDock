@@ -12,8 +12,15 @@ export function firstRunPrompt(goal: string): string {
   return `${goal}\n\n${FRAME}`;
 }
 
-export function reworkPrompt(goal: string, note: string): string {
-  return `用户验收后要求修改：\n${note}\n\n原始目标：\n${goal}\n\n${FRAME}`;
+/** 待命中的任务收到下一步指令：同一个 worktree、同一个执行器会话里接着做。 */
+export function nextStepPrompt(goal: string, instruction: string): string {
+  return `用户的下一步指令：\n${instruction}\n\n这个任务最初的目标：\n${goal}\n\n${FRAME}`;
+}
+
+/** 接着一个已结束的任务新开的任务：工作目录从那个任务的分支出发，已经包含它提交的改动。 */
+export function continuationPrompt(previous: { goal: string; finalMessage: string | null }, instruction: string): string {
+  const summary = previous.finalMessage ? `\n上个任务结束时的说明：\n${previous.finalMessage.slice(0, 2000)}\n` : '';
+  return `这个任务接着上一个已结束的任务做，工作目录里已经有上个任务提交的改动。\n上个任务的目标：\n${previous.goal}\n${summary}\n现在要做的：\n${instruction}\n\n${FRAME}`;
 }
 
 export function resumePrompt(goal: string): string {

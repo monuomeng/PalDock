@@ -8,7 +8,7 @@ export const SUBTASK_LABEL: Record<SubtaskStatus, string> = {
   waiting_approval: '等待审批',
   waiting_dependency: '等待依赖',
   blocked: '阻塞',
-  review: '待验收',
+  review: '待命中',
   succeeded: '已完成',
   failed: '失败',
   cancelled: '已取消',
@@ -37,7 +37,7 @@ export const RISK_LABEL: Record<RiskLevel, string> = { low: '低风险', medium:
 
 export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   approval: '审批',
-  review: '待验收',
+  review: '待命中',
   blocked: '阻塞',
   unconfirmed_run: '执行状态待确认',
 };

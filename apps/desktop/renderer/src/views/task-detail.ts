@@ -3,13 +3,14 @@ import { call } from '../api.js';
 import { h, type Child } from '../dom.js';
 import { APPROVAL_LABEL, CHECK_LABEL, RISK_LABEL, RUN_LABEL, SUBTASK_LABEL, checkCommandText, duration, time } from '../format.js';
 import { liveText } from '../live-output.js';
+import { continueLink, navigate, taskLink } from '../router.js';
 
 /** 操作失败时把错误显示在页面上（例如版本冲突：别处已处理）。 */
 type Act = (action: () => Promise<unknown>) => () => Promise<void>;
 
 /**
  * 任务详情：目标与 worktree、按时间列出的各次 Run（执行器、原生会话、状态、用时）、
- * 当前 Run 的流式输出、审批卡片、证据，以及取消 / 验收 / 退回 / 恢复操作。
+ * 当前 Run 的流式输出、审批卡片、证据，以及取消 / 继续 / 结束 / 恢复 / 基于此任务继续操作。
  */
 export async function taskDetailView(taskId: string, focusRunId: string | undefined, refresh: () => void): Promise<RenderedDetail> {
   const detail = await call('task.get', { taskId });
@@ -38,7 +39,8 @@ export async function taskDetailView(taskId: string, focusRunId: string | undefi
       ...fact('分支', subtask.branch ?? '（尚未创建）'),
       ...fact('worktree', subtask.worktreePath ?? '（尚未创建）'),
       ...fact('检查命令', checkCommandText(task)),
-      ...(subtask.reworkCount > 0 ? fact('退回次数', subtask.reworkCount) : []),
+      ...(task.continuedFromTaskId ? fact('接续自', h('a', { href: taskLink(task.continuedFromTaskId) }, '上一个任务')) : []),
+      ...(subtask.reworkCount > 0 ? fact('继续次数', subtask.reworkCount) : []),
     ),
     h('details', {}, h('summary', {}, '目标'), h('pre', { class: 'goal' }, task.goal)),
     error,
@@ -69,6 +71,9 @@ function actions({ task, subtask, actions: allowed }: TaskDetail, act: Act): HTM
     ? h('button', { type: 'button', class: 'danger', onclick: act(() => call('task.cancel', { taskId: task.id })) }, '取消任务')
     : null;
   if (allowed.review) return reviewActions(subtask, act, cancel);
+  if (allowed.continueFrom) {
+    return h('div', { class: 'actions' }, h('button', { type: 'button', class: 'primary', onclick: () => navigate(continueLink(task.id)) }, '基于此任务继续'));
+  }
   if (!allowed.restart) return cancel && h('div', { class: 'actions' }, cancel);
   const recover = (action: 'resume' | 'restart' | 'abandon') =>
     act(() => call('run.recover', { subtaskId: subtask.id, expectedVersion: subtask.version, action }));
@@ -93,8 +98,9 @@ function actions({ task, subtask, actions: allowed }: TaskDetail, act: Act): HTM
   );
 }
 
+/** 待命中：写下一步指令继续（同一 worktree、同一执行器会话），或结束任务（提交到任务分支）。 */
 function reviewActions(subtask: SubtaskRecord, act: Act, cancel: HTMLElement | null): HTMLElement {
-  const note = h('textarea', { id: 'review-note', rows: 3, 'data-keep': `review-${subtask.id}`, placeholder: '退回时必填：哪里不对、要怎么改' });
+  const note = h('textarea', { id: 'review-note', rows: 3, 'data-keep': `review-${subtask.id}`, placeholder: '继续时必填：下一步要做什么' });
   const decide = (decision: 'accept' | 'rework') =>
     act(() => {
       const text = note.value.trim();
@@ -102,15 +108,20 @@ function reviewActions(subtask: SubtaskRecord, act: Act, cancel: HTMLElement | n
     });
   return h(
     'section',
-    { class: 'panel review', 'aria-label': '验收' },
-    h('p', {}, h('strong', {}, '待验收：'), '请查看下方最新一次执行的证据。通过后改动会提交到任务分支（不合并）；退回会带着你的意见重新执行，旧证据保留。'),
-    h('label', { for: 'review-note' }, '意见'),
+    { class: 'panel review', 'aria-label': '待命中' },
+    h(
+      'p',
+      {},
+      h('strong', {}, '待命中：'),
+      '这一轮做完了，请查看下方最新一次执行的证据。「继续」在同一个工作目录里按你的指令接着做，旧证据保留；「结束任务」把改动提交到任务分支（不合并）。',
+    ),
+    h('label', { for: 'review-note' }, '下一步指令'),
     note,
     h(
       'div',
       { class: 'actions' },
-      h('button', { type: 'button', class: 'primary', onclick: decide('accept') }, '验收通过'),
-      h('button', { type: 'button', onclick: decide('rework') }, '退回重做'),
+      h('button', { type: 'button', class: 'primary', onclick: decide('rework') }, '继续'),
+      h('button', { type: 'button', onclick: decide('accept') }, '结束任务'),
       cancel,
     ),
   );
@@ -138,7 +149,7 @@ function runView({ run, result, reviews, approvals, messages }: RunDetail, open:
       output || '（暂无输出）',
     ),
     result ? evidenceView(run.id, result) : null,
-    ...reviews.map((r) => h('p', { class: `review-note review-${r.decision}` }, r.decision === 'accept' ? '验收通过' : '退回重做', ` · ${time(r.decidedAt)}`, r.note ? `：${r.note}` : '')),
+    ...reviews.map((r) => h('p', { class: `review-note review-${r.decision}` }, r.decision === 'accept' ? '结束任务' : '继续', ` · ${time(r.decidedAt)}`, r.note ? `：${r.note}` : '')),
   );
 }
 

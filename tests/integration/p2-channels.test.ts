@@ -238,12 +238,12 @@ describe('配对与准入', () => {
     adapter.say('wang', '/tasks', 'group');
     await cardTitled('还没有任务', before);
     adapter.say('wang', '/cancel #abc', 'group');
-    await cardTitled('群里不能取消任务', before);
+    await cardTitled('群里不能做这个操作', before);
   });
 });
 
 describe('外部建任务与结果回发', () => {
-  it('一句话 → 确认卡片 → 建任务执行 → 待验收卡片 → 手机上验收通过', async () => {
+  it('一句话 → 确认卡片 → 建任务执行 → 待命中卡片 → 手机上结束任务', async () => {
     await enableFeishu();
     await pair('wang');
     await registerWorkspace();
@@ -258,51 +258,100 @@ describe('外部建任务与结果回发', () => {
     const ref = /#(\w{6})/.exec(created.title)![1]!;
 
     await cardTitled(new RegExp(`#${ref} `));
-    const review = await waitFor(() => adapter.cards().find((c) => c.buttons.some((b) => b.label === '验收通过')), '待验收卡片');
+    const review = await waitFor(() => adapter.cards().find((c) => c.buttons.some((b) => b.label === '结束任务')), '待命中卡片');
     expect(review.lines.join('\n')).toContain('模拟执行完成');
-    adapter.click('wang', buttonOf(review, '验收通过'));
-    await waitFor(() => adapter.cards().find((c) => c.lines.some((l) => l.startsWith('已验收'))), '已验收卡片');
+    adapter.click('wang', buttonOf(review, '结束任务'));
+    await waitFor(() => adapter.cards().find((c) => c.lines.some((l) => l.startsWith('任务已结束'))), '已结束卡片');
 
     const [task] = (await call('task.list', { limit: 10 })).filter((t) => t.task.originConversationId);
     expect(task).toMatchObject({ subtaskStatus: 'succeeded' });
 
-    // 按钮只能用一次：再点一次验收按钮得到「已失效」
-    adapter.click('wang', buttonOf(review, '验收通过'));
+    // 按钮只能用一次：再点一次「结束任务」得到「已失效」
+    adapter.click('wang', buttonOf(review, '结束任务'));
     await cardTitled('这个按钮已失效');
   });
 
-  it('退回重做：点「退回重做」后下一条消息作为意见，执行器重做后再次待验收', async () => {
+  it('待命中时直接回复就是继续（同一 worktree、同一会话）；/done 结束后下一句话是新任务', async () => {
     await enableFeishu();
     await pair('wang');
     await registerWorkspace();
     adapter.say('wang', '写个文件');
     adapter.click('wang', buttonOf(await cardTitled('新建任务？'), '新建并开始'));
-    const review = await waitFor(() => adapter.cards().find((c) => c.buttons.some((b) => b.label === '退回重做')), '待验收卡片');
-    adapter.click('wang', buttonOf(review, '退回重做'));
-    await cardTitled('请直接回复退回原因');
+    const review = await waitFor(() => adapter.cards().find((c) => c.buttons.some((b) => b.label === '继续')), '待命中卡片');
+    const ref = /#(\w{6})/.exec(review.title)![1]!;
+
+    adapter.click('wang', buttonOf(review, '继续'));
+    await cardTitled(`请直接回复 #${ref} 的下一步`);
     adapter.say('wang', '文件名改成 b.txt');
-    await cardTitled('已退回重做');
-    await waitFor(() => adapter.cards().filter((c) => c.buttons.some((b) => b.label === '退回重做')).length === 2 || undefined, '第二次待验收');
+    await cardTitled(`#${ref} 继续执行`);
+    await waitFor(() => adapter.cards().filter((c) => c.buttons.some((b) => b.label === '继续')).length === 2 || undefined, '第二次待命');
     const [task] = (await call('task.list', { limit: 10 })).filter((t) => t.task.originConversationId);
     const detail = await call('task.get', { taskId: task!.task.id });
+    expect(detail.runs).toHaveLength(2);
     expect(detail.runs[0]!.reviews[0]).toMatchObject({ decision: 'rework', note: '文件名改成 b.txt' });
+    expect(detail.runs[1]!.run.nativeThreadId).toBe(detail.runs[0]!.run.nativeThreadId);
+    expect(adapter.sent.filter((s) => s.card.title === '新建任务？')).toHaveLength(1);
+
+    adapter.say('wang', '/done');
+    adapter.click('wang', buttonOf(await cardTitled(`结束 #${ref}？`), '结束任务'));
+    await waitFor(async () => (await call('task.get', { taskId: task!.task.id })).subtask.status === 'succeeded' || undefined, '已结束');
+    await waitFor(() => adapter.cards().find((c) => c.lines.some((l) => l.startsWith('任务已结束'))), '已结束卡片');
+    adapter.say('wang', '再加一个文件');
+    await waitFor(() => adapter.sent.filter((s) => s.card.title === '新建任务？').length === 2 || undefined, '新任务确认卡片');
   });
 
-  it('点了「退回重做」后验收已在桌面处理：下一条消息不当作意见，也不当作新任务', async () => {
+  it('当前任务还在执行时，普通消息不建任务也不续做', async () => {
     await enableFeishu();
     await pair('wang');
     await registerWorkspace();
-    adapter.say('wang', '写个文件');
+    adapter.say('wang', '[mock:command] 装依赖');
     adapter.click('wang', buttonOf(await cardTitled('新建任务？'), '新建并开始'));
-    const review = await waitFor(() => adapter.cards().find((c) => c.buttons.some((b) => b.label === '退回重做')), '待验收卡片');
-    adapter.click('wang', buttonOf(review, '退回重做'));
-    await cardTitled('请直接回复退回原因');
-    const [task] = (await call('task.list', { limit: 10 })).filter((t) => t.task.originConversationId);
-    const detail = await call('task.get', { taskId: task!.task.id });
-    await call('review.decide', { subtaskId: detail.subtask.id, expectedVersion: detail.subtask.version, decision: 'accept' });
-    adapter.say('wang', '文件名改成 b.txt');
-    await cardTitled('退回意见没有用上');
+    const created = await cardTitled(/^已新建任务 #/);
+    const ref = /#(\w{6})/.exec(created.title)![1]!;
+    await waitFor(async () => {
+      const [task] = (await call('task.list', { limit: 10 })).filter((t) => t.task.originConversationId);
+      return task?.latestRunStatus === 'waiting_approval' || undefined;
+    }, '等待审批');
+    adapter.say('wang', '顺便改个名字');
+    await cardTitled(`#${ref} 还在执行`);
     expect(adapter.sent.filter((s) => s.card.title === '新建任务？')).toHaveLength(1);
+  });
+
+  it('/continue 列出最近的任务；选中桌面上已结束的任务后，一句话就基于它的分支新建任务', async () => {
+    await enableFeishu();
+    await pair('wang');
+    const desk = await call('task.create', { rootPath: repo, goal: '[mock:command] 装依赖', idempotencyKey: `desk-${randomUUID()}` });
+    const approval = await waitFor(async () => {
+      const d = await call('task.get', { taskId: desk.task.id });
+      return d.runs.flatMap((r) => r.approvals).find((a) => a.status === 'pending');
+    }, '桌面任务的审批');
+    await call('approval.decide', { approvalId: approval.id, expectedVersion: approval.version, decision: 'allow_once' });
+    const reviewing = await waitFor(async () => {
+      const d = await call('task.get', { taskId: desk.task.id });
+      return d.subtask.status === 'review' && d;
+    }, '桌面任务待命');
+    await call('review.decide', { subtaskId: reviewing.subtask.id, expectedVersion: reviewing.subtask.version, decision: 'accept' });
+    const ref = desk.task.id.slice(5, 11);
+
+    const before = adapter.cards().length;
+    adapter.say('wang', '/continue');
+    const list = await cardTitled('最近的任务', before);
+    expect(list.lines[0]).toMatch(new RegExp(`^#${ref} 已完成 · (刚刚|\\d+ 分钟前) · `));
+    adapter.click('wang', buttonOf(list, `#${ref}`));
+    const history = await cardTitled(new RegExp(`^#${ref} `), before);
+    expect(history.lines).toContain('第 1 轮 · 刚刚');
+    expect(history.lines.join('\n')).toContain('指令：[mock:command] 装依赖');
+
+    adapter.say('wang', '接着加测试');
+    const continued = await cardTitled(new RegExp(`接着 #${ref} 做$`), before);
+    const newRef = /#(\w{6})/.exec(continued.title)![1]!;
+    const next = (await call('task.list', { limit: 10 })).find((t) => t.task.id.slice(5, 11) === newRef)!;
+    expect(next.task.continuedFromTaskId).toBe(desk.task.id);
+    const worktree = await waitFor(async () => (await call('task.get', { taskId: next.task.id })).subtask.worktreePath ?? undefined, '新 worktree');
+    // 上个任务提交在分支上的文件，新任务的工作目录里也有
+    expect(git(worktree, 'ls-files')).toContain('installed.txt');
+    // 新任务从这个单聊继续，进度发回这里
+    await waitFor(() => adapter.cards().find((c) => c.title.startsWith(`#${newRef} `) && c.lines.includes('开始执行。')), '新任务开始');
   });
 
   it('解绑后，这个人发起的任务不再往他的单聊发进度', async () => {

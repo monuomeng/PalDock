@@ -136,10 +136,12 @@ export const CHANNEL_ACTION_KINDS = [
   'cancel_task',
   'approve',
   'deny',
+  /** 「结束任务」：提交到任务分支，任务结束。 */
   'accept_review',
-  'rework_review',
-  /** 点了「退回重做」后等用户回一段文字作为退回意见。 */
-  'rework_note',
+  /** 待命中卡片上的「继续」：设为当前任务，下一条文字就是指令。 */
+  'continue_task',
+  /** /continue 列表里选一个任务：设为当前任务并显示它做过什么。 */
+  'select_task',
   'dismiss',
 ] as const;
 export const ChannelActionKind = z.enum(CHANNEL_ACTION_KINDS);
@@ -185,8 +187,8 @@ export interface ConversationRecord {
   /** 群聊白名单（只对群聊有意义）。 */
   groupAllowed: boolean;
   title: string;
-  /** 正在等用户补一段文字的动作（退回意见），过期或处理后清空。 */
-  awaitingToken: string | null;
+  /** 单聊的当前任务：普通文字按它的状态续做、提示或新建（只对单聊有意义）。 */
+  currentTaskId: string | null;
   version: number;
   lastSeenAt: string;
 }

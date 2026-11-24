@@ -5,6 +5,7 @@ import type { Database } from '../database.js';
 import { initialSchema } from './001-initial.js';
 import { p1Schema } from './002-p1-sessions-runs.js';
 import { p2Schema } from './003-p2-channels.js';
+import { taskContinuationSchema } from './004-task-continuation.js';
 
 export interface Migration {
   version: number;
@@ -17,6 +18,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'initial', sql: initialSchema },
   { version: 2, name: 'p1-sessions-runs', sql: p1Schema },
   { version: 3, name: 'p2-channels', sql: p2Schema },
+  { version: 4, name: 'task-continuation', sql: taskContinuationSchema },
 ];
 
 export interface MigrateResult {

@@ -61,6 +61,8 @@ export interface NewTask {
   idempotencyKey: string;
   /** 从外部渠道建任务时的来源会话。 */
   originConversationId?: string | null;
+  /** 接着这个已结束的任务做：worktree 从它的分支出发。 */
+  continuedFromTaskId?: string | null;
 }
 
 export interface CreatedTask {
@@ -117,6 +119,8 @@ export interface TaskStorePort {
   getSubtaskOfTask(taskId: string): SubtaskRecord | undefined;
   getSessionOfSubtask(subtaskId: string): SessionRecord | undefined;
   listTasks(limit: number): TaskSummary[];
+  /** 按最近活动（子任务最后变化）倒序。 */
+  recentTasks(limit: number): TaskSummary[];
   setWorktree(subtaskId: string, worktreePath: string, branch: string, baseCommit: string): SubtaskRecord | undefined;
   transitionTask(id: string, expectedVersion: number, to: TaskStatus, reason?: string): Change<TaskRecord>;
   transitionSubtask(id: string, expectedVersion: number, to: SubtaskStatus, reason?: string): Change<SubtaskRecord>;
@@ -171,7 +175,8 @@ export interface ChannelStorePort {
   listGroups(): ConversationRecord[];
   activeDirectConversations(): ConversationRecord[];
   setConversation(id: string, expectedVersion: number, settings: { groupAllowed: boolean; defaultWorkspaceId: string | null }): Change<ConversationRecord>;
-  setAwaiting(conversationId: string, token: string | null): void;
+  setCurrentTask(conversationId: string, taskId: string | null): void;
+  conversationsFocusedOn(taskId: string): ConversationRecord[];
   openPairing(
     account: ChannelAccountRecord,
     conversationId: string,

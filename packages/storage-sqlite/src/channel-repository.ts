@@ -76,7 +76,9 @@ const SQL = {
     UPDATE external_conversations SET group_allowed = ?, default_workspace_id = ?, version = version + 1
      WHERE id = ? AND version = ?
     RETURNING ${COLUMNS.conversation()}`,
-  setAwaiting: `UPDATE external_conversations SET awaiting_token = ? WHERE id = ?`,
+  setCurrentTask: `UPDATE external_conversations SET current_task_id = ? WHERE id = ?`,
+  // 部分索引 conversations_by_current_task（= 隐含 IS NOT NULL）
+  selectFocusedOn: `SELECT ${COLUMNS.conversation()} FROM external_conversations WHERE current_task_id = ?`,
   // 以下三条都走部分索引 pairing_pending（status = 'pending'）
   selectOpenPairing: `
     SELECT code FROM pairing_requests WHERE status = 'pending' AND account_id = ? AND expires_at > ? ORDER BY created_at DESC LIMIT 1`,
@@ -216,8 +218,14 @@ export class ChannelRepository implements ChannelStorePort {
     });
   }
 
-  setAwaiting(conversationId: string, token: string | null): void {
-    this.db.run(SQL.setAwaiting, token, conversationId);
+  /** 把这个任务设为当前任务的会话。 */
+  conversationsFocusedOn(taskId: string): ConversationRecord[] {
+    return this.db.all<ConversationRow>(SQL.selectFocusedOn, taskId).map(toConversation);
+  }
+
+  /** 当前任务只是一个指针，不改版本号（不与白名单、默认项目的设置冲突）。 */
+  setCurrentTask(conversationId: string, taskId: string | null): void {
+    this.db.run(SQL.setCurrentTask, taskId, conversationId);
   }
 
   /**

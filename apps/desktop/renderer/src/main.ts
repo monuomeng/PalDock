@@ -69,7 +69,7 @@ async function buildView(route: Route): Promise<HTMLElement> {
     case 'tasks':
       return tasksView();
     case 'new':
-      return newTaskView();
+      return newTaskView(route.fromTaskId);
     case 'settings':
       return settingsView(scheduleRender);
     case 'task': {

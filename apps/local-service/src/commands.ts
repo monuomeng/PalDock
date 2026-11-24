@@ -14,8 +14,8 @@ export type ServiceInfo = CommandResultOf<'service.status'>;
 export function createHandlers(store: Store, tasks: TaskService, channels: ChannelService, info: ServiceInfo): Handlers {
   return {
     'service.status': () => info,
-    'task.create': ({ rootPath, goal, check, checkConfirmed, idempotencyKey }) =>
-      tasks.createTask({ rootPath, goal, check, checkConfirmed, idempotencyKey }),
+    'task.create': ({ rootPath, goal, check, checkConfirmed, idempotencyKey, continuedFromTaskId }) =>
+      tasks.createTask({ rootPath, goal, check, checkConfirmed, idempotencyKey, continuedFromTaskId }),
     'task.list': ({ limit }) => tasks.listTasks(limit),
     'task.get': ({ taskId }) => tasks.getTask(taskId),
     'task.cancel': ({ taskId }) => tasks.cancelTask(taskId),

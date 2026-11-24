@@ -56,6 +56,26 @@ describe('渠道账号与会话', () => {
     expect(sql).not.toMatch(/SCAN a\b/);
   });
 
+  it('单聊的当前任务是一个指针：不改版本号，按任务找回会话走部分索引', () => {
+    const { conversation } = seedDm();
+    const ws = store.tasks.ensureWorkspace('demo', 'D:/demo');
+    const { task } = store.tasks.createTask({
+      workspaceId: ws.id,
+      title: 't',
+      goal: 'g',
+      role: 'developer',
+      checkCommand: null,
+      checkConfirmed: false,
+      idempotencyKey: 'k1',
+    }).record;
+    store.channels.setCurrentTask(conversation.id, task.id);
+    expect(store.channels.getConversation(conversation.id)).toMatchObject({ currentTaskId: task.id, version: conversation.version });
+    expect(store.channels.conversationsFocusedOn(task.id).map((c) => c.id)).toEqual([conversation.id]);
+    store.channels.setCurrentTask(conversation.id, null);
+    expect(store.channels.conversationsFocusedOn(task.id)).toEqual([]);
+    expect(plan(`SELECT id FROM external_conversations WHERE current_task_id = 'x'`)).toContain('conversations_by_current_task');
+  });
+
   it('会话设置带版本号，旧版本得到 conflict', () => {
     const g = store.channels.upsertConversation(group, null, '');
     const changed = store.channels.setConversation(g.id, g.version, { groupAllowed: true, defaultWorkspaceId: null });

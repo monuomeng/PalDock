@@ -139,6 +139,24 @@ describe('P1 主流程', () => {
     expect(await attention()).toEqual([]);
   });
 
+  it('待命中继续必须写指令；只能接续已结束的任务，新任务的 worktree 从它的分支出发', async () => {
+    const created = await create('加一个文件');
+    const reviewed = await until(created.task.id, (d) => d.subtask.status === 'review');
+    expect(reviewed.actions).toMatchObject({ review: true, continueFrom: false });
+    await expect(
+      call('review.decide', { subtaskId: reviewed.subtask.id, expectedVersion: reviewed.subtask.version, decision: 'rework', note: '  ' }),
+    ).rejects.toThrow(/下一步/);
+    await expect(create('接着做', { continuedFromTaskId: created.task.id })).rejects.toThrow(/已结束/);
+
+    await call('review.decide', { subtaskId: reviewed.subtask.id, expectedVersion: reviewed.subtask.version, decision: 'accept' });
+    expect((await detail(created.task.id)).actions.continueFrom).toBe(true);
+    const next = await create('接着做', { continuedFromTaskId: created.task.id });
+    expect(next.task.continuedFromTaskId).toBe(created.task.id);
+    const started = await until(next.task.id, (d) => d.subtask.worktreePath !== null);
+    expect(started.subtask.baseCommit).toBe(git(repo, 'rev-parse', reviewed.subtask.branch!).trim());
+    expect(git(started.subtask.worktreePath!, 'log', '--format=%s', '-1').trim()).toBe('paldock: 加一个文件');
+  });
+
   it('验收只提交证据里的改动，检查命令之后生成的文件不进提交', async () => {
     const created = await create('生成产物', {
       check: { executable: process.execPath, args: ['-e', "require('fs').writeFileSync('coverage.txt', 'x')"] },

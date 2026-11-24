@@ -20,6 +20,10 @@ import type { Database } from './database.js';
 import type { EventLog } from './event-log.js';
 import { applyTransition, newId, statusChanged, type TransitionSpec } from './writes.js';
 
+/** 任务列表的一行：任务 + 子任务状态、最近活动时间 + 最新 Run 的状态。 */
+const SUMMARY_COLUMNS = `${COLUMNS.task('t.')}, s.status AS subtaskStatus, s.updated_at AS lastActivityAt,
+       (SELECT r.status FROM runs r WHERE r.subtask_id = s.id ORDER BY r.attempt DESC LIMIT 1) AS latestRunStatus`;
+
 const SQL = {
   // 按项目路径找到或创建；DO UPDATE 让 RETURNING 在已存在时也返回该行
   upsertWorkspace: `
@@ -33,8 +37,9 @@ const SQL = {
     UPDATE workspaces SET remote_approval_level = ?, version = version + 1 WHERE id = ? AND version = ?
     RETURNING ${COLUMNS.workspace()}`,
   insertTask: `
-    INSERT INTO tasks (id, workspace_id, title, goal, status, check_command, check_confirmed_at, idempotency_key, origin_conversation_id, created_at, updated_at)
-    VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6, ?7, ?9, ?8, ?8)
+    INSERT INTO tasks (id, workspace_id, title, goal, status, check_command, check_confirmed_at, idempotency_key, origin_conversation_id,
+                       continued_from_task_id, created_at, updated_at)
+    VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6, ?7, ?9, ?10, ?8, ?8)
     RETURNING ${COLUMNS.task()}`,
   // 条件与部分索引 tasks_by_idempotency_key 一致（= 隐含 IS NOT NULL）
   selectTaskByKey: `SELECT ${COLUMNS.task()} FROM tasks WHERE idempotency_key = ?`,
@@ -53,12 +58,18 @@ const SQL = {
     RETURNING ${COLUMNS.session()}`,
   selectSessionBySubtask: `SELECT ${COLUMNS.session()} FROM sessions WHERE subtask_id = ?`,
   // P1 一个任务一个子任务；最新 Run 走 UNIQUE (subtask_id, attempt) 索引倒序取一条
+  // 两条都按各自的索引倒序取前 N 条（tasks_by_created / subtasks_by_activity）
   listTasks: `
-    SELECT ${COLUMNS.task('t.')}, s.status AS subtaskStatus,
-           (SELECT r.status FROM runs r WHERE r.subtask_id = s.id ORDER BY r.attempt DESC LIMIT 1) AS latestRunStatus
+    SELECT ${SUMMARY_COLUMNS}
       FROM tasks t
       JOIN subtasks s ON s.task_id = t.id
      ORDER BY t.created_at DESC
+     LIMIT ?`,
+  recentTasks: `
+    SELECT ${SUMMARY_COLUMNS}
+      FROM subtasks s
+      JOIN tasks t ON t.id = s.task_id
+     ORDER BY s.updated_at DESC
      LIMIT ?`,
 } as const;
 
@@ -133,6 +144,7 @@ export class TaskRepository implements TaskStorePort {
           input.idempotencyKey,
           at,
           input.originConversationId ?? null,
+          input.continuedFromTaskId ?? null,
         )!,
       );
       const subtask = this.db.get<SubtaskRecord>(SQL.insertSubtask, newId('sub'), task.id, input.role, input.goal, at)!;
@@ -170,9 +182,17 @@ export class TaskRepository implements TaskStorePort {
   }
 
   listTasks(limit: number): TaskSummary[] {
+    return this.summaries(SQL.listTasks, limit);
+  }
+
+  recentTasks(limit: number): TaskSummary[] {
+    return this.summaries(SQL.recentTasks, limit);
+  }
+
+  private summaries(sql: string, limit: number): TaskSummary[] {
     return this.db
-      .all<TaskRow & Omit<TaskSummary, 'task'>>(SQL.listTasks, limit)
-      .map(({ subtaskStatus, latestRunStatus, ...task }) => ({ task: toTask(task), subtaskStatus, latestRunStatus }));
+      .all<TaskRow & Omit<TaskSummary, 'task'>>(sql, limit)
+      .map(({ subtaskStatus, latestRunStatus, lastActivityAt, ...task }) => ({ task: toTask(task), subtaskStatus, latestRunStatus, lastActivityAt }));
   }
 
   /** worktree 只设置一次；之后各次 Run 共用。 */

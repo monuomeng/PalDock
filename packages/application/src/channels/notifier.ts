@@ -1,4 +1,15 @@
-import type { Card, ChannelProvider, ConversationRecord, EscalationCandidate, PersistentEvent, StorePort, SubtaskStatus } from '@paldock/contracts';
+import type {
+  Card,
+  ChannelProvider,
+  ConversationRecord,
+  EscalationCandidate,
+  PersistentEvent,
+  RunResultRecord,
+  StorePort,
+  SubtaskRecord,
+  SubtaskStatus,
+  TaskRecord,
+} from '@paldock/contracts';
 import { canApproveRemotely, shouldEscalateApproval, type DesktopPresence, type P2Limits } from '@paldock/domain';
 import { approvalCard, approvalDecidedCard, taskProgressCard } from './cards.js';
 
@@ -22,7 +33,7 @@ const approvalSubject = (approvalId: string) => `approval:${approvalId}`;
 
 /**
  * 业务事件 → 外部渠道：
- * - 从外部建的任务，关键节点发回来源会话（桌面建的任务不往外推，普通通知桌面优先）；
+ * - 任务的关键节点发回来源会话和把它设为当前任务的单聊（其余桌面建的任务不往外推，普通通知桌面优先）；
  * - 审批先在桌面，满足升级条件（3 分钟无人处理、锁屏、空闲）时发到所有已绑定的单聊；
  * - 审批在任何一端处理后，作废外部卡片上的按钮并更新卡片。
  */
@@ -45,22 +56,34 @@ export class ChannelNotifier {
   }
 
   private onSubtask(subtaskId: string, from: SubtaskStatus, to: SubtaskStatus): void {
-    // 离开待验收后，卡片上的验收按钮作废
+    // 离开待命后，卡片上的「结束任务」按钮作废
     if (from === 'review') this.channels.voidActions(subtaskId);
     if (!NOTIFY_STATUSES.has(to)) return;
     const { tasks, runs } = this.deps.store;
     const subtask = tasks.getSubtask(subtaskId);
     const task = subtask && tasks.getTask(subtask.taskId);
-    const conversation = task?.originConversationId ? this.channels.getConversation(task.originConversationId) : undefined;
-    if (!subtask || !task || !conversation || !this.reachable(conversation)) return;
+    if (!subtask || !task) return;
     const latest = runs.latestRun(subtask.id);
     const result = latest && runs.getResult(latest.id);
-    // 验收按钮只发到单聊；群里只通知
+    for (const conversation of this.subscribers(task)) {
+      this.notifyProgress(conversation, task, subtask, to, result);
+    }
+  }
+
+  /** 来源会话，加上把它设为当前任务的单聊（桌面建的任务在手机上继续后也能收到进度）。 */
+  private subscribers(task: TaskRecord): ConversationRecord[] {
+    const origin = task.originConversationId ? this.channels.getConversation(task.originConversationId) : undefined;
+    const focused = this.channels.conversationsFocusedOn(task.id).filter((c) => c.id !== origin?.id);
+    return [...(origin ? [origin] : []), ...focused].filter((c) => this.reachable(c));
+  }
+
+  private notifyProgress(conversation: ConversationRecord, task: TaskRecord, subtask: SubtaskRecord, to: SubtaskStatus, result: RunResultRecord | undefined): void {
+    // 继续、结束按钮只发到单聊；群里只通知。「继续」以任务为目标，点了不会作废同一张卡片上的「结束任务」
     const review =
       to === 'review' && conversation.kind === 'dm'
         ? {
-            accept: this.action(conversation, 'accept_review', subtask.id, subtask.version, this.limits.reviewActionTtlMs),
-            rework: this.action(conversation, 'rework_review', subtask.id, subtask.version, this.limits.reviewActionTtlMs),
+            end: this.action(conversation, 'accept_review', subtask.id, subtask.version, this.limits.reviewActionTtlMs),
+            next: this.action(conversation, 'continue_task', task.id, null, this.limits.reviewActionTtlMs),
           }
         : undefined;
     this.deps.send(conversation, taskProgressCard(task, to, subtask.statusReason, result, review));
@@ -77,7 +100,7 @@ export class ChannelNotifier {
     return this.channels.activeDirectConversations().filter((c) => this.deps.attached(c.provider));
   }
 
-  private action(conversation: ConversationRecord, kind: 'accept_review' | 'rework_review' | 'approve' | 'deny', targetId: string, version: number, ttlMs: number) {
+  private action(conversation: ConversationRecord, kind: 'accept_review' | 'continue_task' | 'approve' | 'deny', targetId: string, version: number | null, ttlMs: number) {
     return this.channels.createAction({ conversationId: conversation.id, kind, targetId, targetVersion: version, ttlMs }).token;
   }
 

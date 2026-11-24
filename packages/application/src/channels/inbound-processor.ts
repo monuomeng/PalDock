@@ -13,6 +13,8 @@ import type { InboundOutcome } from './channel-hub.js';
 
 /** 处理一条消息需要的上下文：已识别的渠道账号与会话。 */
 export interface InboundContext {
+  /** 平台事件 ID：由它派生的操作（例如接续建任务）用它做幂等键，重放不重复执行。 */
+  eventId: string;
   account: ChannelAccountRecord;
   conversation: ConversationRecord;
 }
@@ -62,7 +64,7 @@ export class InboundProcessor {
       if (!conversation.groupAllowed) return reject('group_not_allowed');
       if (body.kind === 'text' && !body.mentionsBot) return reject('not_mentioned');
     }
-    const ctx = { account, conversation };
+    const ctx = { eventId: envelope.eventId, account, conversation };
     return body.kind === 'action' ? this.deps.handler.action(ctx, body.token) : this.deps.handler.text(ctx, body.text);
   }
 

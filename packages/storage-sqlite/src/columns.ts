@@ -18,7 +18,8 @@ export const COLUMNS = {
   workspace: cols(`id, name, root_path AS rootPath, remote_approval_level AS remoteApprovalLevel, version`),
   task: cols(
     `id, workspace_id AS workspaceId, title, goal, status, check_command AS checkCommand,
-     check_confirmed_at AS checkConfirmedAt, origin_conversation_id AS originConversationId, version, created_at AS createdAt, updated_at AS updatedAt`,
+     check_confirmed_at AS checkConfirmedAt, origin_conversation_id AS originConversationId,
+     continued_from_task_id AS continuedFromTaskId, version, created_at AS createdAt, updated_at AS updatedAt`,
   ),
   subtask: cols(
     `id, task_id AS taskId, role, goal, status, status_reason AS statusReason, rework_count AS reworkCount,
@@ -48,7 +49,7 @@ export const COLUMNS = {
   conversation: cols(
     `id, provider, account, tenant_key AS tenant, chat_id AS chatId, thread_key AS threadKey, kind,
      owner_account_id AS ownerAccountId, default_workspace_id AS defaultWorkspaceId, group_allowed AS groupAllowed,
-     title, awaiting_token AS awaitingToken, version, last_seen_at AS lastSeenAt`,
+     title, current_task_id AS currentTaskId, version, last_seen_at AS lastSeenAt`,
   ),
   pairing: cols(`code, account_id AS accountId, status, created_at AS createdAt, expires_at AS expiresAt`),
   action: cols(
