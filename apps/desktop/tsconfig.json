@@ -3,5 +3,5 @@
   "compilerOptions": { "rootDir": "src", "outDir": "dist", "lib": ["ES2023", "DOM"] },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"],
-  "references": [{ "path": "../../packages/contracts" }, { "path": "../../packages/platform" }]
+  "references": [{ "path": "../../packages/contracts" }, { "path": "../../packages/domain" }, { "path": "../../packages/platform" }]
 }

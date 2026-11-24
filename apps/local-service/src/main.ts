@@ -26,13 +26,18 @@ function onParentMessage(listener: (message: unknown) => void): void {
 const log = (message: string) => console.log(`[local-service] ${message}`);
 
 let service: LocalService | undefined;
+// 服务启动完成前收到的桌面状态先记下，启动后补上
+let presence: { locked: boolean; idle: boolean } | undefined;
 
 onParentMessage(async (raw) => {
   const parsed = ParentToService.safeParse(raw);
   if (!parsed.success) return log('ignored invalid parent message');
   const message = parsed.data;
 
-  if (message.type === 'presence') return service?.setPresence(message);
+  if (message.type === 'presence') {
+    presence = { locked: message.locked, idle: message.idle };
+    return service?.setPresence(presence);
+  }
   if (message.type === 'shutdown') {
     await service?.stop();
     process.exit(ServiceExitCode.ok);
@@ -40,6 +45,7 @@ onParentMessage(async (raw) => {
   if (message.type === 'init' && !service) {
     try {
       service = await LocalService.start({ ...message, log });
+      if (presence) service.setPresence(presence);
       post({ type: 'ready', interruptedRuns: service.interruptedRuns });
     } catch (error) {
       const locked = error instanceof DataRootLockedError;

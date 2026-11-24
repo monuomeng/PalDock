@@ -1,12 +1,14 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, powerMonitor, type IpcMainInvokeEvent } from 'electron';
 import { COMMAND_NAMES, ErrorCode, type CommandName, type EphemeralEvent, type PersistentEvent, type RendererResult } from '@paldock/contracts';
+import { P2_DEFAULTS } from '@paldock/domain';
 import { IpcClient } from '@paldock/platform';
 import { APP_ORIGIN, registerAppScheme, serveRenderer } from './app-protocol.js';
 import { defaultDataRoot, installDirOf, rejectDataRoot } from './data-root.js';
 import { startPowerDiagnostics } from './power-diagnostics.js';
+import { watchPresence } from './presence.js';
 import { ServiceHost, type HostStatus } from './service-host.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -165,6 +167,7 @@ async function boot(): Promise<void> {
   createWindow();
   host = new ServiceHost(dataRoot, (status) => void onHostStatus(status).catch(() => {}));
   host.start();
+  watchPresence(powerMonitor, P2_DEFAULTS.idleThresholdSeconds, (presence) => host?.setPresence(presence));
 
   // 生命周期模式 1「随界面退出」：关闭窗口即通知服务收尾后退出
   let quitting = false;

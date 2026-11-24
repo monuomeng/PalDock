@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { utilityProcess, type UtilityProcess } from 'electron';
 import { ServiceToParent, type ParentToService } from '@paldock/contracts';
 import { createIpcPath, createToken } from '@paldock/platform';
+import type { Presence } from './presence.js';
 import { RestartPolicy, SHUTDOWN_GRACE_MS, type RestartDecision } from './restart-policy.js';
 
 export type HostStatus =
@@ -21,6 +22,7 @@ export class ServiceHost {
   private readonly policy = new RestartPolicy();
   private stopping = false;
   private restartTimer: NodeJS.Timeout | undefined;
+  private presence: Presence | undefined;
 
   constructor(
     private readonly dataRoot: string,
@@ -35,7 +37,11 @@ export class ServiceHost {
 
     const child = utilityProcess.fork(SERVICE_ENTRY, [], { serviceName: 'PalDock Local Service', stdio: 'inherit' });
     this.child = child;
-    child.on('spawn', () => this.post({ type: 'init', dataRoot: this.dataRoot, ipcPath, token }));
+    child.on('spawn', () => {
+      this.post({ type: 'init', dataRoot: this.dataRoot, ipcPath, token });
+      // 服务重启后补发当前桌面状态
+      if (this.presence) this.post({ type: 'presence', ...this.presence });
+    });
     child.on('message', (raw: unknown) => {
       const message = ServiceToParent.safeParse(raw);
       if (!message.success) return;
@@ -59,6 +65,12 @@ export class ServiceHost {
 
   private post(message: ParentToService): void {
     this.child?.postMessage(message);
+  }
+
+  /** 桌面状态变化（锁屏、空闲）：转给服务，用于审批升级。 */
+  setPresence(presence: Presence): void {
+    this.presence = presence;
+    this.post({ type: 'presence', ...presence });
   }
 
   /** 正常退出：通知服务收尾（Run 置为 interrupted 并落库），最多等 35 秒后强制结束。 */

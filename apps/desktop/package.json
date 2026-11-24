@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@paldock/contracts": "workspace:*",
+    "@paldock/domain": "workspace:*",
     "@paldock/local-service": "workspace:*",
     "@paldock/platform": "workspace:*",
     "zod": "4.6.7"
