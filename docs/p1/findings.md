@@ -87,3 +87,5 @@
 | `user-did-become-active` / `user-did-resign-active` | 未收到（这两个是 macOS 事件，Windows 上本来就没有） |
 
 **重复的锁屏事件**：诊断代码里每个事件只注册一次（`startPowerDiagnostics` 只在启动时调用一次），所以重复来自 Electron 在 Windows 上的事件本身。将来审批升级和推送积压要用的是「当前是否锁屏」这个状态，不应按事件次数计数：实现时以状态变化为准（已锁屏时再收到 lock-screen 忽略），或直接用 `getSystemIdleState` 的 `locked`。诊断日志本身照实记录，不做去重。
+
+**CI 第六轮（提交 `4d593db`）**：macOS 上「命令审批：批准后执行」偶发失败。原因是审批请求和 `turn/start` 的响应可能在同一批 I/O 里送达，事件回调先于 `start()` 的返回值执行，测试里用来回复的句柄还是空的，回复丢失。测试改为经 `start()` 的 Promise 回复；`RunSupervisor` 同样防住这个时序：拿到句柄之前要回复的审批先暂存，拿到后补发。

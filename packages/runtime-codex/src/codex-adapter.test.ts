@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { RuntimeEvent, RuntimeRun } from '@paldock/contracts';
+import type { RuntimeApprovalDecision, RuntimeEvent, RuntimeRun } from '@paldock/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CodexAdapter } from './codex-adapter.js';
 import { approvalResponse, toApprovalRequest } from './event-mapping.js';
@@ -32,19 +32,27 @@ const adapter = (extraEnv: Record<string, string> = {}) =>
   });
 
 /** 启动一次 Run，收集事件直到出现终态事件；onEvent 可在途中响应（例如批准审批）。 */
-async function runToEnd(prompt: string, options: { codex?: CodexAdapter; resumeThreadId?: string; onEvent?: (e: RuntimeEvent) => void } = {}) {
+async function runToEnd(
+  prompt: string,
+  options: { codex?: CodexAdapter; resumeThreadId?: string; approve?: RuntimeApprovalDecision } = {},
+) {
   const events: RuntimeEvent[] = [];
   let done!: () => void;
   const finished = new Promise<void>((resolve) => (done = resolve));
   const terminal = new Set(['completed', 'failed', 'interrupted', 'disconnected']);
-  run = await (options.codex ?? adapter()).start(
+  const started = (options.codex ?? adapter()).start(
     { runId: 'run_1', cwd, prompt, ...(options.resumeThreadId ? { resumeThreadId: options.resumeThreadId } : {}) },
     (event) => {
       events.push(event);
-      options.onEvent?.(event);
+      // 事件可能先于 start() 的返回值送达（同一批 I/O 里先处理了审批请求，CI 实测），所以经 started 回复
+      if (event.type === 'approval_request' && options.approve) {
+        const decision = options.approve;
+        void started.then((handle) => handle.respondApproval(event.request.nativeRequestId, decision));
+      }
       if (terminal.has(event.type)) done();
     },
   );
+  run = await started;
   return { events, finished, run };
 }
 
@@ -68,7 +76,7 @@ describe('Codex 适配器（模拟 app-server）', () => {
 
   it('文件改动审批：路径来自 item/started；拒绝后不写入', async () => {
     const { events, finished } = await runToEnd('[mock:file-approval]', {
-      onEvent: (e) => e.type === 'approval_request' && run!.respondApproval(e.request.nativeRequestId, 'deny'),
+      approve: 'deny',
     });
     await finished;
     const [request] = ofType(events, 'approval_request');
@@ -80,7 +88,7 @@ describe('Codex 适配器（模拟 app-server）', () => {
 
   it('命令审批：批准后执行', async () => {
     const { finished } = await runToEnd('[mock:command]', {
-      onEvent: (e) => e.type === 'approval_request' && run!.respondApproval(e.request.nativeRequestId, 'allow_once'),
+      approve: 'allow_once',
     });
     await finished;
     expect(existsSync(join(cwd, 'installed.txt'))).toBe(true);
@@ -88,7 +96,7 @@ describe('Codex 适配器（模拟 app-server）', () => {
 
   it('权限扩展：即使传入允许也只授予空权限', async () => {
     const { events, finished } = await runToEnd('[mock:permissions]', {
-      onEvent: (e) => e.type === 'approval_request' && run!.respondApproval(e.request.nativeRequestId, 'allow_once'),
+      approve: 'allow_once',
     });
     await finished;
     expect(ofType(events, 'approval_request')[0]?.request).toMatchObject({ kind: 'permissions', summary: '请求扩展权限：联网' });

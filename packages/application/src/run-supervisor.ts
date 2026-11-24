@@ -9,6 +9,7 @@ import type {
   RunRecord,
   RunStatus,
   RuntimeAdapter,
+  RuntimeApprovalDecision,
   RuntimeApprovalRequest,
   RuntimeEvent,
   RuntimeRun,
@@ -52,6 +53,8 @@ interface LiveRun {
   task: TaskRecord;
   worktree: string | undefined;
   handle: RuntimeRun | undefined;
+  /** 拿到 handle 之前就要回复的审批（事件可能先于 start() 的返回值送达），拿到后补发。 */
+  pendingReplies: [string, RuntimeApprovalDecision][];
   /** approvalId → 执行器请求 ID；回复时原样带回。 */
   approvals: Map<string, string>;
   output: string;
@@ -131,7 +134,12 @@ export class RunSupervisor {
     const nativeId = live?.approvals.get(approval.id);
     if (!live || nativeId === undefined) return;
     this.releaseApproval(live, approval.id);
-    live.handle?.respondApproval(nativeId, decision);
+    this.reply(live, nativeId, decision);
+  }
+
+  private reply(live: LiveRun, nativeId: string, decision: RuntimeApprovalDecision): void {
+    if (live.handle) live.handle.respondApproval(nativeId, decision);
+    else live.pendingReplies.push([nativeId, decision]);
   }
 
   private liveRun(runId: string): LiveRun | undefined {
@@ -193,6 +201,7 @@ export class RunSupervisor {
       if (plan.threadId) this.publish([store.runs.addNotice(live.run.id, 'resume_failed', reason)]);
       return this.finishFailed(live, reason);
     }
+    for (const [nativeId, decision] of live.pendingReplies.splice(0)) live.handle.respondApproval(nativeId, decision);
     if (this.stopping) return live.handle.dispose();
     if (live.cancelRequested) await live.handle.cancel();
   }
@@ -204,6 +213,7 @@ export class RunSupervisor {
       task,
       worktree: subtask.worktreePath ?? undefined,
       handle: undefined,
+      pendingReplies: [],
       approvals: new Map(),
       output: '',
       flushTimer: undefined,
@@ -321,7 +331,7 @@ export class RunSupervisor {
    */
   private closeApprovals(live: LiveRun, respond: boolean): PersistentEvent[] {
     if (live.approvals.size === 0 && live.run.status !== 'waiting_approval') return [];
-    if (respond) for (const nativeId of live.approvals.values()) live.handle?.respondApproval(nativeId, 'cancel');
+    if (respond) for (const nativeId of live.approvals.values()) this.reply(live, nativeId, 'cancel');
     live.approvals.clear();
     return [...this.deps.store.runs.cancelPendingApprovals(live.run.id).events, ...this.runTo(live, 'running')];
   }
