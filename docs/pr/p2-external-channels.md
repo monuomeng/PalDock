@@ -22,6 +22,10 @@ P1 让用户能在电脑上建任务、看执行、审批和验收。P2 的目�
 | `4c56cb3` | 飞书机器人信息解析修正；文案统一；飞书应用配置说明 |
 | `a812efd` | `/simplify` 自查修改；修复 Codex 首段输出偶发丢失 |
 | `e2a3c89` | `/code-review` 自查修复（8 项） |
+| `9db135a` | Telegram：409 后至少等 30 秒再试，状态显示重试等待（实机排查：直连靠 AdGuard VPN，超时来自 VPN 不稳） |
+| `d2f361f` | 安装版启动任务失败：`codex --version` 在 Electron 里要带 `ELECTRON_RUN_AS_NODE` |
+| `32dc2e8` | 安装版执行任务弹命令行窗口：npm 安装的 Codex 直接以隐藏窗口启动原生 `codex.exe` |
+| `a9b79d6`、`edd07d0`、`8744fb2`、`401dead` | P2-10 任务续做（计划、实现、`/simplify`、`/code-review`），见 [计划](../plan/p2-task-continuation.md) |
 
 ## 实现方案
 
@@ -62,9 +66,16 @@ apps/desktop ──► domain（空闲阈值）
 
 **Codex 最低版本**：`discover` 解析 `--version`，低于 0.166.0 报不可用并提示升级；每次 Run 启动前检查（成功结果缓存）。
 
+**任务续做（P2-10）**：实测里第二句话被当成新任务、开了新 worktree，用户要求任务做完一轮后等指令、由人下令结束。
+- 「待验收」改叫「待命中」，按钮「继续」（写下一步指令，同一 worktree、同一 Codex 会话再跑一轮）和「结束任务」（提交到分支）。库里仍是 `review` 状态和 `rework` / `accept` 两种决定。
+- 单聊记一个当前任务（迁移 004：`external_conversations.current_task_id`，删掉 `awaiting_token`）。普通文字按服务端给出的可用操作（`TaskActions`，与桌面同一套规则）处理：待命中就继续，不弹确认；执行中不建任务；阻塞请到电脑上；用 `/continue` 选中的已结束任务就基于它新建任务；其余当作新任务目标（确认卡片）。任务在任何一端结束时，各单聊的当前任务一并清掉。
+- 新命令 `/new`、`/continue`（最近任务列表，点编号看每一轮的指令、说明、改动并设为当前任务；或 `/continue #编号 [指令]`）、`/done`（确认后结束）。编号和分支名都按主键前缀查找。
+- 任务进度也发给把它设为当前任务的单聊，所以在手机上继续电脑上建的任务能收到进度。
+- 基于已结束的任务继续（单聊或桌面「基于此任务继续」）：新任务（`tasks.continued_from_task_id`）的项目取自来源任务，worktree 从来源分支的提交出发，提示词带来源的目标和最后说明；重新开始时同样带上。
+
 ## 验证
 
-- `pnpm build`、`pnpm test`：198 项通过、2 项跳过，连续 5 次全绿（Linux 容器，Node 22）。
+- `pnpm build`、`pnpm test`：198 项通过、2 项跳过，连续 5 次全绿（Linux 容器，Node 22）。P2-10 之后 208 项通过、2 项跳过。
 - `node scripts/check-licenses.mjs`：55 个包通过。
 - 设置页：假数据下在 Chromium 渲染检查。
 - `/simplify`（复用、简化、效率、层次四路）与 `/code-review` 已跑，修改见 `a812efd`、`e2a3c89`。
@@ -88,6 +99,8 @@ apps/desktop ──► domain（空闲阈值）
 - `channel-desktop` / `channel-mock` 包没有建：桌面仍直接调用用例，测试用假适配器走同一条管线。等 P3 主会话进来时再统一。
 - 飞书 P0 探测脚本仍在 `packages/channel-feishu/src/probe.ts`，所以这个包还依赖 `platform` 与 `storage-sqlite`；以后挪到 `scripts/`。
 - P2-09 里的强杀后真实 Codex 残留、turn 中途崩溃恢复需要消耗额度，本轮没跑；Windows 睡眠唤醒和 macOS 部分待实机。
+
+**P2-10 自查未采纳的建议**：两处 `SUBTASK_LABEL` 合并（同上，渲染进程只能引用类型）；把接续的起点提交记在子任务上（现在执行时按来源分支解析，来源分支被删会明确报错）；`rework` / `accept` 改名为 `continue` / `end`（改动面大，只改界面说法）；「继续」和「选任务」两种按钮合并（回复不同，保留）；`/done` 结束后再查一次子任务（已改为任务结束时由通知统一清掉当前任务）。
 
 **`/simplify` 未采纳的建议**（记录在案）：状态与风险文字移到 contracts 共用（渲染进程只能引用类型，没有打包器）；存储层「带版本更新 + 事件」的公共函数和账号状态机（当前四处写法清楚，改动面超出本轮）；把桌面状态放进 init 消息（启动完成前到达的变化仍需缓存，收益小）；按渠道描述凭据形状、`unsupported` 消息类型、群可用动作表（第三个渠道出现时再做）。
 
