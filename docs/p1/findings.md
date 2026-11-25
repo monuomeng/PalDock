@@ -89,3 +89,17 @@
 **重复的锁屏事件**：诊断代码里每个事件只注册一次（`startPowerDiagnostics` 只在启动时调用一次），所以重复来自 Electron 在 Windows 上的事件本身。将来审批升级和推送积压要用的是「当前是否锁屏」这个状态，不应按事件次数计数：实现时以状态变化为准（已锁屏时再收到 lock-screen 忽略），或直接用 `getSystemIdleState` 的 `locked`。诊断日志本身照实记录，不做去重。
 
 **CI 第六轮（提交 `4d593db`）**：macOS 上「命令审批：批准后执行」偶发失败。原因是审批请求和 `turn/start` 的响应可能在同一批 I/O 里送达，事件回调先于 `start()` 的返回值执行，测试里用来回复的句柄还是空的，回复丢失。测试改为经 `start()` 的 Promise 回复；`RunSupervisor` 同样防住这个时序：拿到句柄之前要回复的审批先暂存，拿到后补发。
+
+## 息屏、锁屏与空闲事件（macOS，2026-11-24，协助测试者）
+
+macOS 27.0.1（arm64），用 P0 测试包里的 Electron 样机和同一套诊断代码（`PALDOCK_DIAGNOSTICS=1`），由测试脚本让显示器息屏、保持键鼠不动并记录。结果在 `p0-macos-results.zip`。
+
+| 场景 | 结果 |
+|---|---|
+| 显示器息屏 60 秒后唤醒 | 通过：息屏的同时收到 `lock-screen`（该机设置了息屏即锁定），`getSystemIdleState` 变为 `locked`；唤醒解锁后收到 `unlock-screen`。实测锁定 60.9 秒 |
+| 亮屏、键鼠不动 2 分钟后恢复 | 通过：约 74 秒时 `idle-state` active → idle（阈值 60 秒、每 15 秒检查一次），动鼠标后下一次检查变回 active |
+| 锁屏 / 解锁事件 | **每次只有一条**，没有 Windows 上的重复 |
+| 整机睡眠 / 唤醒 | 未测（手册里是可选步骤） |
+| `user-did-become-active` / `user-did-resign-active` | 未收到（息屏、空闲都不触发这两个事件） |
+
+两个平台合起来的结论：锁屏用 `lock-screen` / `unlock-screen` 加 `getSystemIdleState` 的 `locked` 判断都可靠，空闲用 `getSystemIdleState` 轮询可靠（延迟最多一个轮询间隔）；Windows 的锁屏事件会重复，实现时按状态变化处理。macOS 上息屏是否同时锁屏取决于用户的系统设置，审批升级不能只看息屏。两次首次尝试分别因显示器提前唤醒、空闲期间有输入而作废重做，结果以重做为准。

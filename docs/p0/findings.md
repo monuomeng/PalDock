@@ -160,7 +160,18 @@ Electron 45.2.3（内置 Node 24.22.2）。其 `node:sqlite` 为 SQLite 3.53.4�
 
 ## macOS
 
-用户只有 Windows 电脑，macOS 由其他人协助测试。测试包是仓库 `git archive` 打出的 zip，附 AI 可执行的手册 [docs/test-kits/macos/README.md](../test-kits/macos/README.md) 和一键脚本 `scripts/macos/run-p0-checks.sh`，结果以 `p0-macos-results.zip` 发回。为 macOS 预先处理的点：Unix 套接字路径超过 `sun_path` 上限（104 字节）时退到 `/tmp/paldock-<哈希>.sock`；执行器进程组整体结束；凭据读取目前只实现了 Windows（macOS 钥匙串待补，测试包不涉及）。结果待回收。
+用户只有 Windows 电脑，macOS 由其他人协助测试。测试包是仓库 `git archive` 打出的 zip，附 AI 可执行的手册 [docs/test-kits/macos/README.md](../test-kits/macos/README.md) 和一键脚本 `scripts/macos/run-p0-checks.sh`，结果以 `p0-macos-results.zip` 发回。为 macOS 预先处理的点：Unix 套接字路径超过 `sun_path` 上限（104 字节）时退到 `/tmp/paldock-<哈希>.sock`；执行器进程组整体结束；凭据读取目前只实现了 Windows（macOS 钥匙串待补，测试包不涉及）。
+
+**结果（2026-11-24，macOS 27.0.1 arm64，APFS，Node 26.0.0，git 2.54.0）**：
+
+| 项 | 结果 |
+|---|---|
+| Electron 实机检查（P0 版 `electron-check`） | 15 项全部通过，含 Unix 套接字权限 600、强杀后 3 秒重启并续接事件序号、单实例、禁止外部跳转、正常退出清理锁和套接字 |
+| worktree | 数据根下建 worktree、超长路径（349 字符）写入、提交和删除都正常。文件系统不区分大小写（`core.ignorecase=true`）：只差大小写的两个分支不能共存、两个文件合并成一个，与 Windows 相同，印证分支名统一用小写 |
+| 执行器发现 | Codex 0.158.0 已登录；Claude Code 2.1.185 已登录（OAuth） |
+| 电源与空闲 | 见 [P1 实测记录](../p1/findings.md)「息屏、锁屏与空闲事件（macOS）」 |
+
+P1 的桌面端到端（`scripts/p1/e2e-check.mjs`）尚未在 macOS 上跑；P1 的单元与集成测试在 GitHub Actions 的 macOS 上跑（以最新一次 CI 结果为准）。
 
 ## 阻塞项与所需条件
 
