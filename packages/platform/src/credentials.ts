@@ -96,16 +96,23 @@ async function deleteKeychainItems(target: string): Promise<void> {
   }
 }
 
+/** `security find-generic-password -w` 的输出；`-g` 的 stderr 显示为 `password: 0x…` 时，输出是 UTF-8 字节的十六进制。 */
+export function keychainSecret(wOutput: string, gStderr: string): string {
+  const value = wOutput.replace(/\n$/, '');
+  return /^password: 0x[0-9A-F]+/m.test(gStderr) ? Buffer.from(value, 'hex').toString('utf8') : value;
+}
+
 const unsupported = () => new Error('凭据库目前只支持 Windows 与 macOS');
 
 export async function readCredential(target: string): Promise<Credential | undefined> {
   try {
     if (process.platform === 'win32') return JSON.parse(await powershell(WIN_READ, { PALDOCK_CRED_TARGET: target })) as Credential;
     if (process.platform === 'darwin') {
-      const { stdout: attributes } = await exec('/usr/bin/security', ['find-generic-password', '-s', target], { timeout: TIMEOUT_MS });
+      // -g 把属性写到 stdout、密码写到 stderr；密码含非 ASCII 字符时两种输出都是十六进制（`password: 0x…`），要解码。
+      const { stdout: attributes, stderr } = await exec('/usr/bin/security', ['find-generic-password', '-s', target, '-g'], { timeout: TIMEOUT_MS });
       const user = /"acct"<blob>="(.*)"/.exec(attributes)?.[1] ?? '';
       const { stdout: secret } = await exec('/usr/bin/security', ['find-generic-password', '-s', target, '-w'], { timeout: TIMEOUT_MS });
-      return { user, secret: secret.replace(/\n$/, '') };
+      return { user, secret: keychainSecret(secret, stderr) };
     }
   } catch {
     return undefined;

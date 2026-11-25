@@ -138,15 +138,15 @@ try {
     check('Unix 套接字权限为 600', mode === '600', `mode=${mode}`);
   }
 
-  // 主流程：表单建任务 → 执行 → 回显 → 待验收 → 验收
+  // 主流程：表单建任务 → 执行 → 回显 → 待命中 → 结束任务
   await createViaForm(evaluate, '加一个文件');
   check(
     '提交后跳到任务详情',
     await waitFor(evaluate, `location.hash.startsWith('#/task/')`),
     await evaluate(`location.hash + ' ' + (document.querySelector('.error')?.textContent ?? '')`),
   );
-  const review = await waitFor(evaluate, `${text('.task-detail .facts .status')} === '待验收'`);
-  check('执行完成后进入待验收', review);
+  const review = await waitFor(evaluate, `${text('.task-detail .facts .status')} === '待命中'`);
+  check('执行完成后进入待命中', review);
   check('输出回显到页面', (await evaluate(text('pre.output'))).includes('完成'));
   check('证据含改动统计', (await evaluate(text('pre.diffstat'))).includes('mock-change.txt'));
   check('检查命令通过', (await evaluate(text('.check'))) === '通过');
@@ -154,15 +154,16 @@ try {
   const checkOutput = await waitFor(evaluate, `${text('pre.check-output')} || false`);
   check('检查输出已脱敏', checkOutput?.includes('password=[已脱敏]') && !checkOutput.includes('hunter2'), checkOutput);
   await screenshot('review');
-  await evaluate(clickButton('验收通过'));
-  check('验收后任务完成', await waitFor(evaluate, `${text('.task-detail .facts .status')} === '已完成'`));
+  await evaluate(clickButton('结束任务'));
+  check('结束任务后任务完成', await waitFor(evaluate, `${text('.task-detail .facts .status')} === '已完成'`));
+  check('已结束的任务可以基于它继续', await waitFor(evaluate, `[...document.querySelectorAll('button')].some((b) => b.textContent === '基于此任务继续')`));
 
-  // 审批：A 停在审批；B 待验收
+  // 审批：A 停在审批；B 待命中
   const a = await evaluate(`${request('task.create', { rootPath: repo, goal: '[mock:file-approval] A', idempotencyKey: 'e2e-a-0001' })}.then((r) => r.value.task.id)`);
   const b = await evaluate(`${request('task.create', { rootPath: repo, goal: 'B', idempotencyKey: 'e2e-b-0001' })}.then((r) => r.value.task.id)`);
   await evaluate(goto('#/attention'));
-  const kinds = await waitFor(evaluate, `(() => { const k = [...document.querySelectorAll('.attention-item .kind')].map((e) => e.textContent).sort().join(','); return k === '审批,待验收' ? k : false; })()`);
-  check('「待我处理」列出 A 的审批与 B 的待验收', kinds, kinds);
+  const kinds = await waitFor(evaluate, `(() => { const k = [...document.querySelectorAll('.attention-item .kind')].map((e) => e.textContent).sort().join(','); return k === '审批,待命中' ? k : false; })()`);
+  check('「待我处理」列出 A 的审批与 B 的待命中', kinds, kinds);
   await screenshot('attention');
   await evaluate(`[...document.querySelectorAll('.attention-item')].find((b) => b.textContent.includes('审批')).click()`);
   check('点开审批直达 A 的详情', await waitFor(evaluate, `${currentTaskId} === ${JSON.stringify(a)} && !!document.querySelector('.approval.pending')`));
@@ -179,17 +180,17 @@ try {
   await evaluate(goto(`#/task/${a}`));
   await waitFor(evaluate, `!!document.querySelector('.approval.pending')`);
   await evaluate(clickButton('拒绝'));
-  check('拒绝 A 后 A 进入待验收', await waitFor(evaluate, `${text('.task-detail .facts .status')} === '待验收'`));
+  check('拒绝 A 后 A 进入待命中', await waitFor(evaluate, `${text('.task-detail .facts .status')} === '待命中'`));
   await evaluate(goto('#/attention'));
   check('拒绝只移除 A 的审批', await waitFor(evaluate, `[...document.querySelectorAll('.attention-item .kind')].filter((e) => e.textContent === '审批').length === 0`));
 
-  // 退回 B：旧证据保留，新一轮成为当前验收对象
+  // 继续 B：旧证据保留，新一轮成为当前这一轮
   await evaluate(goto(`#/task/${b}`));
   await waitFor(evaluate, `!!document.querySelector('#review-note')`);
   await evaluate(`(document.querySelector('#review-note').value = '补测试', true)`);
-  await evaluate(clickButton('退回重做'));
-  check('退回后 B 重跑并再次待验收，旧证据仍在', await waitFor(evaluate, `document.querySelectorAll('details.run').length === 2 && ${text('.task-detail .facts .status')} === '待验收'`));
-  check('旧一次的退回意见可查', (await evaluate(text('.review-note'))).includes('补测试'));
+  await evaluate(clickButton('继续'));
+  check('继续后 B 再跑一轮并回到待命中，旧证据仍在', await waitFor(evaluate, `document.querySelectorAll('details.run').length === 2 && ${text('.task-detail .facts .status')} === '待命中'`));
+  check('上一轮的继续指令可查', (await evaluate(text('.review-note'))).includes('补测试'));
 
   // 取消
   const slow = await evaluate(`${request('task.create', { rootPath: repo, goal: '[mock:slow] 慢任务', idempotencyKey: 'e2e-slow-01' })}.then((r) => r.value.task.id)`);
@@ -208,7 +209,7 @@ try {
   check('被中断的任务显示阻塞与原因', await waitFor(evaluate, `${text('.panel.blocked')}.includes('服务重启')`));
   await screenshot('blocked');
   await evaluate(clickButton('恢复'));
-  check('恢复后续做完成（新 Run 指回原 Run）', await waitFor(evaluate, `${text('.task-detail .facts .status')} === '待验收' && ${text('details.run[open]')}.includes('续做自')`, 30000));
+  check('恢复后续做完成（新 Run 指回原 Run）', await waitFor(evaluate, `${text('.task-detail .facts .status')} === '待命中' && ${text('details.run[open]')}.includes('续做自')`, 30000));
 
   // 第二个实例
   const second = launch();

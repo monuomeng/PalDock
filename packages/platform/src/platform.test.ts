@@ -8,6 +8,7 @@ import {
   createIpcPath,
   createToken,
   isSystemDirectory,
+  keychainSecret,
   listenIpc,
   readFrames,
   tokensEqual,
@@ -77,5 +78,15 @@ describe('系统目录判断', () => {
   it('系统目录本身被拦住', () => {
     const system = process.platform === 'win32' ? (process.env.SystemRoot ?? 'C:\Windows') : '/usr';
     expect(isSystemDirectory(join(system, 'x'))).toBe(true);
+  });
+});
+
+describe('钥匙串读出的秘密', () => {
+  it('ASCII 原样返回，非 ASCII 从十六进制解码', () => {
+    expect(keychainSecret('a"b\\c d\n', 'password: "a\\"b"')).toBe('a"b\\c d');
+    const hex = Buffer.from('第二个 x:y', 'utf8').toString('hex').toUpperCase();
+    expect(keychainSecret(`${hex}\n`, `password: 0x${hex}  "\\347..."`)).toBe('第二个 x:y');
+    // 十六进制样子的 ASCII 秘密不能被误解码
+    expect(keychainSecret('deadbeef\n', 'password: "deadbeef"')).toBe('deadbeef');
   });
 });

@@ -19,8 +19,7 @@ const a = start();
 console.log('A ->', await a.ready);
 const client = new IpcClient((e) => console.log('event', e.seq, e.type));
 await client.connect(a.ipcPath, a.token);
-const ws = await client.request('workspace.create', { name: 'x', rootPath: 'p' });
-await client.request('task.create', { workspaceId: ws.id, title: 't' });
+console.log('status ->', (await client.request('service.status', {})).runtime);
 const b = start();
 console.log('B (same data root) ->', await b.ready, 'exit', await b.exited);
 a.child.kill();               // 模拟崩溃：不走 shutdown
