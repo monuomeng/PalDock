@@ -7,6 +7,7 @@ export * from './task-graph-scheduler.js';
 export * from './review-gate.js';
 export * from './integration.js';
 export * from './coordinator.js';
+export * from './recovery-service.js';
 export * from './prompts.js';
 export * from './redact.js';
 export * from './risk.js';

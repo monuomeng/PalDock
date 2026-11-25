@@ -58,8 +58,12 @@ describe('协调助手主会话的存储', () => {
     store.coordinator.setWake(event.id, 'running');
     const since = new Date(clock - 60_000).toISOString();
     expect(store.coordinator.eventWakesSince(sid, since)).toMatchObject({ count: 1 });
-    expect(store.coordinator.failRunningWakes('服务重启').record.map((w) => w.status)).toEqual(['failed']);
-    expect(store.coordinator.listWakes(sid, 10).map((w) => w.status)).toEqual(['failed', 'done']);
+    const requeued = store.coordinator.requeueRunningWakes('服务重启').record;
+    expect(requeued.map((w) => [w.status, w.note])).toEqual([['pending', '服务重启']]);
+    // 开始时间保留：频率计数照旧
+    expect(requeued[0]!.startedAt).not.toBeNull();
+    expect(store.coordinator.eventWakesSince(sid, since).count).toBe(1);
+    expect(store.coordinator.listWakes(sid, 10).map((w) => w.status)).toEqual(['pending', 'done']);
   });
 
   it('通知进「待我处理」；看过后不再出现、不再升级；升级只标一次', () => {

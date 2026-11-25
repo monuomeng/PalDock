@@ -9,7 +9,7 @@ import {
 } from './channels.js';
 import { CheckCommand, type AgentOverrideRecord, type AgentSettings, type AttentionItem, type MessageRecord, type TaskDetail, type TaskSummary, type WorkspaceRecord } from './records.js';
 import type { ConversationDetail, MainSessionRecord } from './conversations.js';
-import type { AutoDecisionRecord } from './plans.js';
+import type { AutoDecisionRecord, RecoveryItem } from './plans.js';
 import { AgentRole, ApprovalDecision, AttentionKind, Executor, RemoteApprovalLevel, ReviewDecision, SCHEMA_VERSION } from './states.js';
 
 /** 单帧上限；超长帧直接断开，防止本机客户端撑爆内存。 */
@@ -21,6 +21,8 @@ const Version = z.number().int().nonnegative();
 /** 命令名 → 参数 schema。新增命令只在这里登记，服务端和客户端共用。 */
 export const CommandArgs = {
   'service.status': z.object({}),
+  /** 这次启动时恢复了哪些 P3 的中间状态。 */
+  'recovery.report': z.object({}),
   'task.create': z
     .object({
       /** 用户在桌面选的项目目录（git 仓库）；接续任务时不填，项目取自来源任务。 */
@@ -140,6 +142,7 @@ export type CommandArgsOf<N extends CommandName> = z.input<(typeof CommandArgs)[
 /** 各命令的返回值；服务端处理函数与客户端调用共用，返回 void 的命令结果为 null。 */
 export interface CommandResults {
   'service.status': { version: string; startedAt: string; interruptedRuns: number; runtime: string };
+  'recovery.report': RecoveryItem[];
   'task.create': TaskDetail;
   'task.list': TaskSummary[];
   'task.get': TaskDetail;

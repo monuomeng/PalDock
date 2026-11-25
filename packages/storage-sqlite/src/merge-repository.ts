@@ -22,6 +22,9 @@ const SQL = {
     RETURNING ${COLUMNS.merge()}`,
   // merge_ops_by_subtask 倒序取一条
   latestOf: `SELECT ${COLUMNS.merge()} FROM merge_ops WHERE subtask_id = ? ORDER BY created_at DESC LIMIT 1`,
+  get: `SELECT ${COLUMNS.merge()} FROM merge_ops WHERE id = ?`,
+  // merge_ops_open，条件逐字一致
+  open: `SELECT ${COLUMNS.merge()} FROM merge_ops WHERE ${OPEN} ORDER BY created_at`,
 } as const;
 
 /**
@@ -50,6 +53,15 @@ export class MergeRepository implements MergeStorePort {
     );
     if (!row) throw new CodedError('conflict', '合并操作不存在或已结束');
     return toMerge(row);
+  }
+
+  get(id: string): MergeOpRecord | undefined {
+    const row = this.db.get<MergeRow>(SQL.get, id);
+    return row && toMerge(row);
+  }
+
+  open(): MergeOpRecord[] {
+    return this.db.all<MergeRow>(SQL.open).map(toMerge);
   }
 
   latestOf(subtaskId: string): MergeOpRecord | undefined {

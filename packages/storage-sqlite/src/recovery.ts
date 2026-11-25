@@ -68,6 +68,7 @@ export function interruptActiveWork(db: Database, events: EventLog, clock: Clock
     }
     return {
       interruptedRuns: active.map(({ id, subtaskId, nativeThreadId }) => ({ id, subtaskId, nativeThreadId })),
+      blockedSubtasks: subtasks.map(({ id, status }) => ({ id, from: status })),
       reopenedInbox: db.run(SQL.reopenInbox),
       unknownOutbox: db.run(SQL.unknownOutbox, reason),
       events: emitted,

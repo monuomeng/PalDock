@@ -95,6 +95,21 @@ export const GATE_STAGES = ['review', 'human'] as const;
 export const GateStage = z.enum(GATE_STAGES);
 export type GateStage = z.infer<typeof GateStage>;
 
+/** 重启恢复的类别。 */
+export const RECOVERY_KINDS = ['run', 'queued', 'review', 'merge', 'wake', 'notice', 'schedule'] as const;
+export const RecoveryKind = z.enum(RECOVERY_KINDS);
+export type RecoveryKind = z.infer<typeof RecoveryKind>;
+
+/** 这次启动恢复的一项（桌面「待我处理」顶部列出）。 */
+export interface RecoveryItem {
+  kind: RecoveryKind;
+  /** 子任务、合并操作、会话等的 ID。 */
+  targetId: string;
+  outcome: string;
+  detail: string | null;
+  at: string;
+}
+
 export const MERGE_PHASES = ['started', 'candidate', 'done', 'conflict', 'check_failed'] as const;
 export const MergePhase = z.enum(MERGE_PHASES);
 export type MergePhase = z.infer<typeof MergePhase>;

@@ -13,7 +13,7 @@ import type {
 } from './channels.js';
 import type { PersistentEvent, RunNoticeCode } from './events.js';
 import type { MainSessionRecord, NoticeKind, NoticeRecord, SummaryRecord, WakeRecord, WakeStatus, WakeTrigger } from './conversations.js';
-import type { AutoDecisionRecord, AutoPolicy, PlanNodeEdit } from './plans.js';
+import type { AutoDecisionRecord, AutoPolicy, PlanNodeEdit, RecoveryItem } from './plans.js';
 import type { GateStage, GraphNode, MergeOpRecord, MergePhase, PlanNodeInput, PlanNodeRecord, PlanRecord } from './plans.js';
 import type {
   AgentOverrideRecord,
@@ -116,6 +116,8 @@ export interface InterruptedRun {
 
 export interface RecoveryReport {
   interruptedRuns: InterruptedRun[];
+  /** 因重启被阻塞的子任务和它之前的状态（排队中或执行中）。 */
+  blockedSubtasks: { id: string; from: SubtaskStatus }[];
   reopenedInbox: number;
   unknownOutbox: number;
   events: PersistentEvent[];
@@ -189,6 +191,9 @@ export interface MergeStorePort {
   /** 推进阶段；只能从没结束的阶段（started / candidate）往后走。 */
   advance(id: string, phase: MergePhase, fields?: { candidateSha?: string; conflictFiles?: string[]; detail?: string }): MergeOpRecord;
   latestOf(subtaskId: string): MergeOpRecord | undefined;
+  get(id: string): MergeOpRecord | undefined;
+  /** 没结束的合并（started / candidate），按开始时间。 */
+  open(): MergeOpRecord[];
 }
 
 export interface NewWake {
@@ -217,8 +222,8 @@ export interface CoordinatorStorePort {
   eventWakesSince(sessionId: string, sinceIso: string): { count: number; lastStartedAt: string | null };
   doneWakes(sessionId: string): number;
   listWakes(sessionId: string, limit: number): WakeRecord[];
-  /** 服务重启：正在跑的唤醒一律失败（对应的 Run 已中断）。 */
-  failRunningWakes(note: string): Change<WakeRecord[]>;
+  /** 服务重启：正在跑的唤醒放回队列（对应的 Run 已中断），开始时间保留，频率计数照旧。 */
+  requeueRunningWakes(note: string): Change<WakeRecord[]>;
   recentMessages(sessionId: string, limit: number): MessageRecord[];
   addNotice(input: { sessionId: string; runId: string | null; kind: NoticeKind; body: string }): Change<NoticeRecord>;
   notices(sessionId: string, limit: number): NoticeRecord[];
@@ -412,4 +417,6 @@ export interface StorePort {
   /** 多个写入合成一个事务（内层用 SAVEPOINT）。 */
   transaction<T>(fn: () => T): T;
   interruptActiveWork(reason: string): RecoveryReport;
+  /** 记一条重启恢复事件。 */
+  recordRecovery(item: Omit<RecoveryItem, 'at'>): PersistentEvent;
 }

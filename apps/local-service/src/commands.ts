@@ -1,4 +1,4 @@
-import type { AgentService, ChannelService, CoordinatorService, IntegrationService, PlanService, TaskService } from '@paldock/application';
+import type { AgentService, ChannelService, CoordinatorService, IntegrationService, PlanService, RecoveryService, TaskService } from '@paldock/application';
 import type { CommandArgs, CommandName, CommandResultOf } from '@paldock/contracts';
 import type { Store } from '@paldock/storage-sqlite';
 import type { z } from 'zod';
@@ -17,9 +17,11 @@ export function createHandlers(
   plans: PlanService,
   integration: IntegrationService,
   coordinator: CoordinatorService,
+  recovery: RecoveryService,
   channels: ChannelService, agents: AgentService, info: ServiceInfo): Handlers {
   return {
     'service.status': () => info,
+    'recovery.report': () => recovery.report(),
     'task.create': ({ rootPath, goal, check, checkConfirmed, idempotencyKey, continuedFromTaskId }) =>
       tasks.createTask({ rootPath, goal, check, checkConfirmed, idempotencyKey, continuedFromTaskId }),
     'task.list': ({ limit }) => tasks.listTasks(limit),

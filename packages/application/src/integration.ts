@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { CodedError, type CheckCommand, type GateDecision, type PersistentEvent, type StorePort, type SubtaskRecord, type TaskRecord } from '@paldock/contracts';
 import { P1_DEFAULTS, taskKey } from '@paldock/domain';
@@ -16,6 +16,8 @@ export interface IntegrationDeps {
   publish(events: PersistentEvent[]): void;
   log(message: string): void;
   limits?: Partial<Pick<typeof P1_DEFAULTS, 'checkTimeoutMs' | 'checkOutputMaxBytes' | 'branchPrefix'>>;
+  /** 只在测试里注入：在合并的关键点停住，模拟服务在这里被杀掉。 */
+  checkpoint?: (point: 'started' | 'candidate' | 'fast_forward') => Promise<void>;
 }
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 300);
@@ -38,6 +40,75 @@ export class IntegrationService {
   /** 等所有进行中的合并结束（退出前调用，避免在数据库关闭、目录删除后还在动 Git）。 */
   async idle(): Promise<void> {
     while (this.queues.size > 0) await Promise.allSettled([...this.queues.values()]);
+  }
+
+  /**
+   * 重启恢复：没结束的合并按集成分支现在的 HEAD 判断：等于候选提交（已快进、没记完）就补记完成；
+   * 等于合并前的 HEAD（还没推进）就作废这次、从头再合；都不是就交给人。
+   * 然后清掉残留的临时合并 worktree，集成 worktree 里残留的合并状态 merge --abort。
+   */
+  async recover(): Promise<{ targetId: string; outcome: string; detail: string | null }[]> {
+    const { store } = this.deps;
+    const items: { targetId: string; outcome: string; detail: string | null }[] = [];
+    const repos = new Set<string>();
+    for (const op of store.merges.open()) {
+      const subtask = store.tasks.getSubtask(op.subtaskId);
+      const task = store.tasks.getTask(op.taskId);
+      if (!subtask || !task?.integrationBranch) continue;
+      const repo = store.tasks.getWorkspace(task.workspaceId)!.rootPath;
+      repos.add(repo);
+      const head = await branchCommit(repo, task.integrationBranch).catch(() => undefined);
+      const runId = store.runs.latestRun(subtask.id)?.id ?? subtask.id;
+      if (op.candidateSha && head === op.candidateSha) {
+        // 集成 worktree 可能还停在旧提交（快进到一半）：让它跟上分支
+        if (task.integrationWorktree) await git(task.integrationWorktree, ['reset', '--keep', op.candidateSha]).catch(() => {});
+        this.deps.publish(
+          store.transaction(() => {
+            store.merges.advance(op.id, 'done', { detail: '重启后核对：集成分支已快进，补记完成' });
+            return subtask.status === 'review' ? this.succeedEvents(subtask, { stage: 'merge', outcome: 'passed', runId }) : [];
+          }),
+        );
+        items.push({ targetId: op.id, outcome: '补记完成', detail: `集成分支已在候选提交 ${op.candidateSha.slice(0, 10)}` });
+      } else if (head === op.targetOld) {
+        store.merges.advance(op.id, 'check_failed', { detail: '服务重启，重做合并' });
+        if (subtask.status === 'review') void this.merge(subtask.id);
+        items.push({ targetId: op.id, outcome: '重做合并', detail: op.candidateSha ? '候选提交已出但没快进' : '只记了开始' });
+      } else {
+        const reason = '重启后发现集成分支被改动过（不是合并前的提交，也不是候选提交），请人工处理';
+        store.merges.advance(op.id, 'check_failed', { detail: reason });
+        this.handOver(subtask.id, { stage: 'merge', outcome: 'human', runId, reason });
+        items.push({ targetId: op.id, outcome: '交给人', detail: reason });
+      }
+    }
+    items.push(...(await this.cleanLeftovers(repos)));
+    return items;
+  }
+
+  /** 清掉临时合并 worktree（启动时没有合并在进行），集成 worktree 里残留的合并状态 merge --abort。 */
+  private async cleanLeftovers(repos: Set<string>): Promise<{ targetId: string; outcome: string; detail: string | null }[]> {
+    const { store } = this.deps;
+    const items: { targetId: string; outcome: string; detail: string | null }[] = [];
+    const dir = join(this.deps.dataRoot, 'merges');
+    for (const name of existsSync(dir) ? readdirSync(dir) : []) {
+      const op = store.merges.get(name);
+      const task = op ? store.tasks.getTask(op.taskId) : undefined;
+      const repo = task ? store.tasks.getWorkspace(task.workspaceId)?.rootPath : [...repos][0];
+      const path = join(dir, name);
+      if (repo) await removeWorktree(repo, path).catch(() => rmSync(path, { recursive: true, force: true }));
+      else rmSync(path, { recursive: true, force: true });
+      items.push({ targetId: name, outcome: '清理临时 worktree', detail: path });
+    }
+    for (const workspace of store.tasks.listWorkspaces()) {
+      for (const summary of store.tasks.listTasks(500)) {
+        const task = summary.task;
+        if (task.workspaceId !== workspace.id || !task.integrationWorktree || !existsSync(task.integrationWorktree)) continue;
+        const merging = await git(task.integrationWorktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).then(() => true, () => false);
+        if (!merging) continue;
+        await git(task.integrationWorktree, ['merge', '--abort']).catch(() => {});
+        items.push({ targetId: task.id, outcome: '清理集成 worktree 的合并残留', detail: task.integrationWorktree });
+      }
+    }
+    return items;
   }
 
   /** 建任务集成分支并检出到数据根的 worktree；已建过就直接返回（可重入）。 */
@@ -88,6 +159,7 @@ export class IntegrationService {
     const title = nodeOf(store, subtask)?.title ?? subtask.goal.slice(0, 40);
     const temp = join(this.deps.dataRoot, 'merges', op.id);
     mkdirSync(join(this.deps.dataRoot, 'merges'), { recursive: true });
+    await this.deps.checkpoint?.('started');
     await git(repo, ['worktree', 'add', '--detach', temp, oldHead]);
     try {
       const merged = await mergeInto(temp, source, `paldock: 合入「${title}」`);
@@ -98,6 +170,7 @@ export class IntegrationService {
       }
       const candidate = await headCommit(temp);
       store.merges.advance(op.id, 'candidate', { candidateSha: candidate });
+      await this.deps.checkpoint?.('candidate');
 
       const failed = await this.integrationChecks(task, subtask, temp);
       if (failed) {
@@ -113,6 +186,7 @@ export class IntegrationService {
         return this.handOver(subtask.id, { stage: 'merge', outcome: 'human', runId, reason });
       }
       await git(task.integrationWorktree, ['merge', '--ff-only', candidate]);
+      await this.deps.checkpoint?.('fast_forward');
       this.deps.publish(
         store.transaction(() => {
           store.merges.advance(op.id, 'done');

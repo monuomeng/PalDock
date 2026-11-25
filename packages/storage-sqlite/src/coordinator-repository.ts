@@ -63,8 +63,8 @@ const SQL = {
       FROM wakes WHERE session_id = ? AND trigger = 'task_event' AND started_at >= ?`,
   doneWakes: `SELECT count(*) AS n FROM wakes WHERE session_id = ? AND status = 'done'`,
   listWakes: `SELECT ${COLUMNS.wake()} FROM wakes WHERE session_id = ? ORDER BY id DESC LIMIT ?`,
-  failRunning: `
-    UPDATE wakes SET status = 'failed', note = ?, ended_at = ? WHERE status = 'running'
+  requeueRunning: `
+    UPDATE wakes SET status = 'pending', note = ?, run_id = NULL WHERE status = 'running'
     RETURNING ${COLUMNS.wake()}`,
   // messages_by_session 倒序取最近 N 条
   recentMessages: `SELECT ${COLUMNS.message()} FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?`,
@@ -162,9 +162,9 @@ export class CoordinatorRepository implements CoordinatorStorePort {
     return this.db.all<WakeRecord>(SQL.listWakes, sessionId, limit);
   }
 
-  failRunningWakes(note: string): Change<WakeRecord[]> {
+  requeueRunningWakes(note: string): Change<WakeRecord[]> {
     return this.db.transaction(() => {
-      const record = this.db.all<WakeRecord>(SQL.failRunning, note, this.clock.iso());
+      const record = this.db.all<WakeRecord>(SQL.requeueRunning, note);
       return { record, events: record.map((w) => this.wakeEvent(w)) };
     });
   }

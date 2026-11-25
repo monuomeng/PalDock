@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { RecoveryReport, StorePort } from '@paldock/contracts';
+import type { PersistentEvent, RecoveryItem, RecoveryReport, StorePort } from '@paldock/contracts';
 import { AgentRepository } from './agent-repository.js';
 import { AttentionQueries } from './attention.js';
 import { AuditLog } from './audit-log.js';
@@ -58,6 +58,7 @@ export interface Store extends StorePort {
   migration: MigrateResult;
   /** 中断所有未结束的工作（启动恢复、正常退出前）。 */
   interruptActiveWork(reason: string): RecoveryReport;
+  recordRecovery(item: Omit<RecoveryItem, 'at'>): PersistentEvent;
   /** 手动备份数据库与 artifacts/；内存库不支持。 */
   backup(): Promise<BackupResult>;
   /** 多个仓储写入合成一个事务（内层用 SAVEPOINT）。 */
@@ -91,6 +92,8 @@ export async function openStore(dataRoot: string | ':memory:', now: () => Date =
     outbox: new Outbox(db, clock),
     migration,
     interruptActiveWork: (reason) => interruptActiveWork(db, events, clock, reason),
+    recordRecovery: ({ kind, targetId, outcome, detail }) =>
+      events.append(targetId, { type: 'recovery.performed', payload: detail ? { kind, outcome, detail: detail.slice(0, 500) } : { kind, outcome } }),
     backup: () => {
       if (inMemory) return Promise.reject(new Error('内存库不支持备份'));
       return backupDataRoot(db, dataRoot, now());

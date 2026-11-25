@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AutoDecisionKind, PlanStatus } from './plans.js';
+import { AutoDecisionKind, PlanStatus, RecoveryKind } from './plans.js';
 import { NoticeKind, WakeStatus, WakeTrigger } from './conversations.js';
 import { ChannelAccountStatus, ChannelProvider, ChannelState, InboundRejection } from './channels.js';
 import {
@@ -90,6 +90,11 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
   z.object({ type: z.literal('approval.escalated'), payload: z.object({ channels: z.array(ChannelProvider) }) }),
   /** 项目设置（远程审批等级）变更；聚合 ID 为 workspaceId。 */
   z.object({ type: z.literal('workspace.settings_changed'), payload: z.object({ remoteApprovalLevel: RemoteApprovalLevel }) }),
+  /** 服务启动时恢复了一项 P3 的中间状态（节点的 Run、审阅、合并、唤醒、通知、调度）；聚合 ID 为对象 ID。 */
+  z.object({
+    type: z.literal('recovery.performed'),
+    payload: z.object({ kind: RecoveryKind, outcome: z.string().min(1).max(60), detail: Reason }),
+  }),
   /** 新建了协调助手主会话；聚合 ID 为会话 ID。 */
   z.object({ type: z.literal('main_session.created'), payload: z.object({ workspaceId: Id }) }),
   /** 一次唤醒进入新状态；聚合 ID 为会话 ID。 */

@@ -96,6 +96,18 @@ export class ReviewGate {
     }
   }
 
+  /** 重启恢复：审阅中的节点（审阅 Run 已被中断）用新的独立会话重新审阅同一次交付。 */
+  restartReview(subtaskId: string): boolean {
+    const { store } = this.deps;
+    const subtask = store.tasks.getSubtask(subtaskId);
+    if (subtask?.status !== 'review' || subtask.gateStage !== 'review') return false;
+    const work = store.runs.latestRun(subtask.id);
+    const result = work && store.runs.getResult(work.id);
+    if (!work || !result) return false;
+    this.startReview(subtask, work, result.commitSha, result.diffStat);
+    return true;
+  }
+
   /** 每轮审阅一个新的审阅助手会话（不沿用开发助手的会话和上下文），执行器按审阅角色的设置。 */
   private startReview(subtask: SubtaskRecord, work: RunRecord, commitSha: string | null, diffStat: string | null): void {
     const { store } = this.deps;

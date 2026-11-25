@@ -67,7 +67,8 @@ export const runMachine = defineMachine<RunStatus>('run', {
   running: ['waiting_approval', 'unconfirmed', 'interrupted', 'succeeded', 'failed', 'cancelled'],
   waiting_approval: ['running', 'unconfirmed', 'interrupted', 'failed', 'cancelled'],
   unconfirmed: ['running', 'waiting_approval', 'interrupted', 'succeeded', 'failed', 'cancelled'],
-  interrupted: ['running', 'failed', 'cancelled'],
+  // interrupted → succeeded：服务重启后按原生会话查实这一轮已经完成（只在核对后用，不猜）
+  interrupted: ['running', 'succeeded', 'failed', 'cancelled'],
   succeeded: [],
   failed: [],
   cancelled: [],

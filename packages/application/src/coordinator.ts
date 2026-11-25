@@ -48,10 +48,15 @@ export class CoordinatorService {
     return this.deps.store;
   }
 
-  /** 服务启动：上次没跑完的唤醒（Run 已被中断）记为失败，然后继续处理排队的。 */
-  start(): void {
-    this.deps.publish(this.store.coordinator.failRunningWakes('服务重启，这次唤醒没有完成').events);
+  /**
+   * 服务启动：上次没跑完的唤醒（Run 已被中断）放回队列，沿用原生会话重新处理；频率计数按库里的开始时间照旧。
+   * 返回放回队列的唤醒（重启恢复记事件用）。
+   */
+  start(): WakeRecord[] {
+    const { record, events } = this.store.coordinator.requeueRunningWakes('服务重启，重新处理');
+    this.deps.publish(events);
     for (const sessionId of this.store.coordinator.sessionsWithPendingWakes()) this.schedule(sessionId);
+    return record;
   }
 
   stop(): void {

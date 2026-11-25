@@ -1,6 +1,6 @@
 import type { Server, Socket } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { AgentService, ChannelService, CoordinatorService, IntegrationService, McpGateway, PlanService, ReviewGate, RunSupervisor, TaskGraphScheduler, TaskService, type McpCaller, type AdapterFactory, type CredentialPort } from '@paldock/application';
+import { AgentService, ChannelService, CoordinatorService, IntegrationService, RecoveryService, McpGateway, PlanService, ReviewGate, RunSupervisor, TaskGraphScheduler, TaskService, type McpCaller, type AdapterFactory, type CredentialPort } from '@paldock/application';
 import {
   ClientFrame,
   CodedError,
@@ -91,7 +91,8 @@ export class LocalService {
     try {
       const store = await openStore(dataRoot);
       // 启动时没有任何执行器连接：未结束的 Run 一律中断，由用户在「待我处理」里选择恢复、重新开始或放弃
-      const interruptedRuns = store.interruptActiveWork('服务重启').interruptedRuns.length;
+      const recoveryReport = store.interruptActiveWork('服务重启');
+      const interruptedRuns = recoveryReport.interruptedRuns.length;
       const service = new LocalService(store, token, lock.release, interruptedRuns, log);
       const runtimes: Record<string, RuntimeAdapter> = options.runtimes ??
         (options.runtime
@@ -153,14 +154,26 @@ export class LocalService {
         ...(options.channels?.limits ? { limits: options.channels.limits } : {}),
       });
       const agents = new AgentService({ store, runtimes, publish });
-      service.handlers = createHandlers(store, tasks, plans, integration, service.coordinator, service.channels, agents, {
+      // P3 的中间状态由恢复程序收拾（P1 / P2 的单子任务仍由用户手动恢复）；它也负责把唤醒放回队列
+      const recovery = new RecoveryService({
+        store,
+        runtimes,
+        supervisor: service.supervisor,
+        scheduler: service.scheduler,
+        gate: service.gate,
+        integration,
+        coordinator: service.coordinator,
+        publish,
+        log,
+      });
+      service.handlers = createHandlers(store, tasks, plans, integration, service.coordinator, recovery, service.channels, agents, {
         version: SERVICE_VERSION,
         startedAt: new Date().toISOString(),
         interruptedRuns,
         runtime: Object.keys(runtimes).join(', '),
       });
       service.supervisor.start();
-      service.coordinator.start();
+      void recovery.recover(recoveryReport).catch((error) => log(`recovery failed: ${(error as Error).message}`));
       service.channels.start();
       service.server = await listenIpc(ipcPath, (socket) => service.accept(socket));
       log(`migration v${store.migration.from}→v${store.migration.to}, interrupted runs: ${interruptedRuns}`);

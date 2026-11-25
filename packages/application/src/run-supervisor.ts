@@ -153,6 +153,25 @@ export class RunSupervisor {
     return ofTask < this.limits.maxRunsPerTask;
   }
 
+  /**
+   * 重启恢复：被中断的工作 Run 按原生会话查实这一轮其实已经完成，补记结果：
+   * 子任务回到执行中（阻塞 → 排队 → 执行中），然后照常收集证据、进待验收（闸门接手）。
+   */
+  adoptCompleted(runId: string, finalMessage: string | null): void {
+    const { store } = this.deps;
+    const run = store.runs.getRun(runId);
+    if (!run || run.status !== 'interrupted' || this.live.has(run.subtaskId)) return;
+    const live = store.transaction(() => {
+      const queued = moveSubtask(store, run.subtaskId, 'queued');
+      const running = moveSubtask(store, run.subtaskId, 'running');
+      const taskEvents = settleTask(store, running.record.taskId);
+      this.publish([...queued.events, ...running.events, ...taskEvents]);
+      const task = store.tasks.getTask(running.record.taskId)!;
+      return this.track(run, running.record, task, running.record.role);
+    });
+    this.background(this.finishSucceeded(live, finalMessage));
+  }
+
   /** 子任务有 Run 在执行或排队。 */
   isActive(subtaskId: string): boolean {
     return this.live.has(subtaskId) || this.queue.some((q) => q.subtaskId === subtaskId);

@@ -33,7 +33,9 @@ describe('state machines', () => {
     expect(runMachine.canTransition('running', 'unconfirmed')).toBe(true);
     expect(runMachine.canTransition('unconfirmed', 'succeeded')).toBe(true);
     expect(runMachine.canTransition('interrupted', 'running')).toBe(true);
-    expect(runMachine.canTransition('interrupted', 'succeeded')).toBe(false);
+    // P3-09：重启后按原生会话查实这一轮已完成时才补记成功（恢复程序只在 checkTurn 返回 completed 时用）
+    expect(runMachine.canTransition('interrupted', 'succeeded')).toBe(true);
+    expect(runMachine.canTransition('cancelled', 'succeeded')).toBe(false);
   });
 
   it('迁移表覆盖了契约里的每个状态', () => {
