@@ -1,15 +1,28 @@
-import { CodedError, type Change, type PersistentEvent, type StorePort, type SubtaskRecord, type SubtaskStatus, type TaskStatus } from '@paldock/contracts';
+import { CodedError, type Change, type PersistentEvent, type StorePort, type SubtaskRecord, type SubtaskStatus } from '@paldock/contracts';
+import { taskMachine, taskPath, taskStatusOf } from '@paldock/domain';
 
 /**
  * 内部状态推进：按当前版本迁移（本地服务是唯一写者，同步执行，不会与自己冲突），已在目标状态时不写。
  * 用户发起的操作带客户端看到的版本号，由调用方直接调用仓储的 transition。
- * P1 的任务状态只跟随子任务做粗粒度变化：queued → running → blocked / succeeded / failed / cancelled。
+ * 任务状态不单独决定，由它的子任务推导（settleTask）；单子任务和任务图同一条规则。
  */
 
-export function moveTask(store: StorePort, taskId: string, to: TaskStatus, reason?: string): PersistentEvent[] {
-  const task = store.tasks.getTask(taskId);
+/**
+ * 按子任务推导任务状态并写入（必要时按状态机走中间状态）。子任务变化后调用，reason 记在最后一步。
+ * 任务已结束、或推导结果从当前状态走不到时不写。
+ */
+export function settleTask(store: StorePort, taskId: string, reason?: string): PersistentEvent[] {
+  let task = store.tasks.getTask(taskId);
   if (!task) throw new CodedError('not_found', `任务不存在：${taskId}`);
-  return task.status === to ? [] : store.tasks.transitionTask(task.id, task.version, to, reason).events;
+  if (taskMachine.isTerminal(task.status)) return [];
+  const steps = taskPath(task.status, taskStatusOf(task.status, store.tasks.listSubtasks(taskId).map((s) => s.status))) ?? [];
+  const events: PersistentEvent[] = [];
+  steps.forEach((to, i) => {
+    const change = store.tasks.transitionTask(task!.id, task!.version, to, i === steps.length - 1 ? reason : undefined);
+    task = change.record;
+    events.push(...change.events);
+  });
+  return events;
 }
 
 export function moveSubtask(store: StorePort, subtaskId: string, to: SubtaskStatus, reason?: string): Change<SubtaskRecord> {

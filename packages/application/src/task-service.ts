@@ -6,6 +6,8 @@ import {
   type ApprovalDecision,
   type CheckCommand,
   type PersistentEvent,
+  type PlanDetail,
+  type PlanRecord,
   type RemoteApprovalLevel,
   type ReviewDecision,
   type RunRecord,
@@ -13,15 +15,17 @@ import {
   type SubtaskRecord,
   type TaskActions,
   type TaskDetail,
+  type TaskRecord,
   type TaskSummary,
   type WorkspaceRecord,
 } from '@paldock/contracts';
-import { subtaskMachine } from '@paldock/domain';
+import { subtaskMachine, taskMachine } from '@paldock/domain';
 import { isInside, isSystemDirectory, samePath } from '@paldock/platform';
 import { commitStaged, headCommit, repositoryRoot } from './git.js';
 import { continuationPrompt, firstRunPrompt, nextStepPrompt, resumePrompt, titleOf } from './prompts.js';
 import type { RunSupervisor } from './run-supervisor.js';
-import { moveTask, requireSubtask } from './transitions.js';
+import type { TaskGraphScheduler } from './task-graph-scheduler.js';
+import { requireSubtask, settleTask } from './transitions.js';
 
 export interface CreateTaskInput {
   /** 新任务的项目目录；接续任务时不填，项目取自来源任务。 */
@@ -39,6 +43,8 @@ export interface CreateTaskInput {
 export interface TaskServiceDeps {
   store: StorePort;
   supervisor: RunSupervisor;
+  /** 计划子任务重新开始时用节点的提示词；缺省时（测试）按任务目标。 */
+  scheduler?: TaskGraphScheduler;
   dataRoot: string;
   publish(events: PersistentEvent[]): void;
 }
@@ -63,13 +69,18 @@ function resumePlan(latest: RunRecord | undefined): { threadId: string; resumesR
 /** 已结束且建过 worktree 的任务，分支上有它的结果，可以基于它新建任务继续。 */
 const canContinueFrom = (subtask: SubtaskRecord) => subtask.status === 'succeeded' && subtask.branch !== null;
 
-/** 当前允许的用户操作；界面只按它显示按钮，规则只在这里一处。 */
+const CANCELLED = '用户取消';
+/** 子任务已经结束、取消任务时不再动它（failed 在子任务状态机里还能重新排队，但取消不碰它）。 */
+const isFinished = (subtask: SubtaskRecord) => subtask.status === 'succeeded' || subtask.status === 'failed' || subtask.status === 'cancelled';
+
+/** 当前允许的用户操作；界面只按它显示按钮，规则只在这里一处。计划子任务不能单独取消或被接续。 */
 function actionsOf(subtask: SubtaskRecord, latest: RunRecord | undefined): TaskActions {
   const blocked = subtask.status === 'blocked';
+  const single = subtask.planId === null;
   return {
-    cancel: !subtaskMachine.isTerminal(subtask.status),
+    cancel: single && !subtaskMachine.isTerminal(subtask.status),
     review: subtask.status === 'review',
-    continueFrom: canContinueFrom(subtask),
+    continueFrom: single && canContinueFrom(subtask),
     resume: blocked && resumePlan(latest) !== undefined,
     restart: blocked,
     abandon: blocked,
@@ -122,7 +133,7 @@ export class TaskService {
     this.publish(events);
     this.deps.supervisor.enqueue(record.subtask.id, { prompt });
     // 刚写入的记录都在手里（RETURNING），不回查；Run 由监管器异步创建
-    return { task: record.task, workspace, subtask: record.subtask, runs: [], actions: actionsOf(record.subtask, undefined) };
+    return { task: record.task, workspace, subtask: record.subtask, runs: [], actions: actionsOf(record.subtask, undefined), plan: null };
   }
 
   /** 新任务：校验并登记项目。 */
@@ -178,19 +189,73 @@ export class TaskService {
 
   getTask(taskId: string): TaskDetail {
     const task = this.store.tasks.getTask(taskId);
-    const subtask = task && this.store.tasks.getSubtaskOfTask(task.id);
     const workspace = task && this.store.tasks.getWorkspace(task.workspaceId);
-    if (!task || !subtask || !workspace) throw new CodedError('not_found', '任务不存在');
-    const runs = this.store.runs.runDetails(subtask.id);
-    return { task, workspace, subtask, runs, actions: actionsOf(subtask, runs.at(-1)?.run) };
+    if (!task || !workspace) throw new CodedError('not_found', '任务不存在');
+    const subtask = this.store.tasks.getSubtaskOfTask(task.id);
+    if (subtask) {
+      const runs = this.store.runs.runDetails(subtask.id);
+      return { task, workspace, subtask, runs, actions: actionsOf(subtask, runs.at(-1)?.run), plan: null };
+    }
+    const plan = this.store.plans.latestPlan(task.id);
+    if (!plan) throw new CodedError('not_found', '任务不存在');
+    const none = { cancel: false, review: false, continueFrom: false, resume: false, restart: false, abandon: false };
+    return { task, workspace, subtask: null, runs: [], actions: { ...none, cancel: !taskMachine.isTerminal(task.status) }, plan: this.planDetail(task, plan) };
+  }
+
+  /** 最新一版计划的节点；确认后带上物化出的子任务和各自允许的操作（逐个验收、恢复）。 */
+  private planDetail(task: TaskRecord, plan: PlanRecord): PlanDetail {
+    const subtasks = new Map(this.store.tasks.listSubtasks(task.id).filter((s) => s.planId === plan.id).map((s) => [s.nodeKey, s]));
+    const pending = plan.status === 'proposed' && task.status === 'draft';
+    return {
+      plan,
+      nodes: this.store.plans.nodes(plan.id).map((node) => {
+        const subtask = subtasks.get(node.key) ?? null;
+        return { node, subtask, actions: subtask && actionsOf(subtask, this.store.runs.latestRun(subtask.id)) };
+      }),
+      actions: { confirm: pending, reject: pending },
+    };
   }
 
   /** 执行中的 Run 由监管器中断，收尾时置为 cancelled；其余状态直接取消。 */
   cancelTask(taskId: string): void {
+    const task = this.store.tasks.getTask(taskId);
+    if (!task) throw new CodedError('not_found', '任务不存在');
     const subtask = this.store.tasks.getSubtaskOfTask(taskId);
-    if (!subtask) throw new CodedError('not_found', '任务不存在');
+    if (!subtask) return this.cancelGraph(task);
     this.assertNotCommitting(subtask.id);
-    if (!this.deps.supervisor.cancel(subtask.id)) this.close(subtask, 'cancelled', '用户取消');
+    if (!this.deps.supervisor.cancel(subtask.id)) this.close(subtask, 'cancelled', CANCELLED);
+  }
+
+  /**
+   * 取消按计划拆分的任务：还在等确认的计划退回、任务直接取消；已确认的，运行中的子任务交给监管器中断
+   * （收尾时记为取消），其余没结束的同一事务直接取消。任务状态随子任务推导。
+   */
+  private cancelGraph(task: TaskRecord): void {
+    if (taskMachine.isTerminal(task.status)) throw new CodedError('conflict', '任务已经结束');
+    const subtasks = this.store.tasks.listSubtasks(task.id).filter((s) => !isFinished(s));
+    for (const s of subtasks) this.assertNotCommitting(s.id);
+    const idle = subtasks.filter((s) => !this.deps.supervisor.cancel(s.id));
+    this.publish(
+      this.store.transaction(() => {
+        if (task.status === 'draft') {
+          const plan = this.store.plans.latestPlan(task.id);
+          return [
+            ...(plan?.status === 'proposed' ? this.store.plans.reject(plan.id, plan.version, '任务已取消').events : []),
+            ...this.store.tasks.transitionTask(task.id, task.version, 'cancelled', CANCELLED).events,
+          ];
+        }
+        return [...idle.flatMap((s) => this.cancelEvents(s)), ...settleTask(this.store, task.id, CANCELLED)];
+      }),
+    );
+  }
+
+  /** 子任务直接结束（取消或放弃）；被中断的最新 Run 一并结束。 */
+  private cancelEvents(subtask: SubtaskRecord, status: 'cancelled' | 'failed' = 'cancelled', reason = CANCELLED): PersistentEvent[] {
+    const latest = this.store.runs.latestRun(subtask.id);
+    return [
+      ...(latest?.status === 'interrupted' ? this.store.runs.transitionRun(latest.id, latest.version, status, reason).events : []),
+      ...this.store.tasks.transitionSubtask(subtask.id, subtask.version, status, reason).events,
+    ];
   }
 
   /** 先到者为准（版本号）；权限扩展只能拒绝。via 记录决定来自桌面还是哪个外部渠道。 */
@@ -226,7 +291,7 @@ export class TaskService {
         this.store.transaction(() => [
           ...this.store.runs.addReview(run.id, 'accept', note ?? null).events,
           ...this.store.tasks.transitionSubtask(subtaskId, expectedVersion, 'succeeded').events,
-          ...this.store.tasks.transitionTask(task.id, task.version, 'succeeded').events,
+          ...settleTask(this.store, task.id),
         ]),
       );
       return;
@@ -260,26 +325,21 @@ export class TaskService {
     this.publish(
       this.store.transaction(() => [
         ...this.store.tasks.transitionSubtask(subtaskId, expectedVersion, 'queued').events,
-        ...this.store.tasks.transitionTask(task.id, task.version, 'queued').events,
+        ...settleTask(this.store, task.id),
       ]),
     );
-    // 重新开始是新会话，接续任务要重新带上来源任务的上下文
-    const restart = () => (task.continuedFromTaskId ? this.continuation(task.continuedFromTaskId, task.goal).prompt : firstRunPrompt(task.goal));
-    this.deps.supervisor.enqueue(subtaskId, { prompt: action === 'resume' ? resumePrompt(task.goal) : restart(), ...plan });
+    // 重新开始是新会话：接续任务要重新带上来源任务的上下文，计划子任务带节点目标与上游交接
+    const restart = () => {
+      if (subtask.planId && this.deps.scheduler) return this.deps.scheduler.promptFor(subtask);
+      return task.continuedFromTaskId ? this.continuation(task.continuedFromTaskId, task.goal).prompt : firstRunPrompt(task.goal);
+    };
+    const goal = subtask.planId ? subtask.goal : task.goal;
+    this.deps.supervisor.enqueue(subtaskId, { prompt: action === 'resume' ? resumePrompt(goal) : restart(), ...plan });
   }
 
   /** 取消或放弃：被中断的最新 Run、子任务、任务同一事务进入终态。 */
   private close(subtask: SubtaskRecord, status: 'cancelled' | 'failed', reason: string): void {
-    this.publish(
-      this.store.transaction(() => {
-        const latest = this.store.runs.latestRun(subtask.id);
-        return [
-          ...(latest?.status === 'interrupted' ? this.store.runs.transitionRun(latest.id, latest.version, status, reason).events : []),
-          ...this.store.tasks.transitionSubtask(subtask.id, subtask.version, status, reason).events,
-          ...moveTask(this.store, subtask.taskId, status, reason),
-        ];
-      }),
-    );
+    this.publish(this.store.transaction(() => [...this.cancelEvents(subtask, status, reason), ...settleTask(this.store, subtask.taskId, reason)]));
   }
 
   /** 读检查命令的脱敏输出；文件被删时如实说明。 */

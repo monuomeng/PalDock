@@ -2,6 +2,8 @@ export * from './agent-service.js';
 export * from './check-runner.js';
 export * from './git.js';
 export * from './mcp-gateway.js';
+export * from './plan-service.js';
+export * from './task-graph-scheduler.js';
 export * from './prompts.js';
 export * from './redact.js';
 export * from './risk.js';

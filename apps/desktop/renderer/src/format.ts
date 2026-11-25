@@ -1,4 +1,4 @@
-import type { ApprovalStatus, AttentionKind, CheckStatus, RiskLevel, RunStatus, SubtaskStatus, TaskRecord } from '@paldock/contracts';
+import type { ApprovalStatus, AttentionKind, CheckStatus, PlanStatus, RiskLevel, RunStatus, SubtaskStatus, TaskRecord } from '@paldock/contracts';
 
 /** 状态与类别的中文名。颜色不是唯一提示：界面上同时显示文字。 */
 export const SUBTASK_LABEL: Record<SubtaskStatus, string> = {
@@ -13,6 +13,8 @@ export const SUBTASK_LABEL: Record<SubtaskStatus, string> = {
   failed: '失败',
   cancelled: '已取消',
 };
+
+export const PLAN_LABEL: Record<PlanStatus, string> = { proposed: '待确认', confirmed: '已确认', rejected: '已退回', superseded: '已被新一版取代' };
 
 export const RUN_LABEL: Record<RunStatus, string> = {
   starting: '启动中',

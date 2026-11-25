@@ -1,7 +1,7 @@
-import type { ApprovalRecord, RunDetail, SubtaskRecord, TaskDetail } from '@paldock/contracts';
+import type { ApprovalRecord, PlanDetail, PlanNodeView, RunDetail, SubtaskRecord, TaskDetail } from '@paldock/contracts';
 import { call } from '../api.js';
 import { h, type Child } from '../dom.js';
-import { APPROVAL_LABEL, CHECK_LABEL, RISK_LABEL, RUN_LABEL, SUBTASK_LABEL, checkCommandText, duration, time } from '../format.js';
+import { APPROVAL_LABEL, CHECK_LABEL, PLAN_LABEL, RISK_LABEL, RUN_LABEL, SUBTASK_LABEL, checkCommandText, duration, time } from '../format.js';
 import { liveText } from '../live-output.js';
 import { continueLink, navigate, taskLink } from '../router.js';
 
@@ -25,6 +25,7 @@ export async function taskDetailView(taskId: string, focusRunId: string | undefi
     refresh();
   };
   const { task, subtask, workspace } = detail;
+  if (!subtask) return planTaskView(detail, error, act);
   const focus = focusRunId ?? detail.runs.at(-1)?.run.id;
 
   const element = h(
@@ -44,11 +45,104 @@ export async function taskDetailView(taskId: string, focusRunId: string | undefi
     ),
     h('details', {}, h('summary', {}, '目标'), h('pre', { class: 'goal' }, task.goal)),
     error,
-    actions(detail, act),
+    actions(detail, subtask, act),
     h('h3', {}, `执行记录（${detail.runs.length} 次）`),
     ...[...detail.runs].reverse().map((run) => runView(run, run.run.id === focus, act)),
   );
-  return { element, ids: scopeOf(detail) };
+  return { element, ids: scopeOf(detail, subtask) };
+}
+
+/**
+ * 按计划拆分的任务：计划节点、依赖和各节点状态；计划待确认时可以确认或退回，确认后逐个验收待命中的节点。
+ * 只列节点，不画图；各节点的执行记录随 P3-08。
+ */
+function planTaskView(detail: TaskDetail, error: HTMLElement, act: Act): RenderedDetail {
+  const { task, workspace, plan } = detail;
+  const cancel = detail.actions.cancel
+    ? h('div', { class: 'actions' }, h('button', { type: 'button', class: 'danger', onclick: act(() => call('task.cancel', { taskId: task.id })) }, '取消任务'))
+    : null;
+  const element = h(
+    'article',
+    { class: 'task-detail', 'aria-labelledby': 'task-title' },
+    h('h2', { id: 'task-title' }, task.title),
+    h(
+      'dl',
+      { class: 'facts' },
+      ...fact('状态', h('span', { class: `status status-${task.status}` }, SUBTASK_LABEL[task.status])),
+      ...fact('项目', workspace.rootPath),
+    ),
+    h('details', {}, h('summary', {}, '目标'), h('pre', { class: 'goal' }, task.goal)),
+    error,
+    plan ? planView(plan, act) : null,
+    cancel,
+  );
+  const ids = new Set([task.id, ...(plan ? [plan.plan.id, ...plan.nodes.flatMap((n) => (n.subtask ? [n.subtask.id] : []))] : [])]);
+  return { element, ids };
+}
+
+function planView({ plan, nodes, actions: allowed }: PlanDetail, act: Act): HTMLElement {
+  const note = h('textarea', { id: 'plan-note', rows: 2, 'data-keep': `plan-${plan.id}`, placeholder: '退回时可选：要协调助手怎么改' });
+  const decide = allowed.confirm
+    ? h(
+        'section',
+        { class: 'panel review', 'aria-label': '计划待确认' },
+        h('p', {}, h('strong', {}, '计划待确认：'), '确认后按下面的节点建子任务并开始派单；没有依赖的先开始。'),
+        h('label', { for: 'plan-note' }, '退回意见'),
+        note,
+        h(
+          'div',
+          { class: 'actions' },
+          h('button', { type: 'button', class: 'primary', onclick: act(() => call('plan.confirm', { planId: plan.id, expectedVersion: plan.version })) }, '确认计划'),
+          h(
+            'button',
+            {
+              type: 'button',
+              onclick: act(() => {
+                const text = note.value.trim();
+                return call('plan.reject', { planId: plan.id, expectedVersion: plan.version, ...(text ? { note: text } : {}) });
+              }),
+            },
+            '退回',
+          ),
+        ),
+      )
+    : null;
+  const titles = new Map(nodes.map((n) => [n.node.key, n.node.title]));
+  return h(
+    'section',
+    { class: 'plan', 'aria-label': '计划' },
+    h('h3', {}, `计划第 ${plan.revision} 版 · `, h('span', { class: `status plan-${plan.status}` }, PLAN_LABEL[plan.status])),
+    plan.decisionNote ? h('p', { class: 'hint' }, `说明：${plan.decisionNote}`) : null,
+    decide,
+    h(
+      'table',
+      { class: 'tasks plan-nodes' },
+      h('thead', {}, h('tr', {}, h('th', {}, '节点'), h('th', {}, '角色'), h('th', {}, '依赖'), h('th', {}, '状态'), h('th', {}, ''))),
+      h('tbody', {}, ...nodes.map((n) => nodeRow(n, titles, act))),
+    ),
+  );
+}
+
+function nodeRow({ node, subtask, actions: allowed }: PlanNodeView, titles: Map<string, string>, act: Act): HTMLElement {
+  const deps = node.dependsOn.map((k) => titles.get(k) ?? k).join('、') || '—';
+  const status = subtask ? h('span', { class: `status status-${subtask.status}` }, SUBTASK_LABEL[subtask.status]) : '未开始';
+  const accept =
+    subtask && allowed?.review
+      ? h('button', { type: 'button', onclick: act(() => call('review.decide', { subtaskId: subtask.id, expectedVersion: subtask.version, decision: 'accept' })) }, '通过')
+      : null;
+  const restart =
+    subtask && allowed?.restart
+      ? h('button', { type: 'button', onclick: act(() => call('run.recover', { subtaskId: subtask.id, expectedVersion: subtask.version, action: 'restart' })) }, '重新开始')
+      : null;
+  return h(
+    'tr',
+    {},
+    h('td', {}, h('strong', {}, node.title), h('div', { class: 'hint' }, node.goal), node.paths.length ? h('div', { class: 'hint' }, `路径：${node.paths.join('，')}`) : null),
+    h('td', {}, node.role),
+    h('td', {}, deps),
+    h('td', {}, status, subtask?.statusReason ? h('div', { class: 'hint' }, subtask.statusReason) : null),
+    h('td', {}, accept, restart),
+  );
 }
 
 export interface RenderedDetail {
@@ -57,7 +151,7 @@ export interface RenderedDetail {
   ids: Set<string>;
 }
 
-function scopeOf({ task, subtask, runs }: TaskDetail): Set<string> {
+function scopeOf({ task, runs }: TaskDetail, subtask: SubtaskRecord): Set<string> {
   return new Set([task.id, subtask.id, ...runs.flatMap((r) => [r.run.id, ...r.approvals.map((a) => a.id)])]);
 }
 
@@ -66,7 +160,7 @@ function fact(label: string, value: Child): [HTMLElement, HTMLElement] {
 }
 
 /** 按钮只按服务端给出的可用操作显示，规则不在界面里重复。 */
-function actions({ task, subtask, actions: allowed }: TaskDetail, act: Act): HTMLElement | null {
+function actions({ task, actions: allowed }: TaskDetail, subtask: SubtaskRecord, act: Act): HTMLElement | null {
   const cancel = allowed.cancel
     ? h('button', { type: 'button', class: 'danger', onclick: act(() => call('task.cancel', { taskId: task.id })) }, '取消任务')
     : null;

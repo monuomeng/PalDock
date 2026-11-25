@@ -12,6 +12,8 @@ import {
   type StorePort,
 } from '@paldock/contracts';
 import { createToken } from '@paldock/platform';
+import type { PlanService } from './plan-service.js';
+import { nodeOf, upstreamOf } from './task-graph-scheduler.js';
 
 /** 令牌对应的调用者：只认服务签发时记下的 Run 和角色，不信模型自报身份。 */
 export interface McpCaller {
@@ -22,6 +24,8 @@ export interface McpCaller {
 export interface McpGatewayDeps {
   store: StorePort;
   publish(events: PersistentEvent[]): void;
+  /** propose_plan 的后端；取值延后，因为计划用例依赖的调度器又依赖带这个网关的监管器。缺省时该工具报错。 */
+  plans?: () => PlanService | undefined;
   now?: () => number;
 }
 
@@ -118,6 +122,12 @@ export class McpGateway {
         const { limit } = args as McpToolArgs<'get_status'>;
         return this.deps.store.tasks.listTasks(limit).map((t) => ({ taskId: t.task.id, title: t.task.title, status: t.task.status, subtaskStatus: t.subtaskStatus, lastActivityAt: t.lastActivityAt }));
       }
+      case 'propose_plan': {
+        const plans = this.deps.plans?.();
+        if (!plans) throw new CodedError('unavailable', '计划功能未启用');
+        const plan = plans.propose(caller.runId, args as McpToolArgs<'propose_plan'>);
+        return { taskId: plan.taskId, planId: plan.id, revision: plan.revision, status: plan.status, next: '计划已交给用户确认；确认前不会执行' };
+      }
     }
     throw new CodedError('bad_request', `没有工具 ${tool}`);
   }
@@ -129,6 +139,7 @@ export class McpGateway {
     const task = subtask && store.tasks.getTask(subtask.taskId);
     if (!task || !subtask) throw new CodedError('not_found', '找不到这次 Run 的子任务');
     const profile = store.agents.getProfile(caller.role);
+    const node = nodeOf(store, subtask);
     return {
       taskId: task.id,
       title: task.title,
@@ -137,6 +148,8 @@ export class McpGateway {
       role: { name: caller.role, displayName: profile?.displayName, duty: profile?.description, deliveryScope: profile?.deliveryScope ?? [] },
       // 只给已确认的检查命令；未确认的不会运行，也不让助手据此行事
       checkCommand: task.checkConfirmedAt ? task.checkCommand : null,
+      // 计划节点：标题、相关路径和上游的交接（上游改动在任务集成分支上线前不在这个 worktree 里）
+      ...(node ? { node: { key: node.key, title: node.title, paths: node.paths }, upstream: upstreamOf(store, subtask) } : {}),
     };
   }
 }

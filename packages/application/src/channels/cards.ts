@@ -33,6 +33,9 @@ export const SUBTASK_LABEL: Record<SubtaskStatus, string> = {
 
 const RISK_LABEL: Record<RiskLevel, string> = { low: '低风险', medium: '中风险', high: '高风险' };
 
+/** 任务在渠道里显示的状态：单子任务用子任务的，按计划拆分的任务用任务自己的（渠道里的任务图入口随 P3-10）。 */
+export const statusOf = ({ task, subtask }: TaskDetail): SubtaskStatus => subtask?.status ?? task.status;
+
 export function clip(text: string, max: number): string {
   const trimmed = text.trim();
   return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
@@ -149,8 +152,8 @@ function nextStep({ actions }: TaskDetail): string {
 /** 一个任务做过什么：每一轮的指令、AI 的说明和改动，只列最近几轮。 */
 export function taskHistoryCard(detail: TaskDetail, now: Date, maxRounds = 5): Card {
   const { task, subtask, workspace, runs } = detail;
-  const lines = [`项目：${workspace.name} · 状态：${SUBTASK_LABEL[subtask.status]}`];
-  if (subtask.branch) lines.push(`分支：${subtask.branch}`);
+  const lines = [`项目：${workspace.name} · 状态：${SUBTASK_LABEL[statusOf(detail)]}`];
+  if (subtask?.branch) lines.push(`分支：${subtask.branch}`);
   if (task.continuedFromTaskId) lines.push(`接续自 #${taskRef(task.continuedFromTaskId)}`);
   const first = Math.max(0, runs.length - maxRounds);
   if (first > 0) lines.push(`（共 ${runs.length} 轮，只显示最近 ${maxRounds} 轮）`);

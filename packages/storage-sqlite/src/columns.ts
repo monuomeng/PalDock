@@ -23,7 +23,8 @@ export const COLUMNS = {
   ),
   subtask: cols(
     `id, task_id AS taskId, role, goal, status, status_reason AS statusReason, rework_count AS reworkCount,
-     worktree_path AS worktreePath, branch, base_commit AS baseCommit, version, updated_at AS updatedAt`,
+     worktree_path AS worktreePath, branch, base_commit AS baseCommit, plan_id AS planId, node_key AS nodeKey,
+     version, updated_at AS updatedAt`,
   ),
   session: cols(`id, kind, subtask_id AS subtaskId, role`),
   run: cols(
@@ -63,6 +64,11 @@ export const COLUMNS = {
      max_run_minutes AS maxRunMinutes, max_concurrency AS maxConcurrency, version, updated_at AS updatedAt`,
   ),
   agentOverride: cols(`workspace_id AS workspaceId, role, executor`),
+  plan: cols(
+    `id, task_id AS taskId, revision, status, proposed_by_run_id AS proposedByRunId, decision_note AS decisionNote,
+     version, created_at AS createdAt, decided_at AS decidedAt`,
+  ),
+  planNode: cols(`plan_id AS planId, position, node_key AS key, role, title, goal, paths, depends_on AS dependsOn`),
   handoff: cols(`run_id AS runId, summary, notes, submitted_at AS submittedAt`),
   usage: cols(
     `input_tokens AS inputTokens, output_tokens AS outputTokens, cache_read_tokens AS cacheReadTokens,

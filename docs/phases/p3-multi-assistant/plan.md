@@ -98,6 +98,39 @@ P3 只做路线图退出条件需要的「编排主干」，加上 P2 时说好�
 - 取消：取消任务会取消所有未结束的 Run 和子任务，`waiting_dependency` 的直接 `cancelled`。
 - 状态推进全部由事件驱动并校验 `version`，与 P1 的写入规则一致。
 
+#### P3-04 实现要点（2026-11-25 开工前写定）
+
+**存储（迁移 007）**
+
+- `plans`：`id`、`task_id`、`revision`（第几版，`UNIQUE (task_id, revision)`）、`status`（`proposed` / `confirmed` / `rejected` / `superseded`）、`proposed_by_run_id`、`decision_note`、`version`（乐观锁，和其他状态表一样）、`created_at`、`decided_at`。「计划版本」用 `revision`，`version` 留给乐观锁，免得一个词两种意思。确认后不可修改，修改计划产生新的一行。
+- `plan_nodes`：`plan_id`、`position`、`node_key`、`role`、`title`、`goal`、`paths`（JSON 数组）、`depends_on`（JSON 数组，存 `node_key`）。主键 `(plan_id, position)`，按计划读节点直接按主键顺序，不排序；`UNIQUE (plan_id, node_key)`。
+- `subtasks` 加 `plan_id`、`node_key`：单子任务（P1 / P2 建的）两列为空，`getSubtaskOfTask` 只取 `plan_id IS NULL` 的那个；计划节点物化出的子任务带上它们。依赖沿用已有的 `subtask_deps`。
+- 查询都给出 EXPLAIN QUERY PLAN 测试：按任务读计划（`plans_by_task`）、按计划读节点（主键）、按任务读子任务与依赖（`subtasks_by_task` + `subtask_deps` 主键）。
+
+**domain 纯函数**
+
+- `validatePlan(nodes, knownRoles)`：1–8 个节点；`node_key` 为小写字母开头的 `[a-z0-9-]`，计划内唯一；角色必须在设置里且不是协调助手；`depends_on` 只引用本计划内的其他节点；无环（Kahn 拓扑排序，报出环上的节点）；`paths` 是项目内相对路径：拒绝绝对路径（`/`、`\`、盘符）、`~`、任何 `..` 段。提议和确认时各校验一次（确认时角色设置可能已经变了）。
+- `graphStep(nodes)`：给出一份任务图里该做的状态变化，按拓扑顺序一次算完（链式阻塞、链式解除都在同一步里）：
+  - `waiting_dependency`：依赖都 `succeeded` → `queued`；有依赖 `failed` / `blocked` / `cancelled` → `blocked`，原因「上游「标题」失败 / 阻塞 / 已取消」。
+  - 因上游被阻塞的 `blocked`（原因由 domain 生成、可识别）：上游恢复正常（重新排队、执行中等）后 → `waiting_dependency`，依赖都成功则直接 `queued`。因自身失败或服务重启而阻塞的不在此列，仍由用户选择恢复、重新开始或放弃。
+- `taskStatusOf(current, subtaskStatuses)`：任务状态由子任务推导，单子任务和任务图共用一条规则（与 P1 的行为一致）：全部成功 → `succeeded`；全部结束且有取消 → `cancelled`，否则 → `failed`；有执行中 / 等审批 / 待验收 → `running`；有排队 / 等依赖 → 保持 `running`，否则 `queued`；剩下的都卡住 → `blocked`。状态机补两条转换：子任务 `blocked → waiting_dependency`（上游恢复），任务 `queued → blocked`（恢复程序本来就这么改，现在写进状态机）。
+
+**流程**
+
+- `propose_plan`（MCP，只有协调助手）：参数是任务标题、目标和节点列表；可带 `taskId` 给一个还在草稿的任务提新一版。没带时在协调助手这次 Run 所在的项目里建一个 `draft` 任务。新一版提出时旧的 `proposed` 版本置为 `superseded`。只产生待确认的计划，不派单。
+- 桌面 IPC `plan.confirm` / `plan.reject`，都带计划的 `version`，先到者为准。确认在一个事务里：重新校验 → 计划 `confirmed` → 按节点建子任务和会话、写 `subtask_deps`（没有依赖的进 `queued`，有依赖的进 `waiting_dependency`）→ 任务 `draft → queued`；提交后把 `queued` 的交给监管器。退回写上原因，任务留在草稿，协调助手可以再提一版。
+- 运行中改计划（确认后的新版本）留到 P3-08；P3-04 只允许给草稿任务提新一版。
+
+**调度**
+
+- 事件驱动：服务广播持久事件时，调度器收下 `subtask.status_changed`，只看属于计划的子任务，按任务去重后在下一个微任务里推进（不在别人的事务里写库）。推进 = 读这个任务的子任务和依赖 → `graphStep` → 逐个按版本迁移（先到者为准，冲突就跳过，等下一次事件）→ 重新推导任务状态 → 把新进入 `queued` 的交给监管器。
+- 并发在监管器里统一管：全局 10（已有）、每任务 4（新增 `maxRunsPerTask`）；排队时跳过所在任务已满的，取下一个。同一会话串行：每个子任务一个会话，监管器按子任务只允许一次 Run；同一子任务重复入队会被忽略。
+- 取消任务：计划草稿直接退回并取消任务；任务图里还没开始的（排队、等依赖、阻塞、待验收）同一事务直接 `cancelled`，运行中的交给监管器中断，收尾时记为取消。
+- 每个计划节点有自己的 worktree 和分支（`paldock/<任务编号>-<节点键>`），从项目 HEAD 出发。下游暂时看不到上游的改动，要等 P3-06 的任务集成分支；在那之前，下游的提示词和 `get_task` 带上游的交接记录（`submit_result` 的摘要，没有时用最终回复）。
+- 子任务做完仍进 `review`，P3-04 里由用户在任务详情里逐个「通过」放行下游；P3-05 的验收闸门接手后改为自动。
+
+**不在 P3-04 做**：失败自动重试（最多 1 次）、唤醒协调助手（P3-07）、按角色的并发上限、计划卡片进「待我处理」（P3-08）、重启后重建就绪队列（P3-09）。
+
 ### 5. P3-05 交付、验收闸门与审阅助手
 
 - 专业助手调用 `submit_result`，交接记录按 [Codex 与 Claude 协作开发规范](../../design/05-ai-collaboration.md)：变更、验证命令与结果、风险、下一步。子任务只能进 `review`。

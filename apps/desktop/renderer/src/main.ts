@@ -134,7 +134,8 @@ function isRelevant(event: PersistentEvent): boolean {
   return (
     detailScope.has(event.aggregateId) ||
     (event.type === 'run.created' && detailScope.has(event.payload.subtaskId)) ||
-    (event.type === 'approval.requested' && detailScope.has(event.payload.runId))
+    (event.type === 'approval.requested' && detailScope.has(event.payload.runId)) ||
+    (event.type === 'plan.proposed' && detailScope.has(event.payload.taskId))
   );
 }
 

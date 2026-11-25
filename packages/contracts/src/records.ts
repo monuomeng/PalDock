@@ -18,6 +18,7 @@ import type {
   WorkspaceAccess,
 } from './states.js';
 import type { RuntimeDiscovery } from './runtime.js';
+import type { PlanDetail } from './plans.js';
 
 /**
  * 跨进程传递的记录形状（存储层 RETURNING 的列与这里一一对应，管理窗口直接显示）。
@@ -68,6 +69,9 @@ export interface SubtaskRecord {
   worktreePath: string | null;
   branch: string | null;
   baseCommit: string | null;
+  /** 由计划节点物化出的子任务所属的计划与节点键；P1 / P2 的单子任务为空。 */
+  planId: string | null;
+  nodeKey: string | null;
   version: number;
   updatedAt: string;
 }
@@ -187,10 +191,13 @@ export interface TaskActions {
 export interface TaskDetail {
   task: TaskRecord;
   workspace: WorkspaceRecord;
-  subtask: SubtaskRecord;
-  /** 按 attempt 升序。 */
+  /** 单子任务的任务（P1 / P2）才有；按计划拆分的任务看 plan。 */
+  subtask: SubtaskRecord | null;
+  /** 单子任务的各次 Run，按 attempt 升序；任务图的任务为空。 */
   runs: RunDetail[];
   actions: TaskActions;
+  /** 最新一版计划及其节点；没有计划的任务为 null。 */
+  plan: PlanDetail | null;
 }
 
 /** 助手角色的设置（agent_profiles）；执行器可按项目覆盖。 */

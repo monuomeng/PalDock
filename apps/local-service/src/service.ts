@@ -1,6 +1,6 @@
 import type { Server, Socket } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { AgentService, ChannelService, McpGateway, RunSupervisor, TaskService, type McpCaller, type AdapterFactory, type CredentialPort } from '@paldock/application';
+import { AgentService, ChannelService, McpGateway, PlanService, RunSupervisor, TaskGraphScheduler, TaskService, type McpCaller, type AdapterFactory, type CredentialPort } from '@paldock/application';
 import {
   ClientFrame,
   CodedError,
@@ -69,6 +69,7 @@ export class LocalService {
   private supervisor!: RunSupervisor;
   private channels!: ChannelService;
   private mcp!: McpGateway;
+  private scheduler!: TaskGraphScheduler;
 
   private constructor(
     private readonly store: Store,
@@ -97,12 +98,15 @@ export class LocalService {
             }),
             claude: new ClaudeAdapter(process.env.PALDOCK_CLAUDE_PATH ? { configuredPath: process.env.PALDOCK_CLAUDE_PATH } : {}),
           });
-      // 持久事件同时送给管理窗口和外部渠道（从外部建的任务的进度、审批处理结果）
+      // 持久事件同时送给管理窗口、外部渠道（从外部建的任务的进度、审批处理结果）和任务图调度器（推进下游）
       const publish = (events: PersistentEvent[]) => {
         service.broadcast(events);
         service.channels.onEvents(events);
+        service.scheduler.onEvents(events);
       };
-      service.mcp = new McpGateway({ store, publish });
+      // 计划用例依赖调度器，调度器依赖带这个网关的监管器：propose_plan 的后端延后取
+      let plans: PlanService | undefined;
+      service.mcp = new McpGateway({ store, publish, plans: () => plans });
       service.supervisor = new RunSupervisor({
         store,
         runtimes,
@@ -122,7 +126,9 @@ export class LocalService {
         log,
         ...(options.limits ? { limits: options.limits } : {}),
       });
-      const tasks = new TaskService({ store, supervisor: service.supervisor, dataRoot, publish });
+      service.scheduler = new TaskGraphScheduler({ store, supervisor: service.supervisor, publish, log });
+      plans = new PlanService({ store, scheduler: service.scheduler, publish });
+      const tasks = new TaskService({ store, supervisor: service.supervisor, scheduler: service.scheduler, dataRoot, publish });
       service.channels = new ChannelService({
         store,
         tasks,
@@ -134,7 +140,7 @@ export class LocalService {
         ...(options.channels?.limits ? { limits: options.channels.limits } : {}),
       });
       const agents = new AgentService({ store, runtimes, publish });
-      service.handlers = createHandlers(store, tasks, service.channels, agents, {
+      service.handlers = createHandlers(store, tasks, plans, service.channels, agents, {
         version: SERVICE_VERSION,
         startedAt: new Date().toISOString(),
         interruptedRuns,

@@ -46,6 +46,10 @@ export const CommandArgs = {
   /** 服务重启后被中断的子任务：恢复（续做同一 thread）、重新开始（新 thread）或放弃。 */
   'run.recover': z.object({ subtaskId: Id, expectedVersion: Version, action: z.enum(['resume', 'restart', 'abandon']) }),
   'run.checkOutput': z.object({ runId: Id }),
+  /** 确认协调助手提出的计划：按节点建子任务并开始派单。 */
+  'plan.confirm': z.object({ planId: Id, expectedVersion: Version }),
+  /** 退回计划，任务留在草稿，协调助手可以再提一版。 */
+  'plan.reject': z.object({ planId: Id, expectedVersion: Version, note: z.string().trim().max(500).optional() }),
   'events.since': z.object({
     afterSeq: z.number().int().nonnegative(),
     limit: z.number().int().positive().max(1000).default(200),
@@ -109,6 +113,8 @@ export interface CommandResults {
   'review.decide': void;
   'run.recover': void;
   'run.checkOutput': string;
+  'plan.confirm': void;
+  'plan.reject': void;
   'events.since': PersistentEvent[];
   'attention.list': AttentionItem[];
   'attention.markRead': void;

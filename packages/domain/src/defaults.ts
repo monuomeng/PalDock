@@ -10,6 +10,8 @@ export const P1_DEFAULTS = {
   cancelWaitForTurnMs: 10_000,
   /** 同时执行的 Run 上限（02「上限与护栏」：全局同时最多 10 个模型调用）。 */
   maxConcurrentRuns: 10,
+  /** 同一任务同时执行的 Run 上限（ADR 0002：每任务最多 4 个并行子任务）。 */
+  maxRunsPerTask: 4,
   /** 多久扫描一次过期审批。 */
   expiryScanMs: 15_000,
   /** 执行器断线后核对 turn 结果的次数与间隔。 */

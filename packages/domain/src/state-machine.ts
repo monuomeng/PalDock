@@ -1,4 +1,4 @@
-import type { ApprovalStatus, RunStatus, SubtaskStatus, TaskStatus } from '@paldock/contracts';
+import type { ApprovalStatus, PlanStatus, RunStatus, SubtaskStatus, TaskStatus } from '@paldock/contracts';
 import { DomainError } from './errors.js';
 
 export interface StateMachine<S extends string> {
@@ -28,7 +28,8 @@ function defineMachine<S extends string>(name: string, table: Readonly<Record<S,
 
 export const taskMachine = defineMachine<TaskStatus>('task', {
   draft: ['queued', 'cancelled'],
-  queued: ['running', 'cancelled'],
+  // queued → blocked：服务重启时排队中的任务转为阻塞（恢复程序）
+  queued: ['running', 'blocked', 'cancelled'],
   running: ['waiting_approval', 'waiting_dependency', 'blocked', 'succeeded', 'failed', 'cancelled'],
   waiting_approval: ['running', 'failed', 'cancelled'],
   waiting_dependency: ['running', 'blocked', 'cancelled'],
@@ -49,8 +50,8 @@ export const subtaskMachine = defineMachine<SubtaskStatus>('subtask', {
   running: ['waiting_approval', 'blocked', 'review', 'failed', 'cancelled'],
   waiting_approval: ['running', 'failed', 'cancelled'],
   waiting_dependency: ['queued', 'blocked', 'cancelled'],
-  // blocked → failed：服务重启后被中断、用户选择放弃
-  blocked: ['queued', 'failed', 'cancelled'],
+  // blocked → failed：服务重启后被中断、用户选择放弃；blocked → waiting_dependency：阻塞它的上游恢复了
+  blocked: ['queued', 'waiting_dependency', 'failed', 'cancelled'],
   review: ['succeeded', 'failed', 'queued', 'cancelled'],
   succeeded: [],
   failed: ['queued'],
@@ -70,6 +71,14 @@ export const runMachine = defineMachine<RunStatus>('run', {
   succeeded: [],
   failed: [],
   cancelled: [],
+});
+
+/** 每版计划只决定一次：确认、退回，或被同一任务的新一版取代。确认后不可修改。 */
+export const planMachine = defineMachine<PlanStatus>('plan', {
+  proposed: ['confirmed', 'rejected', 'superseded'],
+  confirmed: [],
+  rejected: [],
+  superseded: [],
 });
 
 export const approvalMachine = defineMachine<ApprovalStatus>('approval', {

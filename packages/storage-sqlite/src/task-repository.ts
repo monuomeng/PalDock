@@ -20,8 +20,11 @@ import type { Database } from './database.js';
 import type { EventLog } from './event-log.js';
 import { applyTransition, newId, statusChanged, type TransitionSpec } from './writes.js';
 
-/** 任务列表的一行：任务 + 子任务状态、最近活动时间 + 最新 Run 的状态。 */
-const SUMMARY_COLUMNS = `${COLUMNS.task('t.')}, s.status AS subtaskStatus, s.updated_at AS lastActivityAt,
+/**
+ * 任务列表的一行：任务 + 子任务状态、最近活动时间 + 最新 Run 的状态。
+ * 按计划拆分的任务没有单子任务（左联接为空），状态与时间取任务自己的。
+ */
+const SUMMARY_COLUMNS = `${COLUMNS.task('t.')}, coalesce(s.status, t.status) AS subtaskStatus, coalesce(s.updated_at, t.updated_at) AS lastActivityAt,
        (SELECT r.status FROM runs r WHERE r.subtask_id = s.id ORDER BY r.attempt DESC LIMIT 1) AS latestRunStatus`;
 
 const SQL = {
@@ -50,7 +53,9 @@ const SQL = {
     INSERT INTO subtasks (id, task_id, role, goal, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?5)
     RETURNING ${COLUMNS.subtask()}`,
   selectSubtask: `SELECT ${COLUMNS.subtask()} FROM subtasks WHERE id = ?`,
-  selectSubtaskByTask: `SELECT ${COLUMNS.subtask()} FROM subtasks WHERE task_id = ? ORDER BY created_at LIMIT 1`,
+  // 单子任务（P1 / P2）：不属于任何计划的那个
+  selectSubtaskByTask: `SELECT ${COLUMNS.subtask()} FROM subtasks WHERE task_id = ? AND plan_id IS NULL ORDER BY created_at LIMIT 1`,
+  selectSubtasksOfTask: `SELECT ${COLUMNS.subtask()} FROM subtasks WHERE task_id = ? ORDER BY created_at`,
   setWorktree: `
     UPDATE subtasks SET worktree_path = ?, branch = ?, base_commit = ?, version = version + 1
      WHERE id = ? AND worktree_path IS NULL
@@ -59,18 +64,20 @@ const SQL = {
     INSERT INTO sessions (id, kind, subtask_id, role, created_at) VALUES (?, 'agent', ?, ?, ?)
     RETURNING ${COLUMNS.session()}`,
   selectSessionBySubtask: `SELECT ${COLUMNS.session()} FROM sessions WHERE subtask_id = ?`,
-  // P1 一个任务一个子任务；最新 Run 走 UNIQUE (subtask_id, attempt) 索引倒序取一条
+  // 最新 Run 走 UNIQUE (subtask_id, attempt) 索引倒序取一条
   // 两条都按各自的索引倒序取前 N 条（tasks_by_created / subtasks_by_activity）
   listTasks: `
     SELECT ${SUMMARY_COLUMNS}
       FROM tasks t
-      JOIN subtasks s ON s.task_id = t.id
+      LEFT JOIN subtasks s ON s.task_id = t.id AND s.plan_id IS NULL
      ORDER BY t.created_at DESC
      LIMIT ?`,
+  // 外部渠道的 /continue 列表只列单子任务的任务（任务图在渠道里的入口随 P3-10）
   recentTasks: `
     SELECT ${SUMMARY_COLUMNS}
       FROM subtasks s
       JOIN tasks t ON t.id = s.task_id
+     WHERE s.plan_id IS NULL
      ORDER BY s.updated_at DESC
      LIMIT ?`,
 } as const;
@@ -177,6 +184,10 @@ export class TaskRepository implements TaskStorePort {
 
   getSubtaskOfTask(taskId: string): SubtaskRecord | undefined {
     return this.db.get<SubtaskRecord>(SQL.selectSubtaskByTask, taskId);
+  }
+
+  listSubtasks(taskId: string): SubtaskRecord[] {
+    return this.db.all<SubtaskRecord>(SQL.selectSubtasksOfTask, taskId);
   }
 
   getSessionOfSubtask(subtaskId: string): SessionRecord | undefined {

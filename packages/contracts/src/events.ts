@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PlanStatus } from './plans.js';
 import { ChannelAccountStatus, ChannelProvider, ChannelState, InboundRejection } from './channels.js';
 import {
   ApprovalChannel,
@@ -40,6 +41,13 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
     payload: z.object({ taskId: Id, role: z.string().min(1) }),
   }),
   z.object({ type: z.literal('subtask.status_changed'), payload: transition(SubtaskStatus) }),
+  /** 协调助手提出了一版计划；聚合 ID 为 planId。 */
+  z.object({
+    type: z.literal('plan.proposed'),
+    payload: z.object({ taskId: Id, revision: z.number().int().positive(), nodes: z.number().int().positive() }),
+  }),
+  /** 计划被确认、退回或被新一版取代；聚合 ID 为 planId。 */
+  z.object({ type: z.literal('plan.status_changed'), payload: transition(PlanStatus) }),
   z.object({
     type: z.literal('run.created'),
     payload: z.object({ subtaskId: Id, runtime: z.string().min(1), attempt: z.number().int().positive() }),
@@ -70,9 +78,9 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
   z.object({ type: z.literal('approval.escalated'), payload: z.object({ channels: z.array(ChannelProvider) }) }),
   /** 项目设置（远程审批等级）变更；聚合 ID 为 workspaceId。 */
   z.object({ type: z.literal('workspace.settings_changed'), payload: z.object({ remoteApprovalLevel: RemoteApprovalLevel }) }),
-  /** 角色的默认执行器变更；聚合 ID 为角色名。 */
   /** 专业助手经 MCP 桥提交了交接记录；聚合 ID 为 runId。 */
   z.object({ type: z.literal('run.handoff_submitted'), payload: z.object({ subtaskId: Id }) }),
+  /** 角色的默认执行器变更；聚合 ID 为角色名。 */
   z.object({ type: z.literal('agent.profile_changed'), payload: z.object({ executor: Executor }) }),
   /** 项目对某个角色的执行器覆盖变更（null 为取消覆盖）；聚合 ID 为 workspaceId。 */
   z.object({ type: z.literal('workspace.agent_override_changed'), payload: z.object({ role: AgentRole, executor: Executor.nullable() }) }),

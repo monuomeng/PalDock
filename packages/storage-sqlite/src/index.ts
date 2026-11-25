@@ -12,6 +12,7 @@ import { Inbox } from './inbox.js';
 import { MessageStore } from './messages.js';
 import { migrate, type MigrateResult } from './migrations/index.js';
 import { Outbox } from './outbox.js';
+import { PlanRepository } from './plan-repository.js';
 import { interruptActiveWork } from './recovery.js';
 import { RunRepository } from './run-repository.js';
 import { TaskRepository } from './task-repository.js';
@@ -26,6 +27,7 @@ export type { EventLog } from './event-log.js';
 export type { Inbox, InboxItem } from './inbox.js';
 export type { MessageStore } from './messages.js';
 export type { Outbox } from './outbox.js';
+export type { PlanRepository } from './plan-repository.js';
 export { MIGRATIONS, migrate, type MigrateResult, type Migration } from './migrations/index.js';
 export { ACTIVE_RUN_STATUSES, interruptActiveWork } from './recovery.js';
 export type { RunRepository } from './run-repository.js';
@@ -37,6 +39,7 @@ export interface Store extends StorePort {
   tasks: TaskRepository;
   runs: RunRepository;
   agents: AgentRepository;
+  plans: PlanRepository;
   audit: AuditLog;
   inbox: Inbox;
   attention: AttentionQueries;
@@ -60,10 +63,12 @@ export async function openStore(dataRoot: string | ':memory:', now: () => Date =
   const db = Database.open(inMemory ? ':memory:' : join(dataRoot, 'paldock.db'));
   const migration = await migrate(db, inMemory ? { now } : { backupDir: join(dataRoot, 'backups'), now });
   const events = new EventLog(db, clock);
+  const tasks = new TaskRepository(db, events, clock);
   return {
     db,
     events,
-    tasks: new TaskRepository(db, events, clock),
+    tasks,
+    plans: new PlanRepository(db, events, clock, tasks),
     runs: new RunRepository(db, events, clock),
     agents: new AgentRepository(db, events, clock),
     audit: new AuditLog(db, clock),

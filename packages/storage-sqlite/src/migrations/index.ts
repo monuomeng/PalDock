@@ -8,6 +8,7 @@ import { p2Schema } from './003-p2-channels.js';
 import { taskContinuationSchema } from './004-task-continuation.js';
 import { agentProfilesSchema } from './005-agent-profiles.js';
 import { mcpBridgeSchema } from './006-mcp-bridge.js';
+import { taskGraphSchema } from './007-task-graph.js';
 
 export interface Migration {
   version: number;
@@ -23,6 +24,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 4, name: 'task-continuation', sql: taskContinuationSchema },
   { version: 5, name: 'agent-profiles', sql: agentProfilesSchema },
   { version: 6, name: 'mcp-bridge', sql: mcpBridgeSchema },
+  { version: 7, name: 'task-graph', sql: taskGraphSchema },
 ];
 
 export interface MigrateResult {

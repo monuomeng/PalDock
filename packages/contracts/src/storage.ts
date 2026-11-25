@@ -12,6 +12,7 @@ import type {
   PairingRecord,
 } from './channels.js';
 import type { PersistentEvent, RunNoticeCode } from './events.js';
+import type { GraphNode, PlanNodeInput, PlanNodeRecord, PlanRecord } from './plans.js';
 import type {
   AgentOverrideRecord,
   AgentProfileRecord,
@@ -132,6 +133,31 @@ export interface TaskStorePort {
   setWorktree(subtaskId: string, worktreePath: string, branch: string, baseCommit: string): SubtaskRecord | undefined;
   transitionTask(id: string, expectedVersion: number, to: TaskStatus, reason?: string): Change<TaskRecord>;
   transitionSubtask(id: string, expectedVersion: number, to: SubtaskStatus, reason?: string): Change<SubtaskRecord>;
+  /** 任务的全部子任务（单子任务的任务只有一个），按创建顺序。 */
+  listSubtasks(taskId: string): SubtaskRecord[];
+}
+
+export interface NewPlan {
+  /** 给已有草稿任务提新一版；缺省时在 workspaceId 下新建草稿任务。 */
+  taskId?: string;
+  workspaceId: string;
+  title: string;
+  goal: string;
+  nodes: PlanNodeInput[];
+  proposedByRunId: string;
+}
+
+export interface PlanStorePort {
+  /** 写入新一版计划（同任务里还在等确认的旧版本置为 superseded）。 */
+  propose(input: NewPlan): Change<PlanRecord>;
+  getPlan(id: string): PlanRecord | undefined;
+  latestPlan(taskId: string): PlanRecord | undefined;
+  nodes(planId: string): PlanNodeRecord[];
+  /** 确认：计划 confirmed、按节点建子任务与会话和依赖、任务 draft → queued，同一事务；返回建好的子任务。 */
+  confirm(id: string, expectedVersion: number): Change<SubtaskRecord[]>;
+  reject(id: string, expectedVersion: number, note: string | null): Change<PlanRecord>;
+  /** 调度器读的任务图（按计划节点顺序）。 */
+  graph(taskId: string): GraphNode[];
 }
 
 export interface RunStorePort {
@@ -265,6 +291,7 @@ export interface StorePort {
   tasks: TaskStorePort;
   runs: RunStorePort;
   agents: AgentStorePort;
+  plans: PlanStorePort;
   audit: AuditPort;
   messages: { append(sessionId: string, role: MessageRole, body: string, runId?: string | null): Change<MessageRecord> };
   attention: { list(): AttentionItem[]; markRead(kind: AttentionKind, itemId: string): void };

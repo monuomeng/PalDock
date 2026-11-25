@@ -42,7 +42,7 @@ export async function newTaskView(fromTaskId?: string): Promise<HTMLElement> {
       'p',
       { id: 'project-hint', class: 'hint' },
       source
-        ? `新任务的 worktree 从 ${source.subtask.branch ?? '来源任务的分支'} 出发，包含上个任务提交的改动；执行器会看到上个任务的目标和最后说明。`
+        ? `新任务的 worktree 从 ${source.subtask?.branch ?? '来源任务的分支'} 出发，包含上个任务提交的改动；执行器会看到上个任务的目标和最后说明。`
         : 'PalDock 会在数据目录下为任务建立独立的 worktree 和 paldock/ 分支，不改动你的当前分支。',
     ),
     h('label', { for: 'goal' }, source ? '接下来要做的' : '目标'),

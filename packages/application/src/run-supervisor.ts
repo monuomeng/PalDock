@@ -29,7 +29,7 @@ import { addWorktree, branchCommit, headCommit, stageAndDiffStat } from './git.j
 import { redact } from './redact.js';
 import { riskOf } from './risk.js';
 import type { McpGateway } from './mcp-gateway.js';
-import { moveSubtask, moveTask } from './transitions.js';
+import { moveSubtask, settleTask } from './transitions.js';
 
 export type Limits = typeof P1_DEFAULTS;
 
@@ -86,7 +86,7 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 export class RunSupervisor {
   /** 按 subtaskId 索引：同一子任务同时最多一次 Run。 */
   private readonly live = new Map<string, LiveRun>();
-  private readonly queue: { subtaskId: string; plan: RunPlan }[] = [];
+  private readonly queue: { subtaskId: string; taskId: string; plan: RunPlan }[] = [];
   private readonly limits: Limits;
   private expiryTimer: NodeJS.Timeout | undefined;
   private stopping = false;
@@ -118,10 +118,23 @@ export class RunSupervisor {
     this.live.clear();
   }
 
-  /** 调用方已把子任务置为 queued；并发已满时排队。 */
+  /**
+   * 调用方已把子任务置为 queued；全局或所在任务的并发已满时排队。
+   * 同一子任务（也就是同一助手会话）同时只有一次 Run：已在执行或排队的再次入队会被忽略。
+   */
   enqueue(subtaskId: string, plan: RunPlan): void {
-    if (this.live.size >= this.limits.maxConcurrentRuns) this.queue.push({ subtaskId, plan });
-    else this.background(this.launch(subtaskId, plan));
+    const subtask = this.deps.store.tasks.getSubtask(subtaskId);
+    if (!subtask) return this.deps.log(`subtask ${subtaskId} 不存在`);
+    if (this.live.has(subtaskId) || this.queue.some((q) => q.subtaskId === subtaskId)) return;
+    if (this.hasRoom(subtask.taskId)) this.background(this.launch(subtaskId, plan));
+    else this.queue.push({ subtaskId, taskId: subtask.taskId, plan });
+  }
+
+  private hasRoom(taskId: string): boolean {
+    if (this.live.size >= this.limits.maxConcurrentRuns) return false;
+    let ofTask = 0;
+    for (const live of this.live.values()) if (live.subtask.taskId === taskId) ofTask++;
+    return ofTask < this.limits.maxRunsPerTask;
   }
 
   /** 取消正在执行或排队的 Run；不在这里的返回 false，由调用方直接改状态。 */
@@ -227,7 +240,7 @@ export class RunSupervisor {
     let executor!: ReturnType<RunSupervisor['executorOf']>;
     const live = store.transaction(() => {
       const moved = moveSubtask(store, subtaskId, 'running');
-      const taskEvents = moveTask(store, moved.record.taskId, 'running');
+      const taskEvents = settleTask(store, moved.record.taskId);
       const task = store.tasks.getTask(moved.record.taskId)!;
       executor = this.executorOf(moved.record, task);
       const run = store.runs.createRun({
@@ -284,12 +297,15 @@ export class RunSupervisor {
     return live;
   }
 
-  /** 写入型子任务的 worktree 只建一次（数据根下，分支名小写），之后各次 Run 共用。 */
+  /**
+   * 写入型子任务的 worktree 只建一次（数据根下，分支名小写），之后各次 Run 共用。
+   * 任务编号取 12 位十六进制（48 位）；计划节点再加上节点键，同一任务的各节点互不干扰。
+   */
   private async ensureWorktree(live: LiveRun): Promise<string> {
     if (live.subtask.worktreePath) return live.subtask.worktreePath;
     const workspace = this.deps.store.tasks.getWorkspace(live.task.workspaceId)!;
-    // 12 位十六进制（48 位）作为目录与分支名
-    const slug = taskKey(live.task.id).slice(0, 12);
+    const key = taskKey(live.task.id).slice(0, 12);
+    const slug = live.subtask.nodeKey ? `${key}-${live.subtask.nodeKey}` : key;
     const path = join(this.deps.dataRoot, 'worktrees', slug);
     const branch = `${this.limits.branchPrefix}${slug}`;
     const base = await this.worktreeBase(live.task, workspace.rootPath);
@@ -417,9 +433,15 @@ export class RunSupervisor {
     queueMicrotask(() => this.dequeue());
   }
 
+  /** 按入队顺序启动还有名额的；所在任务已满的留在队里，不挡后面其他任务的。 */
   private dequeue(): void {
-    while (!this.stopping && this.queue.length > 0 && this.live.size < this.limits.maxConcurrentRuns) {
-      const next = this.queue.shift()!;
+    for (let i = 0; !this.stopping && i < this.queue.length && this.live.size < this.limits.maxConcurrentRuns; ) {
+      const next = this.queue[i]!;
+      if (!this.hasRoom(next.taskId)) {
+        i++;
+        continue;
+      }
+      this.queue.splice(i, 1);
       this.background(this.launch(next.subtaskId, next.plan));
     }
   }
@@ -435,7 +457,7 @@ export class RunSupervisor {
         ...this.closeApprovals(live, true),
         ...this.runTo(live, runStatus, reason),
         ...moveSubtask(store, live.subtask.id, subtaskStatus, reason).events,
-        ...moveTask(store, live.subtask.taskId, subtaskStatus === 'cancelled' ? 'cancelled' : 'blocked', reason),
+        ...settleTask(store, live.subtask.taskId, reason),
       ]),
     );
     this.deps.log(`run ${live.run.id} finished: ${runStatus}（${reason}）`);
@@ -470,7 +492,7 @@ export class RunSupervisor {
       store.transaction(() => [
         ...store.runs.saveResult(result).events,
         ...moveSubtask(store, live.subtask.id, cancelled ? 'cancelled' : 'review', cancelled ? CANCELLED : undefined).events,
-        ...(cancelled ? moveTask(store, live.subtask.taskId, 'cancelled', CANCELLED) : []),
+        ...settleTask(store, live.subtask.taskId, cancelled ? CANCELLED : undefined),
       ]),
     );
     this.release(live);

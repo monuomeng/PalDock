@@ -21,6 +21,7 @@ import {
   notice,
   projectsCard,
   recentTasksCard,
+  statusOf,
   SUBTASK_LABEL,
   taskCard,
   taskHistoryCard,
@@ -101,7 +102,7 @@ export class RemoteCommands implements InboundHandler {
   private async instruct(ctx: InboundContext, { task, subtask, actions }: TaskDetail, instruction: string): Promise<InboundOutcome> {
     const ref = `#${taskRef(task.id)}`;
     try {
-      if (actions.review) {
+      if (actions.review && subtask) {
         await this.deps.tasks.decideReview(subtask.id, subtask.version, 'rework', instruction);
         return this.say(ctx, notice(`${ref} 继续执行`, clip(instruction, 200), '完成后会在这里通知你；想另起新任务请发 /new 内容。'));
       }
@@ -149,7 +150,7 @@ export class RemoteCommands implements InboundHandler {
       case 'status':
         return this.withTask(ctx, arg, (task) => {
           const detail = this.deps.tasks.getTask(task.id);
-          return this.say(ctx, taskCard(detail.task, detail.workspace, detail.subtask.status, detail.subtask.statusReason));
+          return this.say(ctx, taskCard(detail.task, detail.workspace, statusOf(detail), detail.subtask?.statusReason ?? null));
         });
       case 'new':
         if (!arg) return this.say(ctx, notice('请带上新任务的目标', '例如：/new 给登录页加一个「记住我」'));
@@ -222,9 +223,10 @@ export class RemoteCommands implements InboundHandler {
 
   /** /done：只有待命中的任务能结束；先确认，点「结束任务」才提交。 */
   private confirmDone(ctx: InboundContext, task: TaskRecord): InboundOutcome {
-    const { subtask, actions } = this.deps.tasks.getTask(task.id);
-    if (!actions.review) {
-      return this.say(ctx, notice(`#${taskRef(task.id)} 现在${SUBTASK_LABEL[subtask.status]}`, '只有待命中的任务能结束。'));
+    const detail = this.deps.tasks.getTask(task.id);
+    const { subtask, actions } = detail;
+    if (!actions.review || !subtask) {
+      return this.say(ctx, notice(`#${taskRef(task.id)} 现在${SUBTASK_LABEL[statusOf(detail)]}`, '只有待命中的任务能结束。'));
     }
     // 以这张卡片为目标（不影响进度卡片上的「结束任务」）；子任务 ID 放在 payload，版本号核对先到者
     const proposal = newProposalId();
@@ -312,9 +314,9 @@ export class RemoteCommands implements InboundHandler {
         await tasks.decideReview(action.payload ?? action.targetId, action.targetVersion!, 'accept');
         return;
       case 'continue_task': {
-        const { subtask, actions } = this.select(ctx, action.targetId);
+        const detail = this.select(ctx, action.targetId);
         const ref = `#${taskRef(action.targetId)}`;
-        if (!actions.review) this.say(ctx, notice(`已切换到 ${ref}`, `它现在${SUBTASK_LABEL[subtask.status]}。`));
+        if (!detail.actions.review) this.say(ctx, notice(`已切换到 ${ref}`, `它现在${SUBTASK_LABEL[statusOf(detail)]}。`));
         else this.say(ctx, notice(`请直接回复 ${ref} 的下一步`, '你的下一句话会作为指令，在同一个工作目录里接着做。'));
         return;
       }

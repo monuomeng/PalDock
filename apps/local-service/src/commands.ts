@@ -1,4 +1,4 @@
-import type { AgentService, ChannelService, TaskService } from '@paldock/application';
+import type { AgentService, ChannelService, PlanService, TaskService } from '@paldock/application';
 import type { CommandArgs, CommandName, CommandResultOf } from '@paldock/contracts';
 import type { Store } from '@paldock/storage-sqlite';
 import type { z } from 'zod';
@@ -11,7 +11,7 @@ export type Handlers = {
 export type ServiceInfo = CommandResultOf<'service.status'>;
 
 /** 命令 → 用例的映射。每个处理函数只做参数到用例调用的转换，不含业务规则。 */
-export function createHandlers(store: Store, tasks: TaskService, channels: ChannelService, agents: AgentService, info: ServiceInfo): Handlers {
+export function createHandlers(store: Store, tasks: TaskService, plans: PlanService, channels: ChannelService, agents: AgentService, info: ServiceInfo): Handlers {
   return {
     'service.status': () => info,
     'task.create': ({ rootPath, goal, check, checkConfirmed, idempotencyKey, continuedFromTaskId }) =>
@@ -23,6 +23,8 @@ export function createHandlers(store: Store, tasks: TaskService, channels: Chann
     'review.decide': ({ subtaskId, expectedVersion, decision, note }) => tasks.decideReview(subtaskId, expectedVersion, decision, note),
     'run.recover': ({ subtaskId, expectedVersion, action }) => tasks.recover(subtaskId, expectedVersion, action),
     'run.checkOutput': ({ runId }) => tasks.checkOutput(runId),
+    'plan.confirm': ({ planId, expectedVersion }) => plans.confirm(planId, expectedVersion),
+    'plan.reject': ({ planId, expectedVersion, note }) => plans.reject(planId, expectedVersion, note),
     'events.since': ({ afterSeq, limit }) => store.events.since(afterSeq, limit),
     'attention.list': () => store.attention.list(),
     'attention.markRead': ({ itemKind, itemId }) => store.attention.markRead(itemKind, itemId),
