@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AgentRole } from '@paldock/contracts';
 import type {
+  CheckCommand,
   McpServerSpec,
   Executor,
   WorkspaceAccess,
@@ -557,18 +558,28 @@ export class RunSupervisor {
     // 用户在建任务时没有确认的命令不会运行
     if (!check.confirmed) return { ...base, checkStatus: 'not_confirmed' };
 
-    const outcome = await runCheck(checkCommand, {
-      cwd: worktree,
-      timeoutMs: this.limits.checkTimeoutMs,
-      maxOutputBytes: this.limits.checkOutputMaxBytes,
-      signal: live.check.signal,
-    });
-    const ref = `checks/${live.run.id}.log`;
+    // 计划节点的 worktree 第一次跑检查前先跑项目的准备命令（例如安装依赖），之后各次 Run 共用
+    const prepare = node && !live.subtask.preparedAt ? this.deps.store.tasks.getWorkspace(live.task.workspaceId)?.prepareCommand : null;
+    if (prepare) {
+      const prepared = await this.runLogged(live, prepare, worktree, `checks/${live.run.id}.prepare.log`);
+      if (prepared.status !== 'passed') {
+        return { ...base, prepareStatus: prepared.status, checkStatus: 'error', checkExitCode: prepared.exitCode, checkDurationMs: prepared.durationMs, checkOutputRef: prepared.ref };
+      }
+      this.deps.store.tasks.markPrepared(live.subtask.id);
+      base.prepareStatus = 'passed';
+    }
+    const outcome = await this.runLogged(live, checkCommand, worktree, `checks/${live.run.id}.log`);
+    return { ...base, checkStatus: outcome.status, checkExitCode: outcome.exitCode, checkDurationMs: outcome.durationMs, checkOutputRef: outcome.ref };
+  }
+
+  /** 跑一条命令（检查或准备），脱敏后的输出写到 artifacts/ 下。 */
+  private async runLogged(live: LiveRun, command: CheckCommand, cwd: string, ref: string) {
+    const outcome = await runCheck(command, { cwd, timeoutMs: this.limits.checkTimeoutMs, maxOutputBytes: this.limits.checkOutputMaxBytes, signal: live.check.signal });
     mkdirSync(join(this.deps.dataRoot, 'artifacts', 'checks'), { recursive: true });
     const note = outcome.truncated ? `\n\n[输出超过 ${this.limits.checkOutputMaxBytes} 字节，已截断]` : '';
     writeFileSync(join(this.deps.dataRoot, 'artifacts', ref), redact(outcome.output) + note, 'utf8');
-    if (outcome.truncated) this.publish([this.deps.store.runs.addNotice(live.run.id, 'output_truncated', '检查命令输出已截断')]);
-    return { ...base, checkStatus: outcome.status, checkExitCode: outcome.exitCode, checkDurationMs: outcome.durationMs, checkOutputRef: ref };
+    if (outcome.truncated) this.publish([this.deps.store.runs.addNotice(live.run.id, 'output_truncated', '命令输出已截断')]);
+    return { ...outcome, ref };
   }
 
   /**

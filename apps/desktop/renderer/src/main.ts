@@ -123,7 +123,7 @@ const LIST_EVENTS = new Set<PersistentEvent['type']>([
 
 /** 设置页关心的事件：渠道设置、配对、账号、群白名单、项目远程审批等级。 */
 const isSettingsEvent = (event: PersistentEvent) =>
-  (event.type.startsWith('channel.') && event.type !== 'channel.inbound_rejected') || event.type === 'workspace.settings_changed';
+  (event.type.startsWith('channel.') && event.type !== 'channel.inbound_rejected') || event.type === 'workspace.settings_changed' || event.type === 'workspace.prepare_command_changed';
 
 /** 只在事件涉及当前页面时重绘；流式输出的检查点只清空临时缓冲（文字已在屏幕上）。 */
 function isRelevant(event: PersistentEvent): boolean {

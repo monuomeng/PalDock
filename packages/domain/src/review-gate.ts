@@ -46,16 +46,19 @@ export type WorkGateOutcome = { outcome: 'human'; reason: string } | { outcome: 
 
 /**
  * 工作 Run 交付后的第一道关：越界或检查没通过就交给人；否则可写角色交给审阅助手，只读角色（没有改动可审）直接通过。
- * 未配置检查命令不算失败。
+ * 未配置检查命令不算失败；准备命令（安装依赖等）失败和检查失败一样交给人。
  */
-export function gateAfterWork(input: { outOfScope: readonly string[]; checkStatus: CheckStatus; writable: boolean }): WorkGateOutcome {
+export function gateAfterWork(input: { outOfScope: readonly string[]; checkStatus: CheckStatus; prepareStatus?: CheckStatus | null; writable: boolean }): WorkGateOutcome {
   const problems: string[] = [];
   if (input.outOfScope.length > 0) {
     const shown = input.outOfScope.slice(0, 5).join('、');
     problems.push(`越出交付范围：${shown}${input.outOfScope.length > 5 ? ` 等 ${input.outOfScope.length} 个文件` : ''}`);
   }
+  // 准备命令失败时检查命令没有跑，只报准备命令
+  const prepare = input.prepareStatus ? CHECK_TEXT[input.prepareStatus] : undefined;
   const check = CHECK_TEXT[input.checkStatus];
-  if (check) problems.push(`检查命令${check}`);
+  if (prepare) problems.push('准备命令失败');
+  else if (check) problems.push(`检查命令${check}`);
   if (problems.length > 0) return { outcome: 'human', reason: problems.join('；') };
   return input.writable ? { outcome: 'review' } : { outcome: 'passed' };
 }

@@ -71,6 +71,7 @@ export async function settingsView(rerender: () => void): Promise<HTMLElement> {
     accountSection(accounts, act),
     groupSection(groups, act),
     workspaceSection(workspaces, act),
+    prepareSection(workspaces, act),
   );
 }
 
@@ -333,6 +334,46 @@ function groupSection(groups: ConversationRecord[], act: Act): HTMLElement {
               ),
             ),
           ),
+        ),
+  );
+}
+
+/**
+ * worktree 准备命令：新建的 worktree（计划节点、合并候选）跑检查命令前先执行一次，例如安装依赖。
+ * 和检查命令一样是「可执行文件 + 每行一个参数」，不经 shell，以你的账户权限运行。
+ */
+function prepareSection(workspaces: WorkspaceRecord[], act: Act): HTMLElement {
+  return h(
+    'div',
+    {},
+    h('h3', {}, 'worktree 准备命令'),
+    h(
+      'p',
+      { class: 'hint' },
+      '新建的 worktree 没有安装依赖。这里的命令会在跑检查命令前先执行一次（例如 pnpm，参数 install、--frozen-lockfile），失败时按检查失败处理。命令以你的账户权限运行，可以联网。留空表示不需要。',
+    ),
+    workspaces.length === 0
+      ? h('p', { class: 'empty' }, '还没有项目。')
+      : h(
+          'div',
+          {},
+          ...workspaces.map((w) => {
+            const exe = h('input', { type: 'text', value: w.prepareCommand?.executable ?? '', placeholder: 'pnpm', 'aria-label': `${w.name} 的准备命令` }) as HTMLInputElement;
+            const args = h('textarea', { rows: 2, placeholder: '每行一个参数', 'aria-label': `${w.name} 的准备命令参数` }, (w.prepareCommand?.args ?? []).join('\n')) as HTMLTextAreaElement;
+            const save = () => {
+              const executable = exe.value.trim();
+              const command = executable ? { executable, args: args.value.split(/\r?\n/).filter((line) => line !== '') } : null;
+              return act(() => call('workspace.setPrepareCommand', { workspaceId: w.id, expectedVersion: w.version, command }))();
+            };
+            return h(
+              'fieldset',
+              {},
+              h('legend', { title: w.rootPath }, w.name),
+              exe,
+              args,
+              h('div', { class: 'actions' }, h('button', { type: 'button', onclick: () => void save() }, '保存')),
+            );
+          }),
         ),
   );
 }

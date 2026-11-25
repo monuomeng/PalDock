@@ -32,6 +32,25 @@ describe('任务集成分支与合并记录', () => {
     expect(store.tasks.getTask(task.id)?.integrationBranch).toBe('paldock/abc');
   });
 
+  it('准备命令按版本设置、可取消，并记事件；节点只记一次已准备', () => {
+    const { subtask } = seed();
+    const ws = store.tasks.listWorkspaces()[0]!;
+    expect(ws.prepareCommand).toBeNull();
+    const command = { executable: 'pnpm', args: ['install', '--frozen-lockfile'] };
+    const { record, events } = store.tasks.setPrepareCommand(ws.id, ws.version, command);
+    expect(record).toMatchObject({ prepareCommand: command, version: ws.version + 1 });
+    expect(events[0]).toMatchObject({ type: 'workspace.prepare_command_changed', payload: { configured: true } });
+    expect(store.tasks.getWorkspace(ws.id)?.prepareCommand).toEqual(command);
+    expect(() => store.tasks.setPrepareCommand(ws.id, ws.version, null)).toThrow(/已被修改/);
+    expect(store.tasks.setPrepareCommand(ws.id, record.version, null).record.prepareCommand).toBeNull();
+
+    store.tasks.markPrepared(subtask.id);
+    const first = store.tasks.getSubtask(subtask.id)!.preparedAt;
+    expect(first).not.toBeNull();
+    store.tasks.markPrepared(subtask.id);
+    expect(store.tasks.getSubtask(subtask.id)!.preparedAt).toBe(first);
+  });
+
   it('节点换基线带版本', () => {
     const { subtask } = seed();
     const rebased = store.tasks.rebaseSubtask(subtask.id, subtask.version, 'sha9');

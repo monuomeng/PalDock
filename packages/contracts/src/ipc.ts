@@ -63,6 +63,8 @@ export const CommandArgs = {
   'workspace.list': z.object({}),
   /** 远程审批等级只能在桌面修改：这条命令只在管理窗口里有入口，外部渠道没有对应命令。 */
   'workspace.setRemoteApprovalLevel': z.object({ workspaceId: Id, expectedVersion: Version, level: RemoteApprovalLevel }),
+  /** worktree 准备命令（例如安装依赖），null 为取消；和远程审批等级一样只在桌面有入口。 */
+  'workspace.setPrepareCommand': z.object({ workspaceId: Id, expectedVersion: Version, command: CheckCommand.nullable() }),
   'channel.overview': z.object({}),
   'channel.configure': z
     .object({
@@ -125,6 +127,7 @@ export interface CommandResults {
   'maintenance.backup': { path: string };
   'workspace.list': WorkspaceRecord[];
   'workspace.setRemoteApprovalLevel': void;
+  'workspace.setPrepareCommand': void;
   'channel.overview': ChannelOverview[];
   'channel.configure': ChannelOverview[];
   'channel.pairings': PairingRecord[];

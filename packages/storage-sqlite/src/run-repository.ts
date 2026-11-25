@@ -63,8 +63,8 @@ const SQL = {
     RETURNING ${COLUMNS.approval()}`,
   insertResult: `
     INSERT INTO run_results (run_id, final_message, diff_stat, check_status, check_exit_code, check_duration_ms, check_output_ref,
-                             commit_sha, out_of_scope, collected_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             commit_sha, out_of_scope, prepare_status, collected_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING ${COLUMNS.result()}`,
   selectResult: `SELECT ${COLUMNS.result()} FROM run_results WHERE run_id = ?`,
   insertReview: `
@@ -246,6 +246,7 @@ export class RunRepository implements RunStorePort {
       result.checkOutputRef,
       result.commitSha ?? null,
       result.outOfScope ? JSON.stringify(result.outOfScope) : null,
+      result.prepareStatus ?? null,
       this.clock.iso(),
     ];
     const change = insertWithEvent<ResultRow>(

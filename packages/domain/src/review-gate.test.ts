@@ -42,6 +42,11 @@ describe('gateAfterWork', () => {
     });
   });
 
+  it('准备命令失败时只报准备命令（检查没有跑）', () => {
+    expect(gateAfterWork({ outOfScope: [], checkStatus: 'error', prepareStatus: 'failed', writable: true })).toEqual({ outcome: 'human', reason: '准备命令失败' });
+    expect(gateAfterWork({ outOfScope: [], checkStatus: 'passed', prepareStatus: 'passed', writable: true })).toEqual({ outcome: 'review' });
+  });
+
   it('通过后：可写角色交给审阅，只读角色直接通过；没配置检查命令不算失败', () => {
     expect(gateAfterWork({ outOfScope: [], checkStatus: 'not_configured', writable: true })).toEqual({ outcome: 'review' });
     expect(gateAfterWork({ outOfScope: [], checkStatus: 'passed', writable: false })).toEqual({ outcome: 'passed' });

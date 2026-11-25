@@ -189,6 +189,11 @@ export class TaskService {
     this.publish(this.store.tasks.setRemoteApprovalLevel(workspaceId, expectedVersion, level).events);
   }
 
+  /** worktree 准备命令（只能在桌面设置）；null 为取消。 */
+  setPrepareCommand(workspaceId: string, expectedVersion: number, command: CheckCommand | null): void {
+    this.publish(this.store.tasks.setPrepareCommand(workspaceId, expectedVersion, command).events);
+  }
+
   listTasks(limit: number): TaskSummary[] {
     return this.store.tasks.listTasks(limit);
   }

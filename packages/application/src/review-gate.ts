@@ -75,7 +75,7 @@ export class ReviewGate {
     if (!subtask || !result) return;
     const role = AgentRole.safeParse(subtask.role);
     const writable = role.success && store.agents.getProfile(role.data)?.workspaceAccess === 'worktree_write';
-    const decision = gateAfterWork({ outOfScope: result.outOfScope ?? [], checkStatus: result.checkStatus, writable });
+    const decision = gateAfterWork({ outOfScope: result.outOfScope ?? [], checkStatus: result.checkStatus, prepareStatus: result.prepareStatus, writable });
     switch (decision.outcome) {
       case 'human':
         return this.deps.publish(store.tasks.setGateStage(subtask.id, subtask.version, 'human', { stage: 'check', outcome: 'human', runId, reason: decision.reason }).events);

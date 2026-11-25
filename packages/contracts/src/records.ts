@@ -38,6 +38,8 @@ export interface WorkspaceRecord {
   name: string;
   rootPath: string;
   remoteApprovalLevel: RemoteApprovalLevel;
+  /** worktree 准备命令（例如安装依赖）：新建的 worktree 在跑检查命令前先执行一次；没有设置为 null。 */
+  prepareCommand: CheckCommand | null;
   version: number;
 }
 
@@ -79,6 +81,8 @@ export interface SubtaskRecord {
   nodeKey: string | null;
   /** 计划节点在 review 内的闸门阶段（见 GateStage）。 */
   gateStage: GateStage | null;
+  /** 节点 worktree 跑过准备命令的时间。 */
+  preparedAt: string | null;
   version: number;
   updatedAt: string;
 }
@@ -142,6 +146,8 @@ export interface RunResultRecord {
   commitSha: string | null;
   /** 计划节点：越出交付范围的文件（相对 worktree）；null 表示没核对。 */
   outOfScope: string[] | null;
+  /** 这次检查前跑了准备命令时的结果；没跑为 null。 */
+  prepareStatus: CheckStatus | null;
   collectedAt: string;
 }
 

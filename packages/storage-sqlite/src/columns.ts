@@ -1,4 +1,4 @@
-import type { CheckCommand, RunResultRecord, TaskRecord } from '@paldock/contracts';
+import type { CheckCommand, RunResultRecord, TaskRecord, WorkspaceRecord } from '@paldock/contracts';
 
 /**
  * 每张表的 RETURNING / SELECT 列只定义一次，插入、更新和查询返回同一形状（contracts 的记录类型）。
@@ -15,7 +15,7 @@ const cols = (list: string) => (alias = '') =>
     .join(', ');
 
 export const COLUMNS = {
-  workspace: cols(`id, name, root_path AS rootPath, remote_approval_level AS remoteApprovalLevel, version`),
+  workspace: cols(`id, name, root_path AS rootPath, remote_approval_level AS remoteApprovalLevel, prepare_command AS prepareCommand, version`),
   task: cols(
     `id, workspace_id AS workspaceId, title, goal, status, check_command AS checkCommand,
      check_confirmed_at AS checkConfirmedAt, origin_conversation_id AS originConversationId,
@@ -26,7 +26,7 @@ export const COLUMNS = {
   subtask: cols(
     `id, task_id AS taskId, role, goal, status, status_reason AS statusReason, rework_count AS reworkCount,
      worktree_path AS worktreePath, branch, base_commit AS baseCommit, plan_id AS planId, node_key AS nodeKey,
-     gate_stage AS gateStage, version, updated_at AS updatedAt`,
+     gate_stage AS gateStage, prepared_at AS preparedAt, version, updated_at AS updatedAt`,
   ),
   session: cols(`id, kind, subtask_id AS subtaskId, role`),
   run: cols(
@@ -41,7 +41,7 @@ export const COLUMNS = {
   result: cols(
     `run_id AS runId, final_message AS finalMessage, diff_stat AS diffStat, check_status AS checkStatus,
      check_exit_code AS checkExitCode, check_duration_ms AS checkDurationMs, check_output_ref AS checkOutputRef,
-     commit_sha AS commitSha, out_of_scope AS outOfScope, collected_at AS collectedAt`,
+     commit_sha AS commitSha, out_of_scope AS outOfScope, prepare_status AS prepareStatus, collected_at AS collectedAt`,
   ),
   review: cols(`id, run_id AS runId, decision, note, reviewer_run_id AS reviewerRunId, commit_sha AS commitSha, decided_at AS decidedAt`),
   message: cols(`id, session_id AS sessionId, run_id AS runId, role, body, created_at AS createdAt`),
@@ -82,6 +82,13 @@ export const COLUMNS = {
   ),
   outbox: cols(`id, channel AS provider, target AS conversationId, subject, payload, attempts`),
 } as const;
+
+/** prepare_command 以 JSON 文本存储，读出时还原。 */
+export type WorkspaceRow = Omit<WorkspaceRecord, 'prepareCommand'> & { prepareCommand: string | null };
+export const toWorkspace = (row: WorkspaceRow): WorkspaceRecord => ({
+  ...row,
+  prepareCommand: row.prepareCommand === null ? null : (JSON.parse(row.prepareCommand) as CheckCommand),
+});
 
 /** out_of_scope 以 JSON 文本存储，读出时还原。 */
 export type ResultRow = Omit<RunResultRecord, 'outOfScope'> & { outOfScope: string | null };

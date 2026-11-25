@@ -38,6 +38,7 @@ export function createHandlers(
     'maintenance.backup': () => store.backup(),
     'workspace.list': () => store.tasks.listWorkspaces(),
     'workspace.setRemoteApprovalLevel': ({ workspaceId, expectedVersion, level }) => tasks.setRemoteApprovalLevel(workspaceId, expectedVersion, level),
+    'workspace.setPrepareCommand': ({ workspaceId, expectedVersion, command }) => tasks.setPrepareCommand(workspaceId, expectedVersion, command),
     'channel.overview': () => channels.overview(),
     'channel.configure': ({ provider, expectedVersion, enabled, proxyUrl, appId, secret, forgetCredential }) =>
       channels.configure({

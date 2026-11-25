@@ -102,7 +102,8 @@ export interface NewApproval {
 }
 
 /** 提交 SHA 与越界文件只有计划节点才有。 */
-export type NewRunResult = Omit<RunResultRecord, 'collectedAt' | 'commitSha' | 'outOfScope'> & Partial<Pick<RunResultRecord, 'commitSha' | 'outOfScope'>>;
+export type NewRunResult = Omit<RunResultRecord, 'collectedAt' | 'commitSha' | 'outOfScope' | 'prepareStatus'> &
+  Partial<Pick<RunResultRecord, 'commitSha' | 'outOfScope' | 'prepareStatus'>>;
 
 export interface InterruptedRun {
   id: string;
@@ -123,6 +124,10 @@ export interface TaskStorePort {
   getWorkspace(id: string): WorkspaceRecord | undefined;
   listWorkspaces(): WorkspaceRecord[];
   setRemoteApprovalLevel(id: string, expectedVersion: number, level: RemoteApprovalLevel): Change<WorkspaceRecord>;
+  /** 准备命令只能在桌面设置；null 为取消。 */
+  setPrepareCommand(id: string, expectedVersion: number, command: CheckCommand | null): Change<WorkspaceRecord>;
+  /** 节点 worktree 已跑过准备命令（之后各次 Run 共用）。 */
+  markPrepared(subtaskId: string): void;
   createTask(input: NewTask): Change<CreatedTask>;
   findTaskByIdempotencyKey(key: string): TaskRecord | undefined;
   getTask(id: string): TaskRecord | undefined;

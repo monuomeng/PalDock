@@ -95,6 +95,8 @@ async function setup() {
   // 本机全局 core.autocrlf=true 会把检出的文件换成 CRLF；测试按字节比对内容，这个仓库里关掉
   git(repo, 'config', 'core.autocrlf', 'false');
   writeFileSync(join(repo, 'README.md'), '# demo\n');
+  // 准备命令生成的文件（依赖目录之类）应被忽略，不进节点的交付
+  writeFileSync(join(repo, '.gitignore'), '.prepared\n');
   git(repo, 'add', '-A');
   git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'init');
   initial = git(repo, 'rev-parse', 'main');
@@ -281,5 +283,42 @@ describe('P3 任务集成分支', () => {
     expect(integrationHead(taskId)).toBe(afterA);
     // b 自己的检查（单独在它的 worktree 里）是通过的
     expect(store.runs.getResult(store.runs.latestRun(node(taskId, 'b').id)!.id)!.checkStatus).toBe('passed');
+  });
+});
+
+describe('worktree 准备命令', () => {
+  const marker = (counter: string) => ({
+    executable: process.execPath,
+    args: ['-e', `const f=require('fs');f.writeFileSync('.prepared','1');f.appendFileSync(${JSON.stringify(counter)},'x')`],
+  });
+  const needsMarker = { executable: process.execPath, args: ['-e', "process.exit(require('fs').existsSync('.prepared')?0:1)"] };
+
+  it('节点 worktree 和合并候选在跑检查前各准备一次', async () => {
+    await setup();
+    const counter = join(root, 'prepare-count');
+    const ws = store.tasks.getWorkspace(workspaceId)!;
+    tasks.setPrepareCommand(ws.id, ws.version, marker(counter));
+    const taskId = await confirmPlan([{ key: 'a', check: needsMarker }]);
+    (await started('做 a')).succeed({ 'src/a.ts': 'a\n' });
+    await until(() => node(taskId, 'a').status, (s) => s === 'succeeded', 'a 合入');
+    const result = store.runs.getResult(store.runs.latestRun(node(taskId, 'a').id)!.id)!;
+    expect(result).toMatchObject({ prepareStatus: 'passed', checkStatus: 'passed' });
+    expect(node(taskId, 'a').preparedAt).not.toBeNull();
+    // 节点 worktree 一次 + 合并候选一次
+    expect(readFileSync(counter, 'utf8')).toBe('xx');
+    // 准备命令的产物被忽略，没进集成分支
+    expect(git(store.tasks.getTask(taskId)!.integrationWorktree!, 'ls-files')).not.toContain('.prepared');
+  });
+
+  it('准备命令失败：检查不跑，节点交给人，原因写「准备命令失败」', async () => {
+    await setup();
+    const ws = store.tasks.getWorkspace(workspaceId)!;
+    tasks.setPrepareCommand(ws.id, ws.version, { executable: process.execPath, args: ['-e', 'process.exit(7)'] });
+    const taskId = await confirmPlan([{ key: 'a', check: needsMarker }]);
+    (await started('做 a')).succeed({ 'src/a.ts': 'a\n' });
+    await until(() => node(taskId, 'a').gateStage, (s) => s === 'human', '交给人');
+    expect(node(taskId, 'a')).toMatchObject({ statusReason: '准备命令失败', preparedAt: null });
+    expect(store.runs.getResult(store.runs.latestRun(node(taskId, 'a').id)!.id)).toMatchObject({ prepareStatus: 'failed', checkExitCode: 7 });
+    expect(runtime.runs.filter((r) => r.title.startsWith('审阅'))).toEqual([]);
   });
 });

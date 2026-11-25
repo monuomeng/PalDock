@@ -1,6 +1,7 @@
 import {
   CodedError,
   type Change,
+  type CheckCommand,
   type CreatedTask,
   type GateDecision,
   type GateStage,
@@ -18,7 +19,7 @@ import {
 } from '@paldock/contracts';
 import { subtaskMachine, taskMachine } from '@paldock/domain';
 import type { Clock } from './clock.js';
-import { COLUMNS, toTask, type TaskRow } from './columns.js';
+import { COLUMNS, toTask, toWorkspace, type TaskRow, type WorkspaceRow } from './columns.js';
 import type { Database } from './database.js';
 import type { EventLog } from './event-log.js';
 import { applyTransition, newId, statusChanged, type TransitionSpec } from './writes.js';
@@ -39,6 +40,10 @@ const SQL = {
   selectWorkspace: `SELECT ${COLUMNS.workspace()} FROM workspaces WHERE id = ?`,
   // 项目数量很少（每个仓库一行），整表按创建顺序读
   selectWorkspaces: `SELECT ${COLUMNS.workspace()} FROM workspaces ORDER BY created_at`,
+  setPrepareCommand: `
+    UPDATE workspaces SET prepare_command = ?, version = version + 1 WHERE id = ? AND version = ?
+    RETURNING ${COLUMNS.workspace()}`,
+  markPrepared: `UPDATE subtasks SET prepared_at = ? WHERE id = ? AND prepared_at IS NULL`,
   setRemoteApprovalLevel: `
     UPDATE workspaces SET remote_approval_level = ?, version = version + 1 WHERE id = ? AND version = ?
     RETURNING ${COLUMNS.workspace()}`,
@@ -133,27 +138,44 @@ export class TaskRepository implements TaskStorePort {
   ) {}
 
   ensureWorkspace(name: string, rootPath: string): WorkspaceRecord {
-    return this.db.get<WorkspaceRecord>(SQL.upsertWorkspace, newId('ws'), name, rootPath, this.clock.iso())!;
+    return toWorkspace(this.db.get<WorkspaceRow>(SQL.upsertWorkspace, newId('ws'), name, rootPath, this.clock.iso())!);
   }
 
   getWorkspace(id: string): WorkspaceRecord | undefined {
-    return this.db.get<WorkspaceRecord>(SQL.selectWorkspace, id);
+    const row = this.db.get<WorkspaceRow>(SQL.selectWorkspace, id);
+    return row && toWorkspace(row);
   }
 
   listWorkspaces(): WorkspaceRecord[] {
-    return this.db.all<WorkspaceRecord>(SQL.selectWorkspaces);
+    return this.db.all<WorkspaceRow>(SQL.selectWorkspaces).map(toWorkspace);
   }
 
   /** 远程审批等级只能在桌面修改（命令只对管理窗口开放）；先到者为准。 */
   setRemoteApprovalLevel(id: string, expectedVersion: number, level: RemoteApprovalLevel): Change<WorkspaceRecord> {
     return this.db.transaction(() => {
-      const record = this.db.get<WorkspaceRecord>(SQL.setRemoteApprovalLevel, level, id, expectedVersion);
-      if (!record) throw new CodedError(this.getWorkspace(id) ? 'conflict' : 'not_found', '项目不存在或已被修改');
+      const row = this.db.get<WorkspaceRow>(SQL.setRemoteApprovalLevel, level, id, expectedVersion);
+      if (!row) throw new CodedError(this.getWorkspace(id) ? 'conflict' : 'not_found', '项目不存在或已被修改');
+      const record = toWorkspace(row);
       return {
         record,
         events: [this.events.append(id, { type: 'workspace.settings_changed', payload: { remoteApprovalLevel: level } })],
       };
     });
+  }
+
+  setPrepareCommand(id: string, expectedVersion: number, command: CheckCommand | null): Change<WorkspaceRecord> {
+    return this.db.transaction(() => {
+      const row = this.db.get<WorkspaceRow>(SQL.setPrepareCommand, command && JSON.stringify(command), id, expectedVersion);
+      if (!row) throw new CodedError(this.getWorkspace(id) ? 'conflict' : 'not_found', '项目不存在或已被修改');
+      return {
+        record: toWorkspace(row),
+        events: [this.events.append(id, { type: 'workspace.prepare_command_changed', payload: { configured: command !== null } })],
+      };
+    });
+  }
+
+  markPrepared(subtaskId: string): void {
+    this.db.run(SQL.markPrepared, this.clock.iso(), subtaskId);
   }
 
   /** 任务、开发子任务和它的助手会话同一事务创建；P1 不经草稿与计划确认，直接排队。 */

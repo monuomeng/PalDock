@@ -136,6 +136,12 @@ export class IntegrationService {
       .filter((n) => merged.has(n.key) && n.checkCommand)
       .map((n) => n.checkCommand!)
       .filter((c) => !seen.has(JSON.stringify(c)) && seen.add(JSON.stringify(c)));
+    // 候选 worktree 是新建的：有检查要跑时先跑项目的准备命令（例如安装依赖）
+    const prepare = commands.length > 0 ? store.tasks.getWorkspace(task.workspaceId)?.prepareCommand : null;
+    if (prepare) {
+      const outcome = await runCheck(prepare, { cwd, timeoutMs: this.limits.checkTimeoutMs, maxOutputBytes: this.limits.checkOutputMaxBytes });
+      if (outcome.status !== 'passed') return `准备命令失败：${commandText(prepare)}（${outcome.exitCode === null ? outcome.status : `退出码 ${outcome.exitCode}`}）`;
+    }
     for (const command of commands) {
       const outcome = await runCheck(command, { cwd, timeoutMs: this.limits.checkTimeoutMs, maxOutputBytes: this.limits.checkOutputMaxBytes });
       if (outcome.status !== 'passed') return `集成检查没通过：${commandText(command)}（${outcome.exitCode === null ? outcome.status : `退出码 ${outcome.exitCode}`}）`;
