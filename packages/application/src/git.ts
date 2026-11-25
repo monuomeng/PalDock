@@ -71,3 +71,9 @@ export async function commitStaged(worktree: string, message: string): Promise<b
   await git(worktree, ['-c', 'user.name=PalDock', '-c', 'user.email=paldock@localhost', 'commit', '--no-verify', '-m', message]);
   return true;
 }
+
+/** base 到 commit 之间改动的文件（相对仓库根，`/` 分隔），用于核对交付范围。 */
+export async function changedFiles(worktree: string, base: string, commit: string): Promise<string[]> {
+  const out = await git(worktree, ['diff', '--name-only', '-z', base, commit]);
+  return out.split('\0').filter((f) => f !== '');
+}

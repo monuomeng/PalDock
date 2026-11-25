@@ -113,6 +113,7 @@ export class McpGateway {
       case 'get_task':
         return this.getTask(caller);
       case 'submit_result': {
+        if (this.reviewRun(caller)) throw new CodedError('bad_request', '审阅请用 submit_review 交结论');
         const { summary, notes } = args as McpToolArgs<'submit_result'>;
         const { record, events } = this.deps.store.runs.submitHandoff(caller.runId, summary, notes ?? null);
         this.deps.publish(events);
@@ -121,6 +122,10 @@ export class McpGateway {
       case 'get_status': {
         const { limit } = args as McpToolArgs<'get_status'>;
         return this.deps.store.tasks.listTasks(limit).map((t) => ({ taskId: t.task.id, title: t.task.title, status: t.task.status, subtaskStatus: t.subtaskStatus, lastActivityAt: t.lastActivityAt }));
+      }
+      case 'submit_review': {
+        const { decision, reason } = args as McpToolArgs<'submit_review'>;
+        return this.submitReview(caller, decision, reason ?? null);
       }
       case 'propose_plan': {
         const plans = this.deps.plans?.();
@@ -132,6 +137,27 @@ export class McpGateway {
     throw new CodedError('bad_request', `没有工具 ${tool}`);
   }
 
+  /** 这次 Run 是审阅 Run 时返回它（submit_review 只对审阅 Run 开放，submit_result 只对工作 Run）。 */
+  private reviewRun(caller: McpCaller) {
+    const run = this.deps.store.runs.getRun(caller.runId);
+    return run?.purpose === 'review' ? run : undefined;
+  }
+
+  /** 审阅结论绑定到被审的那次工作 Run 和它的提交；每次审阅 Run 只收一份，闸门在审阅 Run 结束后按它推进。 */
+  private submitReview(caller: McpCaller, decision: 'accept' | 'rework', reason: string | null) {
+    const { store } = this.deps;
+    const review = this.reviewRun(caller);
+    if (!review) throw new CodedError('unauthorized', '只有审阅这次交付的 Run 能交审阅结论');
+    const subtask = store.tasks.getSubtask(review.subtaskId);
+    const work = store.runs.latestRun(review.subtaskId);
+    if (subtask?.status !== 'review' || subtask.gateStage !== 'review' || !work) throw new CodedError('conflict', '这次交付已不在审阅中');
+    if (store.runs.reviewOf(review.id)) throw new CodedError('conflict', '这次审阅已经交过结论');
+    const commitSha = store.runs.getResult(work.id)?.commitSha ?? null;
+    const { record, events } = store.runs.addReview(work.id, decision, reason, { runId: review.id, commitSha });
+    this.deps.publish(events);
+    return { reviewId: record.id, decision, commitSha, next: '结论已记下；这次审阅结束后 PalDock 会据此放行或退回' };
+  }
+
   private getTask(caller: McpCaller) {
     const { store } = this.deps;
     const run = store.runs.getRun(caller.runId);
@@ -140,6 +166,8 @@ export class McpGateway {
     if (!task || !subtask) throw new CodedError('not_found', '找不到这次 Run 的子任务');
     const profile = store.agents.getProfile(caller.role);
     const node = nodeOf(store, subtask);
+    const work = run.purpose === 'review' ? store.runs.latestRun(subtask.id) : undefined;
+    const delivered = work && store.runs.getResult(work.id);
     return {
       taskId: task.id,
       title: task.title,
@@ -150,6 +178,17 @@ export class McpGateway {
       checkCommand: task.checkConfirmedAt ? task.checkCommand : null,
       // 计划节点：标题、相关路径和上游的交接（上游改动在任务集成分支上线前不在这个 worktree 里）
       ...(node ? { node: { key: node.key, title: node.title, paths: node.paths }, upstream: upstreamOf(store, subtask) } : {}),
+      // 审阅 Run：被审的提交、基线、改动统计和开发助手的交接
+      ...(work
+        ? {
+            review: {
+              commitSha: delivered?.commitSha ?? null,
+              baseCommit: subtask.baseCommit,
+              diffStat: delivered?.diffStat ?? null,
+              handoff: store.runs.getHandoff(work.id)?.summary ?? delivered?.finalMessage ?? null,
+            },
+          }
+        : {}),
     };
   }
 }

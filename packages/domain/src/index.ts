@@ -5,3 +5,4 @@ export * from './defaults.js';
 export * from './task-key.js';
 export * from './agent-profiles.js';
 export * from './task-graph.js';
+export * from './review-gate.js';

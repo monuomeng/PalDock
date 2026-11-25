@@ -5,6 +5,7 @@ import type { AgentRole } from './states.js';
 
 const SPECIALISTS: readonly AgentRole[] = ['developer', 'tester', 'reviewer', 'docs', 'researcher'];
 const COORDINATOR: readonly AgentRole[] = ['coordinator'];
+const REVIEWER: readonly AgentRole[] = ['reviewer'];
 
 /**
  * PalDock MCP 桥的工具：名字、哪些角色能用、参数。服务端按调用者令牌对应的角色校验，不信模型自报身份。
@@ -26,6 +27,17 @@ export const MCP_TOOLS = {
         notes: z.string().trim().max(8000).optional().describe('给下游或审阅的补充：验证方式、已知问题、遗留事项'),
       })
       .strict(),
+  },
+  submit_review: {
+    roles: REVIEWER,
+    description: '审阅结束时交结论：accept 通过，或 rework 退回并写明要改什么。只有审阅这次交付的 Run 能交，每次只能交一份。',
+    args: z
+      .object({
+        decision: z.enum(['accept', 'rework']).describe('accept 通过；rework 退回重做'),
+        reason: z.string().trim().max(4000).optional().describe('退回时必填：要改什么、为什么'),
+      })
+      .strict()
+      .refine((v) => v.decision === 'accept' || (v.reason?.length ?? 0) > 0, { message: '退回时要写明理由' }),
   },
   get_status: {
     roles: COORDINATOR,

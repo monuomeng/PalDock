@@ -39,6 +39,10 @@ export const RUN_STATUSES = [
 export const RunStatus = z.enum(RUN_STATUSES);
 export type RunStatus = z.infer<typeof RunStatus>;
 
+export const RUN_PURPOSES = ['work', 'review'] as const;
+export const RunPurpose = z.enum(RUN_PURPOSES);
+export type RunPurpose = z.infer<typeof RunPurpose>;
+
 export const APPROVAL_STATUSES = ['pending', 'approved', 'denied', 'expired', 'cancelled'] as const;
 export const ApprovalStatus = z.enum(APPROVAL_STATUSES);
 export type ApprovalStatus = z.infer<typeof ApprovalStatus>;

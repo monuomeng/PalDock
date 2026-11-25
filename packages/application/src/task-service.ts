@@ -73,13 +73,16 @@ const CANCELLED = '用户取消';
 /** 子任务已经结束、取消任务时不再动它（failed 在子任务状态机里还能重新排队，但取消不碰它）。 */
 const isFinished = (subtask: SubtaskRecord) => subtask.status === 'succeeded' || subtask.status === 'failed' || subtask.status === 'cancelled';
 
-/** 当前允许的用户操作；界面只按它显示按钮，规则只在这里一处。计划子任务不能单独取消或被接续。 */
-function actionsOf(subtask: SubtaskRecord, latest: RunRecord | undefined): TaskActions {
+/**
+ * 当前允许的用户操作；界面只按它显示按钮，规则只在这里一处。计划子任务不能单独取消或被接续。
+ * busy：子任务有 Run 在跑或排队（审阅中）；这时不能人工通过或退回，等这一轮结束。
+ */
+function actionsOf(subtask: SubtaskRecord, latest: RunRecord | undefined, busy = false): TaskActions {
   const blocked = subtask.status === 'blocked';
   const single = subtask.planId === null;
   return {
     cancel: single && !subtaskMachine.isTerminal(subtask.status),
-    review: subtask.status === 'review',
+    review: subtask.status === 'review' && !busy,
     continueFrom: single && canContinueFrom(subtask),
     resume: blocked && resumePlan(latest) !== undefined,
     restart: blocked,
@@ -210,7 +213,10 @@ export class TaskService {
       plan,
       nodes: this.store.plans.nodes(plan.id).map((node) => {
         const subtask = subtasks.get(node.key) ?? null;
-        return { node, subtask, actions: subtask && actionsOf(subtask, this.store.runs.latestRun(subtask.id)) };
+        if (!subtask) return { node, subtask, actions: null, gate: null };
+        const latest = this.store.runs.latestRun(subtask.id);
+        const gate = latest ? { result: this.store.runs.getResult(latest.id) ?? null, reviews: this.store.runs.reviewsOfRun(latest.id) } : null;
+        return { node, subtask, actions: actionsOf(subtask, latest, this.deps.supervisor.isActive(subtask.id)), gate };
       }),
       actions: { confirm: pending, reject: pending },
     };
@@ -277,6 +283,8 @@ export class TaskService {
   async decideReview(subtaskId: string, expectedVersion: number, decision: ReviewDecision, note?: string): Promise<void> {
     this.assertNotCommitting(subtaskId);
     const subtask = requireSubtask(this.store, subtaskId, 'review', expectedVersion);
+    // 计划节点审阅中（审阅 Run 在跑或排队）时不能人工覆盖，等这一轮结束
+    if (this.deps.supervisor.isActive(subtaskId)) throw new CodedError('conflict', '审阅助手正在审这次交付，请等它结束');
     const run = this.store.runs.latestRun(subtaskId)!;
     const task = this.store.tasks.getTask(subtask.taskId)!;
 
@@ -302,10 +310,11 @@ export class TaskService {
       this.store.transaction(() => [
         ...this.store.runs.addReview(run.id, 'rework', reason).events,
         ...this.store.tasks.transitionSubtask(subtaskId, expectedVersion, 'queued', reason).events,
+        ...settleTask(this.store, task.id),
       ]),
     );
     this.deps.supervisor.enqueue(subtaskId, {
-      prompt: nextStepPrompt(task.goal, reason),
+      prompt: nextStepPrompt(subtask.planId ? subtask.goal : task.goal, reason),
       ...(run.nativeThreadId ? { threadId: run.nativeThreadId } : {}),
     });
   }

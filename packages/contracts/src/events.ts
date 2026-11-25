@@ -69,6 +69,11 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
   z.object({ type: z.literal('run.result_collected'), payload: z.object({ checkStatus: CheckStatus }) }),
   /** 用户验收或退回；聚合 ID 为产生证据的那次 runId。 */
   z.object({ type: z.literal('review.decided'), payload: z.object({ decision: ReviewDecision }) }),
+  /** 计划节点过闸门的结论（检查、审阅）；聚合 ID 为子任务。outcome：通过、退回重做、交给人。 */
+  z.object({
+    type: z.literal('gate.decided'),
+    payload: z.object({ stage: z.enum(['check', 'review']), outcome: z.enum(['passed', 'rework', 'human']), runId: Id, reason: Reason }),
+  }),
   /** 需要让用户知道、但不改变状态的情况，例如执行器发来未识别的请求、恢复失败。 */
   z.object({
     type: z.literal('run.notice'),

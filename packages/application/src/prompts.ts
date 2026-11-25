@@ -44,6 +44,40 @@ export function planNodePrompt(task: { goal: string }, node: { title: string; go
   return `${parts.join('\n\n')}\n\n${FRAME}`;
 }
 
+/** 审阅助手看的交付：被审的提交、基线、改动统计和开发助手的交接。 */
+export interface ReviewSubject {
+  commitSha: string;
+  baseCommit: string;
+  diffStat: string | null;
+  handoff: string | null;
+}
+
+/**
+ * 审阅 Run 的提示词：独立会话，只读。目标和验收标准来自计划节点，不带开发助手的对话。
+ * 结论只能经 submit_review 交，说「通过」不算。
+ */
+export function reviewPrompt(node: { title: string; goal: string; paths: readonly string[] }, subject: ReviewSubject): string {
+  const parts = [
+    `请审阅子任务「${node.title}」的交付。子任务的目标：\n${node.goal}`,
+    `被审的提交：${subject.commitSha}（基线 ${subject.baseCommit}），用 git diff ${subject.baseCommit} ${subject.commitSha} 查看改动。`,
+  ];
+  if (subject.diffStat) parts.push(`改动统计：\n${subject.diffStat}`);
+  if (node.paths.length > 0) parts.push(`相关路径：\n${node.paths.map((p) => `- ${p}`).join('\n')}`);
+  if (subject.handoff) parts.push(`开发助手的交接：\n${subject.handoff.slice(0, 4000)}`);
+  parts.push(
+    [
+      '你是只读的审阅助手：不要修改、提交或删除任何文件。',
+      '看完后必须调用 PalDock 的 submit_review 工具交结论：达到目标就 accept；否则 rework，并写清楚要改什么。',
+    ].join('\n'),
+  );
+  return parts.join('\n\n');
+}
+
+/** 审阅助手退回：回到开发助手同一个会话、同一个 worktree，按审阅意见接着改。 */
+export function reviewReworkPrompt(goal: string, reason: string): string {
+  return `审阅助手退回了你的交付，意见：\n${reason}\n\n子任务的目标：\n${goal}\n\n${FRAME}`;
+}
+
 export function resumePrompt(goal: string): string {
   return `上一轮执行被中断（PalDock 服务重启或执行器断线）。请先检查工作目录的当前状态，再继续完成目标：\n${goal}\n\n${FRAME}`;
 }

@@ -23,12 +23,13 @@ import type {
   TaskRecord,
   TurnCheck,
 } from '@paldock/contracts';
-import { checkCapability, P1_DEFAULTS, taskKey } from '@paldock/domain';
+import { checkCapability, outOfScope, P1_DEFAULTS, taskKey } from '@paldock/domain';
 import { runCheck } from './check-runner.js';
-import { addWorktree, branchCommit, headCommit, stageAndDiffStat } from './git.js';
+import { addWorktree, branchCommit, changedFiles, commitStaged, headCommit, stageAndDiffStat } from './git.js';
 import { redact } from './redact.js';
 import { riskOf } from './risk.js';
 import type { McpGateway } from './mcp-gateway.js';
+import { nodeOf } from './task-graph-scheduler.js';
 import { moveSubtask, settleTask } from './transitions.js';
 
 export type Limits = typeof P1_DEFAULTS;
@@ -54,6 +55,11 @@ export interface RunPlan {
   prompt: string;
   threadId?: string;
   resumesRunId?: string;
+  /**
+   * 审阅 Run：在给定的审阅会话里以审阅角色运行，不改子任务状态（子任务停在 review），不收集证据；
+   * 结论由审阅助手经 MCP 交，闸门在 Run 结束后处理。
+   */
+  review?: { sessionId: string; role: AgentRole };
 }
 
 /** 正在执行的 Run：内存里只放控制所需的东西，事实都在库里。 */
@@ -62,6 +68,9 @@ interface LiveRun {
   subtask: SubtaskRecord;
   /** 启动时读一次；检查命令等在 Run 期间不变。 */
   task: TaskRecord;
+  /** 这次 Run 的角色：工作 Run 是子任务的角色，审阅 Run 是审阅助手。 */
+  role: string;
+  review: boolean;
   worktree: string | undefined;
   handle: RuntimeRun | undefined;
   /** 拿到 handle 之前就要回复的审批（事件可能先于 start() 的返回值送达），拿到后补发。 */
@@ -137,6 +146,11 @@ export class RunSupervisor {
     return ofTask < this.limits.maxRunsPerTask;
   }
 
+  /** 子任务有 Run 在执行或排队。 */
+  isActive(subtaskId: string): boolean {
+    return this.live.has(subtaskId) || this.queue.some((q) => q.subtaskId === subtaskId);
+  }
+
   /** 取消正在执行或排队的 Run；不在这里的返回 false，由调用方直接改状态。 */
   cancel(subtaskId: string): boolean {
     const queued = this.queue.findIndex((q) => q.subtaskId === subtaskId);
@@ -205,10 +219,10 @@ export class RunSupervisor {
    * 子任务用哪个执行器：角色在项目里的执行器（项目覆盖优先）。只有一个适配器时直接用它。
    * 角色不在设置里（旧数据）时退回开发助手的设置。
    */
-  private executorOf(subtask: SubtaskRecord, task: TaskRecord): { name: string; access?: WorkspaceAccess; label: string } {
+  private executorOf(roleName: string, task: TaskRecord): { name: string; access?: WorkspaceAccess; label: string } {
     const adapters = Object.values(this.deps.runtimes);
-    if (adapters.length === 1) return { name: adapters[0]!.name, label: subtask.role };
-    const parsed = AgentRole.safeParse(subtask.role);
+    if (adapters.length === 1) return { name: adapters[0]!.name, label: roleName };
+    const parsed = AgentRole.safeParse(roleName);
     const role = parsed.success ? parsed.data : 'developer';
     const profile = this.deps.store.agents.getProfile(role)!;
     const name = this.deps.store.agents.resolveExecutor(task.workspaceId, role) ?? profile.executor;
@@ -216,8 +230,8 @@ export class RunSupervisor {
   }
 
   /** 给这次 Run 签发 MCP 令牌（有效期为角色的单次时长上限再加 10 分钟），返回要注入的服务器。 */
-  private mcpServerFor(run: RunRecord, subtask: SubtaskRecord): McpServerSpec | undefined {
-    const parsed = AgentRole.safeParse(subtask.role);
+  private mcpServerFor(run: RunRecord, roleName: string): McpServerSpec | undefined {
+    const parsed = AgentRole.safeParse(roleName);
     if (!this.deps.mcp || !parsed.success) return undefined;
     const minutes = (this.deps.store.agents.getProfile(parsed.data)?.maxRunMinutes ?? 60) + 10;
     return this.deps.mcp.server(this.deps.mcp.gateway.issue(run.id, parsed.data, minutes * 60_000));
@@ -235,29 +249,32 @@ export class RunSupervisor {
 
   private async launch(subtaskId: string, plan: RunPlan): Promise<void> {
     const { store } = this.deps;
-    const session = store.tasks.getSessionOfSubtask(subtaskId);
-    if (!session) return this.deps.log(`subtask ${subtaskId} 没有会话`);
+    const sessionId = plan.review?.sessionId ?? store.tasks.getSessionOfSubtask(subtaskId)?.id;
+    if (!sessionId) return this.deps.log(`subtask ${subtaskId} 没有会话`);
     let executor!: ReturnType<RunSupervisor['executorOf']>;
     const live = store.transaction(() => {
-      const moved = moveSubtask(store, subtaskId, 'running');
-      const taskEvents = settleTask(store, moved.record.taskId);
+      // 审阅 Run 不改子任务和任务的状态：子任务停在 review，闸门阶段已是「审阅中」
+      const moved = plan.review ? { record: store.tasks.getSubtask(subtaskId)!, events: [] } : moveSubtask(store, subtaskId, 'running');
+      const taskEvents = plan.review ? [] : settleTask(store, moved.record.taskId);
       const task = store.tasks.getTask(moved.record.taskId)!;
-      executor = this.executorOf(moved.record, task);
+      const role = plan.review?.role ?? moved.record.role;
+      executor = this.executorOf(role, task);
       const run = store.runs.createRun({
         subtaskId,
-        sessionId: session.id,
+        sessionId,
         runtime: executor.name,
         ...(plan.threadId ? { nativeThreadId: plan.threadId } : {}),
         ...(plan.resumesRunId ? { resumesRunId: plan.resumesRunId } : {}),
+        ...(plan.review ? { purpose: 'review' as const } : {}),
       });
       this.publish([...moved.events, ...taskEvents, ...run.events]);
-      return this.track(run.record, moved.record, task);
+      return this.track(run.record, moved.record, task, role);
     });
 
     try {
       const runtime = await this.readyRuntime(executor);
       live.worktree = await this.ensureWorktree(live);
-      const mcpServer = this.mcpServerFor(live.run, live.subtask);
+      const mcpServer = this.mcpServerFor(live.run, live.role);
       live.handle = await runtime.start(
         {
           runId: live.run.id,
@@ -279,11 +296,13 @@ export class RunSupervisor {
     if (live.cancelRequested) await live.handle.cancel();
   }
 
-  private track(run: RunRecord, subtask: SubtaskRecord, task: TaskRecord): LiveRun {
+  private track(run: RunRecord, subtask: SubtaskRecord, task: TaskRecord, role: string): LiveRun {
     const live: LiveRun = {
       run,
       subtask,
       task,
+      role,
+      review: run.purpose === 'review',
       worktree: subtask.worktreePath ?? undefined,
       handle: undefined,
       pendingReplies: [],
@@ -452,12 +471,13 @@ export class RunSupervisor {
     if (this.live.get(live.subtask.id) !== live) return;
     const { store } = this.deps;
     this.flushOutput(live);
+    // 审阅 Run 失败或被中断时子任务仍停在 review，由闸门交给人；只有取消任务才连带取消子任务
+    const touchSubtask = !live.review || subtaskStatus === 'cancelled';
     this.publish(
       store.transaction(() => [
         ...this.closeApprovals(live, true),
         ...this.runTo(live, runStatus, reason),
-        ...moveSubtask(store, live.subtask.id, subtaskStatus, reason).events,
-        ...settleTask(store, live.subtask.taskId, reason),
+        ...(touchSubtask ? [...moveSubtask(store, live.subtask.id, subtaskStatus, reason).events, ...settleTask(store, live.subtask.taskId, reason)] : []),
       ]),
     );
     this.deps.log(`run ${live.run.id} finished: ${runStatus}（${reason}）`);
@@ -482,6 +502,8 @@ export class RunSupervisor {
     const { store } = this.deps;
     this.flushOutput(live);
     this.publish(store.transaction(() => [...this.closeApprovals(live, false), ...this.runTo(live, 'succeeded')]));
+    // 审阅 Run 没有自己的证据：结论已经由审阅助手经 MCP 交了，闸门按 Run 结束的事件处理
+    if (live.review) return this.release(live);
     const result = await this.collectEvidence(live, finalMessage).catch((error) => ({
       ...this.resultBase(live, finalMessage, `收集证据失败：${errorText(error)}`),
       checkStatus: 'error' as const,
@@ -502,13 +524,29 @@ export class RunSupervisor {
     return { runId: live.run.id, finalMessage, diffStat, checkExitCode: null, checkDurationMs: null, checkOutputRef: null };
   }
 
+  /**
+   * 证据：改动统计和检查命令的结果。计划节点还要把改动提交到节点分支（检查与审阅都针对这个 SHA），
+   * 并对照交付范围（角色的交付范围 ∪ 节点路径）列出越界的文件；检查命令用节点的（随计划确认）。
+   */
   private async collectEvidence(live: LiveRun, finalMessage: string | null): Promise<NewRunResult> {
     const worktree = live.worktree!;
-    const base = this.resultBase(live, finalMessage, await stageAndDiffStat(worktree, live.subtask.baseCommit ?? 'HEAD'));
-    const { checkCommand, checkConfirmedAt } = live.task;
+    const baseCommit = live.subtask.baseCommit ?? 'HEAD';
+    const base: Omit<NewRunResult, 'checkStatus'> = this.resultBase(live, finalMessage, await stageAndDiffStat(worktree, baseCommit));
+    const node = nodeOf(this.deps.store, live.subtask);
+    let check: { command: TaskRecord['checkCommand']; confirmed: boolean } = { command: live.task.checkCommand, confirmed: live.task.checkConfirmedAt !== null };
+    if (node) {
+      await commitStaged(worktree, `paldock: ${node.title}`);
+      const sha = await headCommit(worktree);
+      const parsed = AgentRole.safeParse(live.subtask.role);
+      const roleScope = parsed.success ? (this.deps.store.agents.getProfile(parsed.data)?.deliveryScope ?? []) : [];
+      base.commitSha = sha;
+      base.outOfScope = outOfScope(await changedFiles(worktree, baseCommit, sha), [...roleScope, ...node.paths]);
+      check = { command: node.checkCommand, confirmed: true };
+    }
+    const checkCommand = check.command;
     if (!checkCommand) return { ...base, checkStatus: 'not_configured' };
     // 用户在建任务时没有确认的命令不会运行
-    if (!checkConfirmedAt) return { ...base, checkStatus: 'not_confirmed' };
+    if (!check.confirmed) return { ...base, checkStatus: 'not_confirmed' };
 
     const outcome = await runCheck(checkCommand, {
       cwd: worktree,

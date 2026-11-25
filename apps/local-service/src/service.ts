@@ -1,6 +1,6 @@
 import type { Server, Socket } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { AgentService, ChannelService, McpGateway, PlanService, RunSupervisor, TaskGraphScheduler, TaskService, type McpCaller, type AdapterFactory, type CredentialPort } from '@paldock/application';
+import { AgentService, ChannelService, McpGateway, PlanService, ReviewGate, RunSupervisor, TaskGraphScheduler, TaskService, type McpCaller, type AdapterFactory, type CredentialPort } from '@paldock/application';
 import {
   ClientFrame,
   CodedError,
@@ -70,6 +70,7 @@ export class LocalService {
   private channels!: ChannelService;
   private mcp!: McpGateway;
   private scheduler!: TaskGraphScheduler;
+  private gate!: ReviewGate;
 
   private constructor(
     private readonly store: Store,
@@ -98,11 +99,13 @@ export class LocalService {
             }),
             claude: new ClaudeAdapter(process.env.PALDOCK_CLAUDE_PATH ? { configuredPath: process.env.PALDOCK_CLAUDE_PATH } : {}),
           });
-      // 持久事件同时送给管理窗口、外部渠道（从外部建的任务的进度、审批处理结果）和任务图调度器（推进下游）
+      // 持久事件同时送给管理窗口、外部渠道（从外部建的任务的进度、审批处理结果）、
+      // 任务图调度器（推进下游）和验收闸门（交付后核对、审阅）
       const publish = (events: PersistentEvent[]) => {
         service.broadcast(events);
         service.channels.onEvents(events);
         service.scheduler.onEvents(events);
+        service.gate.onEvents(events);
       };
       // 计划用例依赖调度器，调度器依赖带这个网关的监管器：propose_plan 的后端延后取
       let plans: PlanService | undefined;
@@ -127,6 +130,7 @@ export class LocalService {
         ...(options.limits ? { limits: options.limits } : {}),
       });
       service.scheduler = new TaskGraphScheduler({ store, supervisor: service.supervisor, publish, log });
+      service.gate = new ReviewGate({ store, supervisor: service.supervisor, publish, log, ...(options.limits ? { limits: options.limits } : {}) });
       plans = new PlanService({ store, scheduler: service.scheduler, publish });
       const tasks = new TaskService({ store, supervisor: service.supervisor, scheduler: service.scheduler, dataRoot, publish });
       service.channels = new ChannelService({

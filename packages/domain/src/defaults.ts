@@ -12,6 +12,8 @@ export const P1_DEFAULTS = {
   maxConcurrentRuns: 10,
   /** 同一任务同时执行的 Run 上限（ADR 0002：每任务最多 4 个并行子任务）。 */
   maxRunsPerTask: 4,
+  /** 审阅助手自动退回重做的轮数上限，用完交给人（P3 计划 v2「返工的终止条件」）；人在桌面退回不限次数。 */
+  maxAutoReworks: 2,
   /** 多久扫描一次过期审批。 */
   expiryScanMs: 15_000,
   /** 执行器断线后核对 turn 结果的次数与间隔。 */

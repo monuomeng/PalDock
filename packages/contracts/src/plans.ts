@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AgentRole, SubtaskStatus } from './states.js';
-import type { SubtaskRecord, TaskActions } from './records.js';
+import { CheckCommand, type RunResultRecord, type RunReviewRecord, type SubtaskRecord, type TaskActions } from './records.js';
 
 /** 一份计划最多几个节点（02「上限与护栏」：每任务最多 8 个子任务）；domain 校验与 MCP 参数共用。 */
 export const MAX_PLAN_NODES = 8;
@@ -17,6 +17,7 @@ export const PlanNodeInput = z
     goal: z.string().trim().min(1).max(4000).describe('这个子任务要做什么、做到什么程度算完成'),
     paths: z.array(z.string().min(1).max(200)).max(20).default([]).describe('相关的文件或目录（项目内相对路径）'),
     dependsOn: z.array(z.string().min(1).max(24)).max(MAX_PLAN_NODES).default([]).describe('依赖的节点键；依赖都完成后才开始'),
+    check: CheckCommand.optional().describe('交付后在 worktree 里跑的检查命令（可执行文件 + 参数，不经 shell）；随计划一起由用户确认'),
   })
   .strict();
 export type PlanNodeInput = z.output<typeof PlanNodeInput>;
@@ -49,6 +50,18 @@ export interface PlanNodeRecord {
   goal: string;
   paths: string[];
   dependsOn: string[];
+  checkCommand: CheckCommand | null;
+}
+
+/** 子任务在 review 内的闸门阶段：审阅中、交给人；null 表示刚交付或不在 review。 */
+export const GATE_STAGES = ['review', 'human'] as const;
+export const GateStage = z.enum(GATE_STAGES);
+export type GateStage = z.infer<typeof GateStage>;
+
+/** 节点最近一次交付的闸门情况：检查（SHA、检查结果、越界文件）和各轮审阅结论。 */
+export interface NodeGateView {
+  result: RunResultRecord | null;
+  reviews: RunReviewRecord[];
 }
 
 /** 任务详情里的一个计划节点：确认后带上物化出的子任务和它当前允许的操作。 */
@@ -56,6 +69,7 @@ export interface PlanNodeView {
   node: PlanNodeRecord;
   subtask: SubtaskRecord | null;
   actions: TaskActions | null;
+  gate: NodeGateView | null;
 }
 
 export interface PlanDetail {

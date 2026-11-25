@@ -24,7 +24,7 @@ import type {
 } from '@paldock/contracts';
 import { approvalMachine, runMachine } from '@paldock/domain';
 import type { Clock } from './clock.js';
-import { COLUMNS } from './columns.js';
+import { COLUMNS, toResult, type ResultRow } from './columns.js';
 import type { Database } from './database.js';
 import type { EventLog } from './event-log.js';
 import { applyTransition, insertWithEvent, newId, statusChanged, type TransitionSpec } from './writes.js';
@@ -32,12 +32,13 @@ import { applyTransition, insertWithEvent, newId, statusChanged, type Transition
 const SQL = {
   // 每次 Run 是独立尝试，attempt 在子任务内递增（走 UNIQUE (subtask_id, attempt) 索引）；旧 Run 及其证据保留
   insertRun: `
-    INSERT INTO runs (id, subtask_id, session_id, attempt, runtime, native_thread_id, resumes_run_id, status, started_at)
-    VALUES (?1, ?2, ?3, (SELECT coalesce(max(attempt), 0) + 1 FROM runs WHERE subtask_id = ?2), ?4, ?5, ?6, 'starting', ?7)
+    INSERT INTO runs (id, subtask_id, session_id, attempt, runtime, native_thread_id, resumes_run_id, status, started_at, purpose)
+    VALUES (?1, ?2, ?3, (SELECT coalesce(max(attempt), 0) + 1 FROM runs WHERE subtask_id = ?2), ?4, ?5, ?6, 'starting', ?7, ?8)
     RETURNING ${COLUMNS.run()}`,
   selectRun: `SELECT ${COLUMNS.run()} FROM runs WHERE id = ?`,
   selectRunsOfSubtask: `SELECT ${COLUMNS.run()} FROM runs WHERE subtask_id = ? ORDER BY attempt`,
-  selectLatestRun: `SELECT ${COLUMNS.run()} FROM runs WHERE subtask_id = ? ORDER BY attempt DESC LIMIT 1`,
+  // 审阅 Run 不算：按 attempt 倒序跳过（每轮最多一次审阅，扫描很短）
+  selectLatestRun: `SELECT ${COLUMNS.run()} FROM runs WHERE subtask_id = ? AND purpose = 'work' ORDER BY attempt DESC LIMIT 1`,
   // 原生 ID 只写一次：thread 在续做时已预先填好，turn 一旦记录就不再覆盖
   setThread: `
     UPDATE runs SET native_thread_id = ?2 WHERE id = ?1 AND (native_thread_id IS NULL OR native_thread_id = ?2)
@@ -61,13 +62,21 @@ const SQL = {
      WHERE run_id = ? AND status = 'pending'
     RETURNING ${COLUMNS.approval()}`,
   insertResult: `
-    INSERT INTO run_results (run_id, final_message, diff_stat, check_status, check_exit_code, check_duration_ms, check_output_ref, collected_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO run_results (run_id, final_message, diff_stat, check_status, check_exit_code, check_duration_ms, check_output_ref,
+                             commit_sha, out_of_scope, collected_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING ${COLUMNS.result()}`,
   selectResult: `SELECT ${COLUMNS.result()} FROM run_results WHERE run_id = ?`,
   insertReview: `
-    INSERT INTO run_reviews (id, run_id, decision, note, decided_at) VALUES (?, ?, ?, ?, ?)
+    INSERT INTO run_reviews (id, run_id, decision, note, reviewer_run_id, commit_sha, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?)
     RETURNING ${COLUMNS.review()}`,
+  // 走部分唯一索引 run_reviews_by_reviewer（= 隐含 IS NOT NULL）
+  // 走 run_reviews_by_run
+  selectReviewsOfRun: `SELECT ${COLUMNS.review()} FROM run_reviews WHERE run_id = ? ORDER BY decided_at`,
+  selectReviewByReviewer: `SELECT ${COLUMNS.review()} FROM run_reviews WHERE reviewer_run_id = ?`,
+  autoReworkCount: `
+    SELECT count(*) AS n FROM runs r JOIN run_reviews x ON x.run_id = r.id
+     WHERE r.subtask_id = ? AND x.reviewer_run_id IS NOT NULL AND x.decision = 'rework'`,
   // 任务详情：每类数据一条查询，按子任务的各次 Run 联表取，分别走各自按 run_id 的索引
   resultsOfSubtask: `
     SELECT ${COLUMNS.result('x.')} FROM runs r JOIN run_results x ON x.run_id = r.id WHERE r.subtask_id = ?`,
@@ -138,6 +147,7 @@ export class RunRepository implements RunStorePort {
       input.nativeThreadId ?? null,
       input.resumesRunId ?? null,
       this.clock.iso(),
+      input.purpose ?? 'work',
     ];
     return insertWithEvent<RunRecord>(this.db, this.events, SQL.insertRun, params, (run) => ({
       type: 'run.created',
@@ -234,9 +244,11 @@ export class RunRepository implements RunStorePort {
       result.checkExitCode,
       result.checkDurationMs,
       result.checkOutputRef,
+      result.commitSha ?? null,
+      result.outOfScope ? JSON.stringify(result.outOfScope) : null,
       this.clock.iso(),
     ];
-    return insertWithEvent<RunResultRecord>(
+    const change = insertWithEvent<ResultRow>(
       this.db,
       this.events,
       SQL.insertResult,
@@ -244,17 +256,29 @@ export class RunRepository implements RunStorePort {
       (r) => ({ type: 'run.result_collected', payload: { checkStatus: r.checkStatus } }),
       (r) => r.runId,
     );
+    return { record: toResult(change.record), events: change.events };
   }
 
   getResult(runId: string): RunResultRecord | undefined {
-    return this.db.get<RunResultRecord>(SQL.selectResult, runId);
+    const row = this.db.get<ResultRow>(SQL.selectResult, runId);
+    return row && toResult(row);
   }
 
-  addReview(runId: string, decision: ReviewDecision, note: string | null): Change<RunReviewRecord> {
-    return insertWithEvent(this.db, this.events, SQL.insertReview, [newId('rev'), runId, decision, note, this.clock.iso()], () => ({
-      type: 'review.decided',
-      payload: { decision },
-    }));
+  addReview(runId: string, decision: ReviewDecision, note: string | null, reviewer?: { runId: string; commitSha: string | null }): Change<RunReviewRecord> {
+    const params = [newId('rev'), runId, decision, note, reviewer?.runId ?? null, reviewer?.commitSha ?? null, this.clock.iso()];
+    return insertWithEvent(this.db, this.events, SQL.insertReview, params, () => ({ type: 'review.decided', payload: { decision } }));
+  }
+
+  reviewsOfRun(runId: string): RunReviewRecord[] {
+    return this.db.all<RunReviewRecord>(SQL.selectReviewsOfRun, runId);
+  }
+
+  reviewOf(reviewerRunId: string): RunReviewRecord | undefined {
+    return this.db.get<RunReviewRecord>(SQL.selectReviewByReviewer, reviewerRunId);
+  }
+
+  autoReworkCount(subtaskId: string): number {
+    return this.db.get<{ n: number }>(SQL.autoReworkCount, subtaskId)!.n;
   }
 
   recordUsage(runId: string, u: RunUsageRecord): void {
@@ -286,7 +310,7 @@ export class RunRepository implements RunStorePort {
   /** 子任务的全部 Run 及其证据，按 attempt 升序；共 5 条查询，与 Run 的数量无关。 */
   runDetails(subtaskId: string): RunDetail[] {
     const runs = this.db.all<RunRecord>(SQL.selectRunsOfSubtask, subtaskId);
-    const results = new Map(this.db.all<RunResultRecord>(SQL.resultsOfSubtask, subtaskId).map((r) => [r.runId, r]));
+    const results = new Map(this.db.all<ResultRow>(SQL.resultsOfSubtask, subtaskId).map((r) => [r.runId, toResult(r)]));
     const reviews = groupByRun(this.db.all<RunReviewRecord>(SQL.reviewsOfSubtask, subtaskId));
     const approvals = groupByRun(this.db.all<ApprovalRecord>(SQL.approvalsOfSubtask, subtaskId));
     const messages = groupByRun(this.db.all<MessageRecord>(SQL.messagesOfSubtask, subtaskId));

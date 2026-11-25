@@ -1,7 +1,7 @@
 import type { ApprovalRecord, PlanDetail, PlanNodeView, RunDetail, SubtaskRecord, TaskDetail } from '@paldock/contracts';
 import { call } from '../api.js';
 import { h, type Child } from '../dom.js';
-import { APPROVAL_LABEL, CHECK_LABEL, PLAN_LABEL, RISK_LABEL, RUN_LABEL, SUBTASK_LABEL, checkCommandText, duration, time } from '../format.js';
+import { APPROVAL_LABEL, CHECK_LABEL, GATE_LABEL, PLAN_LABEL, RISK_LABEL, RUN_LABEL, SUBTASK_LABEL, checkCommandText, duration, time } from '../format.js';
 import { liveText } from '../live-output.js';
 import { continueLink, navigate, taskLink } from '../router.js';
 
@@ -123,13 +123,22 @@ function planView({ plan, nodes, actions: allowed }: PlanDetail, act: Act): HTML
   );
 }
 
-function nodeRow({ node, subtask, actions: allowed }: PlanNodeView, titles: Map<string, string>, act: Act): HTMLElement {
+/** 节点的一行：目标、路径、检查命令、依赖、状态与闸门（检查结果、越界文件、审阅结论），以及人工通过 / 退回 / 重新开始。 */
+function nodeRow({ node, subtask, actions: allowed, gate }: PlanNodeView, titles: Map<string, string>, act: Act): HTMLElement {
   const deps = node.dependsOn.map((k) => titles.get(k) ?? k).join('、') || '—';
-  const status = subtask ? h('span', { class: `status status-${subtask.status}` }, SUBTASK_LABEL[subtask.status]) : '未开始';
-  const accept =
+  const stage = subtask?.gateStage ? `（${GATE_LABEL[subtask.gateStage]}）` : '';
+  const status = subtask ? h('span', { class: `status status-${subtask.status}` }, SUBTASK_LABEL[subtask.status], stage) : '未开始';
+  const decide = (decision: 'accept' | 'rework', note?: string) =>
+    act(() => call('review.decide', { subtaskId: subtask!.id, expectedVersion: subtask!.version, decision, ...(note ? { note } : {}) }));
+  const note = h('input', { type: 'text', 'data-keep': `rework-${subtask?.id ?? node.key}`, placeholder: '退回理由', 'aria-label': `${node.title} 的退回理由` }) as HTMLInputElement;
+  const review =
     subtask && allowed?.review
-      ? h('button', { type: 'button', onclick: act(() => call('review.decide', { subtaskId: subtask.id, expectedVersion: subtask.version, decision: 'accept' })) }, '通过')
-      : null;
+      ? [
+          h('button', { type: 'button', class: 'primary', onclick: decide('accept') }, '通过'),
+          note,
+          h('button', { type: 'button', onclick: () => void (note.value.trim() ? decide('rework', note.value.trim())() : (note.focus(), undefined)) }, '退回'),
+        ]
+      : [];
   const restart =
     subtask && allowed?.restart
       ? h('button', { type: 'button', onclick: act(() => call('run.recover', { subtaskId: subtask.id, expectedVersion: subtask.version, action: 'restart' })) }, '重新开始')
@@ -137,11 +146,31 @@ function nodeRow({ node, subtask, actions: allowed }: PlanNodeView, titles: Map<
   return h(
     'tr',
     {},
-    h('td', {}, h('strong', {}, node.title), h('div', { class: 'hint' }, node.goal), node.paths.length ? h('div', { class: 'hint' }, `路径：${node.paths.join('，')}`) : null),
+    h(
+      'td',
+      {},
+      h('strong', {}, node.title),
+      h('div', { class: 'hint' }, node.goal),
+      node.paths.length ? h('div', { class: 'hint' }, `路径：${node.paths.join('，')}`) : null,
+      node.checkCommand ? h('div', { class: 'hint' }, `检查：${[node.checkCommand.executable, ...node.checkCommand.args].join(' ')}`) : null,
+    ),
     h('td', {}, node.role),
     h('td', {}, deps),
-    h('td', {}, status, subtask?.statusReason ? h('div', { class: 'hint' }, subtask.statusReason) : null),
-    h('td', {}, accept, restart),
+    h('td', {}, status, subtask?.statusReason ? h('div', { class: 'hint' }, subtask.statusReason) : null, gate ? gateView(gate) : null),
+    h('td', {}, ...review, restart),
+  );
+}
+
+/** 最近一次交付的闸门：提交、检查、越界文件，以及审阅助手和你的结论。 */
+function gateView({ result, reviews }: NonNullable<PlanNodeView['gate']>): HTMLElement {
+  return h(
+    'div',
+    { class: 'hint gate' },
+    result?.commitSha ? h('div', {}, `提交 ${result.commitSha.slice(0, 10)} · 检查 `, h('span', { class: `check check-${result.checkStatus}` }, CHECK_LABEL[result.checkStatus])) : null,
+    result?.outOfScope?.length ? h('div', { class: 'error' }, `越出交付范围：${result.outOfScope.join('，')}`) : null,
+    ...reviews.map((r) =>
+      h('div', { class: `review-note review-${r.decision}` }, `${r.reviewerRunId ? '审阅助手' : '你'}${r.decision === 'accept' ? '通过' : '退回'}`, r.note ? `：${r.note}` : ''),
+    ),
   );
 }
 

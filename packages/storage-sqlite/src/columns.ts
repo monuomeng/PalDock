@@ -1,4 +1,4 @@
-import type { CheckCommand, TaskRecord } from '@paldock/contracts';
+import type { CheckCommand, RunResultRecord, TaskRecord } from '@paldock/contracts';
 
 /**
  * 每张表的 RETURNING / SELECT 列只定义一次，插入、更新和查询返回同一形状（contracts 的记录类型）。
@@ -24,12 +24,12 @@ export const COLUMNS = {
   subtask: cols(
     `id, task_id AS taskId, role, goal, status, status_reason AS statusReason, rework_count AS reworkCount,
      worktree_path AS worktreePath, branch, base_commit AS baseCommit, plan_id AS planId, node_key AS nodeKey,
-     version, updated_at AS updatedAt`,
+     gate_stage AS gateStage, version, updated_at AS updatedAt`,
   ),
   session: cols(`id, kind, subtask_id AS subtaskId, role`),
   run: cols(
     `id, subtask_id AS subtaskId, session_id AS sessionId, attempt, runtime, native_thread_id AS nativeThreadId,
-     native_turn_id AS nativeTurnId, resumes_run_id AS resumesRunId, status, failure_reason AS failureReason,
+     native_turn_id AS nativeTurnId, resumes_run_id AS resumesRunId, status, failure_reason AS failureReason, purpose,
      version, started_at AS startedAt, ended_at AS endedAt`,
   ),
   approval: cols(
@@ -39,9 +39,9 @@ export const COLUMNS = {
   result: cols(
     `run_id AS runId, final_message AS finalMessage, diff_stat AS diffStat, check_status AS checkStatus,
      check_exit_code AS checkExitCode, check_duration_ms AS checkDurationMs, check_output_ref AS checkOutputRef,
-     collected_at AS collectedAt`,
+     commit_sha AS commitSha, out_of_scope AS outOfScope, collected_at AS collectedAt`,
   ),
-  review: cols(`id, run_id AS runId, decision, note, decided_at AS decidedAt`),
+  review: cols(`id, run_id AS runId, decision, note, reviewer_run_id AS reviewerRunId, commit_sha AS commitSha, decided_at AS decidedAt`),
   message: cols(`id, session_id AS sessionId, run_id AS runId, role, body, created_at AS createdAt`),
   account: cols(
     `id, provider, account, external_id AS externalId, display_name AS displayName, status, version,
@@ -68,7 +68,7 @@ export const COLUMNS = {
     `id, task_id AS taskId, revision, status, proposed_by_run_id AS proposedByRunId, decision_note AS decisionNote,
      version, created_at AS createdAt, decided_at AS decidedAt`,
   ),
-  planNode: cols(`plan_id AS planId, position, node_key AS key, role, title, goal, paths, depends_on AS dependsOn`),
+  planNode: cols(`plan_id AS planId, position, node_key AS key, role, title, goal, paths, depends_on AS dependsOn, check_command AS checkCommand`),
   handoff: cols(`run_id AS runId, summary, notes, submitted_at AS submittedAt`),
   usage: cols(
     `input_tokens AS inputTokens, output_tokens AS outputTokens, cache_read_tokens AS cacheReadTokens,
@@ -76,6 +76,10 @@ export const COLUMNS = {
   ),
   outbox: cols(`id, channel AS provider, target AS conversationId, subject, payload, attempts`),
 } as const;
+
+/** out_of_scope 以 JSON 文本存储，读出时还原。 */
+export type ResultRow = Omit<RunResultRecord, 'outOfScope'> & { outOfScope: string | null };
+export const toResult = (row: ResultRow): RunResultRecord => ({ ...row, outOfScope: row.outOfScope === null ? null : (JSON.parse(row.outOfScope) as string[]) });
 
 /** check_command 以 JSON 文本存储，读出时还原；其余列与记录类型一一对应。 */
 export type TaskRow = Omit<TaskRecord, 'checkCommand'> & { checkCommand: string | null };

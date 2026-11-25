@@ -1,6 +1,7 @@
 import {
   CodedError,
   type Change,
+  type CheckCommand,
   type GraphNode,
   type NewPlan,
   type PersistentEvent,
@@ -18,8 +19,13 @@ import type { EventLog } from './event-log.js';
 import type { TaskRepository } from './task-repository.js';
 import { applyTransition, newId, statusChanged, type TransitionSpec } from './writes.js';
 
-type NodeRow = Omit<PlanNodeRecord, 'paths' | 'dependsOn'> & { paths: string; dependsOn: string };
-const toNode = (row: NodeRow): PlanNodeRecord => ({ ...row, paths: JSON.parse(row.paths) as string[], dependsOn: JSON.parse(row.dependsOn) as string[] });
+type NodeRow = Omit<PlanNodeRecord, 'paths' | 'dependsOn' | 'checkCommand'> & { paths: string; dependsOn: string; checkCommand: string | null };
+const toNode = (row: NodeRow): PlanNodeRecord => ({
+  ...row,
+  paths: JSON.parse(row.paths) as string[],
+  dependsOn: JSON.parse(row.dependsOn) as string[],
+  checkCommand: row.checkCommand === null ? null : (JSON.parse(row.checkCommand) as CheckCommand),
+});
 
 const SQL = {
   insertDraftTask: `
@@ -33,7 +39,7 @@ const SQL = {
     RETURNING ${COLUMNS.plan()}`,
   proposedOfTask: `SELECT id, version FROM plans WHERE task_id = ? AND status = 'proposed'`,
   insertNode: `
-    INSERT INTO plan_nodes (plan_id, position, node_key, role, title, goal, paths, depends_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    INSERT INTO plan_nodes (plan_id, position, node_key, role, title, goal, paths, depends_on, check_command) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   selectPlan: `SELECT ${COLUMNS.plan()} FROM plans WHERE id = ?`,
   latestPlan: `SELECT ${COLUMNS.plan()} FROM plans WHERE task_id = ? ORDER BY revision DESC LIMIT 1`,
   // 主键 (plan_id, position)：按节点顺序读，不排序
@@ -94,7 +100,18 @@ export class PlanRepository implements PlanStorePort {
       }
       const plan = this.db.get<PlanRecord>(SQL.insertPlan, newId('plan'), taskId, input.proposedByRunId, at)!;
       input.nodes.forEach((n, position) =>
-        this.db.run(SQL.insertNode, plan.id, position, n.key, n.role, n.title, n.goal, JSON.stringify(n.paths), JSON.stringify(n.dependsOn)),
+        this.db.run(
+          SQL.insertNode,
+          plan.id,
+          position,
+          n.key,
+          n.role,
+          n.title,
+          n.goal,
+          JSON.stringify(n.paths),
+          JSON.stringify(n.dependsOn),
+          n.check ? JSON.stringify(n.check) : null,
+        ),
       );
       events.push(this.events.append(plan.id, { type: 'plan.proposed', payload: { taskId, revision: plan.revision, nodes: input.nodes.length } }));
       return { record: plan, events };

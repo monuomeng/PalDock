@@ -12,7 +12,7 @@ import type {
   PairingRecord,
 } from './channels.js';
 import type { PersistentEvent, RunNoticeCode } from './events.js';
-import type { GraphNode, PlanNodeInput, PlanNodeRecord, PlanRecord } from './plans.js';
+import type { GateStage, GraphNode, PlanNodeInput, PlanNodeRecord, PlanRecord } from './plans.js';
 import type {
   AgentOverrideRecord,
   AgentProfileRecord,
@@ -43,6 +43,7 @@ import type {
   RemoteApprovalLevel,
   ReviewDecision,
   RiskLevel,
+  RunPurpose,
   RunStatus,
   SubtaskStatus,
   TaskStatus,
@@ -85,6 +86,8 @@ export interface NewRun {
   /** 续做时沿用的原生会话，以及被续做的那次 Run。 */
   nativeThreadId?: string;
   resumesRunId?: string;
+  /** 缺省为 work；审阅 Run 用独立的审阅会话。 */
+  purpose?: RunPurpose;
 }
 
 export interface NewApproval {
@@ -98,7 +101,8 @@ export interface NewApproval {
   ttlMs: number;
 }
 
-export type NewRunResult = Omit<RunResultRecord, 'collectedAt'>;
+/** 提交 SHA 与越界文件只有计划节点才有。 */
+export type NewRunResult = Omit<RunResultRecord, 'collectedAt' | 'commitSha' | 'outOfScope'> & Partial<Pick<RunResultRecord, 'commitSha' | 'outOfScope'>>;
 
 export interface InterruptedRun {
   id: string;
@@ -131,6 +135,12 @@ export interface TaskStorePort {
   /** ID 以 prefix 开头的任务（主键范围查询），最多 limit 个。 */
   findTasksByIdPrefix(prefix: string, limit: number): TaskRecord[];
   setWorktree(subtaskId: string, worktreePath: string, branch: string, baseCommit: string): SubtaskRecord | undefined;
+  /** 设置 review 内的闸门阶段，带版本（先到者为准），记 gate.decided 事件；只在子任务处于 review 时有效。 */
+  setGateStage(subtaskId: string, expectedVersion: number, stage: GateStage, decision: GateDecision): Change<SubtaskRecord>;
+  /** 只记闸门结论（通过后直接成功、退回重做时，状态由 transitionSubtask 改）。 */
+  gateDecided(subtaskId: string, decision: GateDecision): PersistentEvent;
+  /** 新建一个不挂在子任务上的助手会话（审阅助手每轮一个）。 */
+  createSession(role: string): SessionRecord;
   transitionTask(id: string, expectedVersion: number, to: TaskStatus, reason?: string): Change<TaskRecord>;
   transitionSubtask(id: string, expectedVersion: number, to: SubtaskStatus, reason?: string): Change<SubtaskRecord>;
   /** 任务的全部子任务（单子任务的任务只有一个），按创建顺序。 */
@@ -145,6 +155,14 @@ export interface NewPlan {
   goal: string;
   nodes: PlanNodeInput[];
   proposedByRunId: string;
+}
+
+/** 闸门的一个结论（gate.decided 事件的载荷）。 */
+export interface GateDecision {
+  stage: 'check' | 'review';
+  outcome: 'passed' | 'rework' | 'human';
+  runId: string;
+  reason?: string;
 }
 
 export interface PlanStorePort {
@@ -163,6 +181,7 @@ export interface PlanStorePort {
 export interface RunStorePort {
   createRun(input: NewRun): Change<RunRecord>;
   getRun(id: string): RunRecord | undefined;
+  /** 最近一次工作 Run（审阅 Run 不算）。 */
   latestRun(subtaskId: string): RunRecord | undefined;
   recordThread(run: Pick<RunRecord, 'id' | 'runtime' | 'sessionId'>, threadId: string): RunRecord | undefined;
   recordTurn(runId: string, turnId: string): RunRecord | undefined;
@@ -174,7 +193,14 @@ export interface RunStorePort {
   decideApproval(id: string, expectedVersion: number, status: Exclude<ApprovalStatus, 'pending'>, via: ApprovalChannel): Change<ApprovalRecord>;
   saveResult(result: NewRunResult): Change<RunResultRecord>;
   getResult(runId: string): RunResultRecord | undefined;
-  addReview(runId: string, decision: ReviewDecision, note: string | null): Change<RunReviewRecord>;
+  /** 用户的验收或退回；审阅助手的结论带 reviewer（交结论的审阅 Run 与被审的 SHA），每次审阅 Run 只收一份。 */
+  addReview(runId: string, decision: ReviewDecision, note: string | null, reviewer?: { runId: string; commitSha: string | null }): Change<RunReviewRecord>;
+  /** 针对某次工作 Run 的验收与审阅结论，按时间。 */
+  reviewsOfRun(runId: string): RunReviewRecord[];
+  /** 某次审阅 Run 交的结论。 */
+  reviewOf(reviewerRunId: string): RunReviewRecord | undefined;
+  /** 子任务被审阅助手退回过几次（自动返工的轮数）。 */
+  autoReworkCount(subtaskId: string): number;
   runDetails(subtaskId: string): RunDetail[];
   /** 不改变状态、只需让用户知道的情况（未识别的请求、恢复失败、输出截断）。 */
   addNotice(runId: string, code: RunNoticeCode, detail: string): PersistentEvent;

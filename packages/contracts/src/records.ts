@@ -10,6 +10,7 @@ import type {
   RemoteApprovalLevel,
   ReviewDecision,
   RiskLevel,
+  RunPurpose,
   RunStatus,
   SessionKind,
   SubtaskStatus,
@@ -18,7 +19,7 @@ import type {
   WorkspaceAccess,
 } from './states.js';
 import type { RuntimeDiscovery } from './runtime.js';
-import type { PlanDetail } from './plans.js';
+import type { GateStage, PlanDetail } from './plans.js';
 
 /**
  * 跨进程传递的记录形状（存储层 RETURNING 的列与这里一一对应，管理窗口直接显示）。
@@ -72,6 +73,8 @@ export interface SubtaskRecord {
   /** 由计划节点物化出的子任务所属的计划与节点键；P1 / P2 的单子任务为空。 */
   planId: string | null;
   nodeKey: string | null;
+  /** 计划节点在 review 内的闸门阶段（见 GateStage）。 */
+  gateStage: GateStage | null;
   version: number;
   updatedAt: string;
 }
@@ -97,6 +100,8 @@ export interface RunRecord {
   resumesRunId: string | null;
   status: RunStatus;
   failureReason: string | null;
+  /** work：助手做子任务；review：审阅助手在独立会话里审这个子任务的交付。 */
+  purpose: RunPurpose;
   version: number;
   startedAt: string;
   endedAt: string | null;
@@ -129,6 +134,10 @@ export interface RunResultRecord {
   checkDurationMs: number | null;
   /** 数据根 artifacts/ 下的相对路径；输出已脱敏。 */
   checkOutputRef: string | null;
+  /** 计划节点：交付提交到节点分支后的 SHA，检查与审阅都针对它。 */
+  commitSha: string | null;
+  /** 计划节点：越出交付范围的文件（相对 worktree）；null 表示没核对。 */
+  outOfScope: string[] | null;
   collectedAt: string;
 }
 
@@ -137,6 +146,9 @@ export interface RunReviewRecord {
   runId: string;
   decision: ReviewDecision;
   note: string | null;
+  /** 审阅助手给的结论：交结论的审阅 Run；用户自己的决定为 null。 */
+  reviewerRunId: string | null;
+  commitSha: string | null;
   decidedAt: string;
 }
 

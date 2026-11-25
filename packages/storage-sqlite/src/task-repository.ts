@@ -2,6 +2,9 @@ import {
   CodedError,
   type Change,
   type CreatedTask,
+  type GateDecision,
+  type GateStage,
+  type PersistentEvent,
   type NewTask,
   type SessionRecord,
   type SubtaskRecord,
@@ -64,6 +67,14 @@ const SQL = {
     INSERT INTO sessions (id, kind, subtask_id, role, created_at) VALUES (?, 'agent', ?, ?, ?)
     RETURNING ${COLUMNS.session()}`,
   selectSessionBySubtask: `SELECT ${COLUMNS.session()} FROM sessions WHERE subtask_id = ?`,
+  insertLooseSession: `
+    INSERT INTO sessions (id, kind, role, created_at) VALUES (?, 'agent', ?, ?)
+    RETURNING ${COLUMNS.session()}`,
+  // 只在 review 内设置；版本条件保证先到者为准
+  setGateStage: `
+    UPDATE subtasks SET gate_stage = ?, status_reason = ?, version = version + 1, updated_at = ?
+     WHERE id = ? AND version = ? AND status = 'review'
+    RETURNING ${COLUMNS.subtask()}`,
   // 最新 Run 走 UNIQUE (subtask_id, attempt) 索引倒序取一条
   // 两条都按各自的索引倒序取前 N 条（tasks_by_created / subtasks_by_activity）
   listTasks: `
@@ -96,7 +107,7 @@ const TRANSITIONS = {
     select: `SELECT status, version FROM subtasks WHERE id = ?`,
     update: `
       UPDATE subtasks SET status = $to, status_reason = $reason, version = version + 1, updated_at = $at,
-             rework_count = rework_count + $rework
+             rework_count = rework_count + $rework, gate_stage = NULL
        WHERE id = $id AND version = $version
       RETURNING ${COLUMNS.subtask()}`,
   },
@@ -215,6 +226,24 @@ export class TaskRepository implements TaskStorePort {
   /** worktree 只设置一次；之后各次 Run 共用。 */
   setWorktree(subtaskId: string, worktreePath: string, branch: string, baseCommit: string): SubtaskRecord | undefined {
     return this.db.get<SubtaskRecord>(SQL.setWorktree, worktreePath, branch, baseCommit, subtaskId);
+  }
+
+  setGateStage(subtaskId: string, expectedVersion: number, stage: GateStage, decision: GateDecision): Change<SubtaskRecord> {
+    return this.db.transaction(() => {
+      const record = this.db.get<SubtaskRecord>(SQL.setGateStage, stage, decision.reason ?? null, this.clock.iso(), subtaskId, expectedVersion);
+      if (!record) throw new CodedError(this.getSubtask(subtaskId) ? 'conflict' : 'not_found', '子任务不存在、不在待验收或已被修改');
+      return { record, events: [this.gateDecided(subtaskId, decision)] };
+    });
+  }
+
+  gateDecided(subtaskId: string, decision: GateDecision): PersistentEvent {
+    const { stage, outcome, runId, reason } = decision;
+    const payload = reason === undefined ? { stage, outcome, runId } : { stage, outcome, runId, reason: reason.slice(0, 500) };
+    return this.events.append(subtaskId, { type: 'gate.decided', payload });
+  }
+
+  createSession(role: string): SessionRecord {
+    return this.db.get<SessionRecord>(SQL.insertLooseSession, newId('sess'), role, this.clock.iso())!;
   }
 
   transitionTask(id: string, expectedVersion: number, to: TaskStatus, reason?: string): Change<TaskRecord> {
