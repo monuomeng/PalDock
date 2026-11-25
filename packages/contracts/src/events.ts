@@ -13,6 +13,8 @@ import {
   SubtaskStatus,
   RemoteApprovalLevel,
   TaskStatus,
+  AgentRole,
+  Executor,
 } from './states.js';
 
 const Id = z.string().min(1);
@@ -68,6 +70,10 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
   z.object({ type: z.literal('approval.escalated'), payload: z.object({ channels: z.array(ChannelProvider) }) }),
   /** 项目设置（远程审批等级）变更；聚合 ID 为 workspaceId。 */
   z.object({ type: z.literal('workspace.settings_changed'), payload: z.object({ remoteApprovalLevel: RemoteApprovalLevel }) }),
+  /** 角色的默认执行器变更；聚合 ID 为角色名。 */
+  z.object({ type: z.literal('agent.profile_changed'), payload: z.object({ executor: Executor }) }),
+  /** 项目对某个角色的执行器覆盖变更（null 为取消覆盖）；聚合 ID 为 workspaceId。 */
+  z.object({ type: z.literal('workspace.agent_override_changed'), payload: z.object({ role: AgentRole, executor: Executor.nullable() }) }),
   /** 外部入站被拒绝（审计）；聚合 ID 为会话 ID，会话还没建立时为 `provider:account`。 */
   z.object({
     type: z.literal('channel.inbound_rejected'),

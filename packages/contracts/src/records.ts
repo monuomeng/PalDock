@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type {
+  AgentRole,
   ApprovalChannel,
   ApprovalKind,
   ApprovalStatus,
@@ -13,7 +14,10 @@ import type {
   SessionKind,
   SubtaskStatus,
   TaskStatus,
+  Executor,
+  WorkspaceAccess,
 } from './states.js';
+import type { RuntimeDiscovery } from './runtime.js';
 
 /**
  * 跨进程传递的记录形状（存储层 RETURNING 的列与这里一一对应，管理窗口直接显示）。
@@ -188,3 +192,54 @@ export interface TaskDetail {
   runs: RunDetail[];
   actions: TaskActions;
 }
+
+/** 助手角色的设置（agent_profiles）；执行器可按项目覆盖。 */
+export interface AgentProfileRecord {
+  role: AgentRole;
+  displayName: string;
+  description: string;
+  promptVersion: number;
+  executor: Executor;
+  fallbackExecutor: Executor | null;
+  workspaceAccess: WorkspaceAccess;
+  /** 交付范围（glob，相对 worktree）；空表示整个 worktree。能否强制见能力检查，否则只由验收闸门核对。 */
+  deliveryScope: string[];
+  maxRunMinutes: number;
+  maxConcurrency: number;
+  version: number;
+  updatedAt: string;
+}
+
+/** 某个项目对某个角色的执行器覆盖。 */
+export interface AgentOverrideRecord {
+  workspaceId: string;
+  role: AgentRole;
+  executor: Executor;
+}
+
+/** 一次 Run 的用量（主会话 + 子代理合计）。 */
+export interface RunUsageRecord {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number | null;
+}
+
+/** 隔离程度，设置页和派单时原样显示：只读、隔离（实测能限定目录）、不隔离、未验证。 */
+export type Isolation = 'read_only' | 'isolated' | 'not_isolated' | 'unverified';
+
+/** 角色能不能用某个执行器。ok 为 false 时拒绝启动，problems 说明原因；warnings 只提醒。 */
+export interface CapabilityCheck {
+  ok: boolean;
+  isolation: Isolation;
+  problems: string[];
+  warnings: string[];
+}
+
+/** 设置页「助手」：每个角色的设置与当前执行器的能力检查，以及各执行器的发现结果。 */
+export interface AgentSettings {
+  agents: { profile: AgentProfileRecord; check: CapabilityCheck }[];
+  runtimes: RuntimeDiscovery[];
+}
+

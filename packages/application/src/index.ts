@@ -1,3 +1,4 @@
+export * from './agent-service.js';
 export * from './check-runner.js';
 export * from './git.js';
 export * from './prompts.js';

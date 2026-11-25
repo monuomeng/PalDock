@@ -1,5 +1,5 @@
 import type { Server, Socket } from 'node:net';
-import { ChannelService, RunSupervisor, TaskService, type AdapterFactory, type CredentialPort } from '@paldock/application';
+import { AgentService, ChannelService, RunSupervisor, TaskService, type AdapterFactory, type CredentialPort } from '@paldock/application';
 import {
   ClientFrame,
   CodedError,
@@ -14,6 +14,7 @@ import {
 } from '@paldock/contracts';
 import { acquirePidLock, listenIpc, readFrames, serializeFrame, tokensEqual, writeFrame } from '@paldock/platform';
 import { P1_DEFAULTS, type P2Limits } from '@paldock/domain';
+import { ClaudeAdapter } from '@paldock/runtime-claude';
 import { CodexAdapter } from '@paldock/runtime-codex';
 import { openStore, type Store } from '@paldock/storage-sqlite';
 import { createAdapter, systemCredentials } from './channels.js';
@@ -34,8 +35,13 @@ export interface ServiceOptions {
   ipcPath: string;
   token: string;
   log?: (message: string) => void;
-  /** 执行器适配器；缺省为按环境变量 PALDOCK_CODEX_PATH 或 PATH 查找的 Codex。 */
+  /**
+   * 只用这一个执行器（测试、离线模拟）；缺省时 Codex 与 Claude 都接入，各角色按设置选用。
+   * Codex 按 PALDOCK_CODEX_PATH 或 PATH 查找；Claude 按 PALDOCK_CLAUDE_PATH、PATH、常见安装位置和桌面版自带的那份查找。
+   */
   runtime?: RuntimeAdapter;
+  /** 按名字（codex、claude）指定多个执行器（测试用离线模拟），各角色按设置选用；优先于 runtime。 */
+  runtimes?: Record<string, RuntimeAdapter>;
   /** 覆盖占位默认值（测试用）。 */
   limits?: ConstructorParameters<typeof RunSupervisor>[0]['limits'];
   /** 外部渠道的适配器工厂、凭据库与默认值；缺省为飞书/Telegram 适配器与系统凭据库（测试注入假的）。 */
@@ -76,12 +82,16 @@ export class LocalService {
       // 启动时没有任何执行器连接：未结束的 Run 一律中断，由用户在「待我处理」里选择恢复、重新开始或放弃
       const interruptedRuns = store.interruptActiveWork('服务重启').interruptedRuns.length;
       const service = new LocalService(store, token, lock.release, interruptedRuns, log);
-      const runtime =
-        options.runtime ??
-        new CodexAdapter({
-          ...(process.env.PALDOCK_CODEX_PATH ? { configuredPath: process.env.PALDOCK_CODEX_PATH } : {}),
-          cancelWaitMs: P1_DEFAULTS.cancelWaitForTurnMs,
-        });
+      const runtimes: Record<string, RuntimeAdapter> = options.runtimes ??
+        (options.runtime
+        ? { [options.runtime.name]: options.runtime }
+        : {
+            codex: new CodexAdapter({
+              ...(process.env.PALDOCK_CODEX_PATH ? { configuredPath: process.env.PALDOCK_CODEX_PATH } : {}),
+              cancelWaitMs: P1_DEFAULTS.cancelWaitForTurnMs,
+            }),
+            claude: new ClaudeAdapter(process.env.PALDOCK_CLAUDE_PATH ? { configuredPath: process.env.PALDOCK_CLAUDE_PATH } : {}),
+          });
       // 持久事件同时送给管理窗口和外部渠道（从外部建的任务的进度、审批处理结果）
       const publish = (events: PersistentEvent[]) => {
         service.broadcast(events);
@@ -89,7 +99,7 @@ export class LocalService {
       };
       service.supervisor = new RunSupervisor({
         store,
-        runtime,
+        runtimes,
         dataRoot,
         publish,
         publishEphemeral: (event) => service.broadcastEphemeral(event),
@@ -107,11 +117,12 @@ export class LocalService {
         log,
         ...(options.channels?.limits ? { limits: options.channels.limits } : {}),
       });
-      service.handlers = createHandlers(store, tasks, service.channels, {
+      const agents = new AgentService({ store, runtimes, publish });
+      service.handlers = createHandlers(store, tasks, service.channels, agents, {
         version: SERVICE_VERSION,
         startedAt: new Date().toISOString(),
         interruptedRuns,
-        runtime: runtime.name,
+        runtime: Object.keys(runtimes).join(', '),
       });
       service.supervisor.start();
       service.channels.start();

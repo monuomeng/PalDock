@@ -7,8 +7,8 @@ import {
   type ConversationRecord,
   type PairingRecord,
 } from './channels.js';
-import { CheckCommand, type AttentionItem, type MessageRecord, type TaskDetail, type TaskSummary, type WorkspaceRecord } from './records.js';
-import { ApprovalDecision, AttentionKind, RemoteApprovalLevel, ReviewDecision, SCHEMA_VERSION } from './states.js';
+import { CheckCommand, type AgentOverrideRecord, type AgentSettings, type AttentionItem, type MessageRecord, type TaskDetail, type TaskSummary, type WorkspaceRecord } from './records.js';
+import { AgentRole, ApprovalDecision, AttentionKind, Executor, RemoteApprovalLevel, ReviewDecision, SCHEMA_VERSION } from './states.js';
 
 /** 单帧上限；超长帧直接断开，防止本机客户端撑爆内存。 */
 export const MAX_FRAME_BYTES = 1024 * 1024;
@@ -88,6 +88,11 @@ export const CommandArgs = {
   'channel.setAccountStatus': z.object({ accountId: Id, expectedVersion: Version, status: z.enum(['revoked', 'unbound']) }),
   'channel.groups': z.object({}),
   'channel.setGroupAllowed': z.object({ conversationId: Id, expectedVersion: Version, allowed: z.boolean() }),
+  'agent.settings': z.object({}),
+  'agent.setExecutor': z.object({ role: AgentRole, expectedVersion: Version, executor: Executor }),
+  'agent.overrides': z.object({ workspaceId: Id }),
+  /** executor 为 null 时取消该项目对这个角色的覆盖。 */
+  'agent.setOverride': z.object({ workspaceId: Id, role: AgentRole, executor: Executor.nullable() }),
 } as const;
 export type CommandName = keyof typeof CommandArgs;
 export const COMMAND_NAMES = Object.keys(CommandArgs) as [CommandName, ...CommandName[]];
@@ -119,6 +124,10 @@ export interface CommandResults {
   'channel.setAccountStatus': void;
   'channel.groups': ConversationRecord[];
   'channel.setGroupAllowed': void;
+  'agent.settings': AgentSettings;
+  'agent.setExecutor': void;
+  'agent.overrides': AgentOverrideRecord[];
+  'agent.setOverride': void;
 }
 export type CommandResultOf<N extends CommandName> = CommandResults[N];
 

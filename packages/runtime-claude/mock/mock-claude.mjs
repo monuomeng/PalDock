@@ -19,6 +19,7 @@
 // 默认：写入 mock-change.txt，流式输出几段文字后完成。
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
@@ -33,7 +34,8 @@ if (args[0] === 'auth' && args[1] === 'status') {
   process.exit(loggedIn ? 0 : 1);
 }
 
-const home = process.env.CLAUDE_CONFIG_DIR ?? join(process.cwd(), '.mock-claude');
+// 不写进工作目录（那是 worktree，会出现在改动里）
+const home = process.env.CLAUDE_CONFIG_DIR ?? join(tmpdir(), 'paldock-mock-claude');
 const projectDir = join(home, 'projects', 'mock');
 mkdirSync(projectDir, { recursive: true });
 const transcript = (id) => join(projectDir, `${id}.jsonl`);

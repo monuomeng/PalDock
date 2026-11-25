@@ -84,3 +84,18 @@ export type ReviewDecision = z.infer<typeof ReviewDecision>;
 export const SESSION_KINDS = ['main', 'agent'] as const;
 export const SessionKind = z.enum(SESSION_KINDS);
 export type SessionKind = z.infer<typeof SessionKind>;
+
+/** P3 出厂的六个助手角色。 */
+export const AGENT_ROLES = ['coordinator', 'developer', 'tester', 'reviewer', 'docs', 'researcher'] as const;
+export const AgentRole = z.enum(AGENT_ROLES);
+export type AgentRole = z.infer<typeof AgentRole>;
+
+/** 可选的执行器（运行时适配器名）。 */
+export const EXECUTORS = ['codex', 'claude'] as const;
+export const Executor = z.enum(EXECUTORS);
+export type Executor = z.infer<typeof Executor>;
+
+/** 角色对工作区的权限：不碰文件、只读、可写自己的 worktree。 */
+export const WORKSPACE_ACCESS = ['none', 'read', 'worktree_write'] as const;
+export const WorkspaceAccess = z.enum(WORKSPACE_ACCESS);
+export type WorkspaceAccess = z.infer<typeof WorkspaceAccess>;

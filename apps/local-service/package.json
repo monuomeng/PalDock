@@ -11,6 +11,7 @@
     "@paldock/contracts": "workspace:*",
     "@paldock/domain": "workspace:*",
     "@paldock/platform": "workspace:*",
+    "@paldock/runtime-claude": "workspace:*",
     "@paldock/runtime-codex": "workspace:*",
     "@paldock/storage-sqlite": "workspace:*",
     "zod": "4.6.7"

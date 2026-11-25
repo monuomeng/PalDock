@@ -1,4 +1,8 @@
 import type {
+  AgentOverrideRecord,
+  AgentSettings,
+  Executor,
+  Isolation,
   ChannelAccountRecord,
   ChannelOverview,
   ChannelProvider,
@@ -33,13 +37,15 @@ const LEVEL_LABEL: Record<RemoteApprovalLevel, string> = {
  * 凭据只写不读：输入框留空表示不修改，保存后立即清空。
  */
 export async function settingsView(rerender: () => void): Promise<HTMLElement> {
-  const [overview, pairings, accounts, groups, workspaces] = await Promise.all([
+  const [overview, pairings, accounts, groups, workspaces, agents] = await Promise.all([
     call('channel.overview', {}),
     call('channel.pairings', {}),
     call('channel.accounts', {}),
     call('channel.groups', {}),
     call('workspace.list', {}),
+    call('agent.settings', {}),
   ]);
+  const overrides = await Promise.all(workspaces.map((w) => call('agent.overrides', { workspaceId: w.id })));
   const error = h('p', { class: 'error', role: 'alert' });
   /** 执行一个修改，失败时显示原因；成功后重绘（拒绝配对等操作不产生事件）。 */
   const act = (run: () => Promise<unknown>) => async () => {
@@ -57,6 +63,7 @@ export async function settingsView(rerender: () => void): Promise<HTMLElement> {
     { 'aria-labelledby': 'settings-title' },
     h('h2', { id: 'settings-title' }, '设置'),
     error,
+    agentSection(agents, workspaces, overrides, act),
     h('h3', {}, '外部渠道'),
     h('p', { class: 'hint' }, '凭据保存在系统凭据库（Windows 凭据管理器 / macOS 钥匙串），不会显示或写入日志。'),
     ...overview.map((item) => channelForm(item, act)),
@@ -68,6 +75,100 @@ export async function settingsView(rerender: () => void): Promise<HTMLElement> {
 }
 
 type Act = (run: () => Promise<unknown>) => () => Promise<void>;
+
+const EXECUTOR_LABEL: Record<Executor, string> = { codex: 'Codex', claude: 'Claude Code' };
+const ISOLATION_LABEL: Record<Isolation, string> = { read_only: '只读', isolated: '隔离', not_isolated: '不隔离', unverified: '未验证' };
+const SOURCE_LABEL: Record<string, string> = {
+  configured: '设置里的路径',
+  path: 'PATH',
+  'npm-shim': 'npm 全局安装',
+  standalone: '独立安装',
+  'desktop-bundled': 'Claude 桌面版自带',
+};
+
+const executorSelect = (label: string, current: Executor | '', withDefault: boolean, onPick: (value: Executor | null) => void) => {
+  const select = h(
+    'select',
+    { 'aria-label': label },
+    ...(withDefault ? [h('option', { value: '', selected: current === '' }, '跟随默认')] : []),
+    ...(['claude', 'codex'] as const).map((e) => h('option', { value: e, selected: e === current }, EXECUTOR_LABEL[e])),
+  );
+  select.addEventListener('change', () => onPick((select.value || null) as Executor | null));
+  return select;
+};
+
+/**
+ * 助手：每个角色的默认执行器、能力检查（隔离程度、不能启动的原因），各执行器是否可用，以及按项目覆盖执行器。
+ * 「不隔离」是 Windows 实测的结论：可写角色获批的命令能写到 worktree 以外，交付范围只在验收时核对。
+ */
+function agentSection({ agents, runtimes }: AgentSettings, workspaces: WorkspaceRecord[], overrides: AgentOverrideRecord[][], act: Act): HTMLElement {
+  return h(
+    'div',
+    {},
+    h('h3', {}, '助手'),
+    h(
+      'dl',
+      { class: 'facts' },
+      ...runtimes.flatMap((d) => [
+        h('dt', {}, EXECUTOR_LABEL[d.runtime as Executor] ?? d.runtime),
+        h(
+          'dd',
+          { title: d.executable?.path ?? '' },
+          d.available
+            ? `可用 ${d.version ?? ''}${d.executable ? `（${SOURCE_LABEL[d.executable.source] ?? d.executable.source}）` : ''}`
+            : `不可用：${d.reason ?? '原因未知'}`,
+        ),
+      ]),
+    ),
+    h(
+      'table',
+      { class: 'agents' },
+      h('thead', {}, h('tr', {}, h('th', {}, '角色'), h('th', {}, '执行器'), h('th', {}, '隔离'), h('th', {}, '检查'))),
+      h(
+        'tbody',
+        {},
+        ...agents.map(({ profile, check }) =>
+          h(
+            'tr',
+            {},
+            h('td', { title: profile.description }, profile.displayName),
+            h(
+              'td',
+              {},
+              executorSelect(`${profile.displayName}的执行器`, profile.executor, false, (executor) =>
+                void act(() => call('agent.setExecutor', { role: profile.role, expectedVersion: profile.version, executor: executor! }))(),
+              ),
+            ),
+            h('td', { class: `isolation ${check.isolation}` }, ISOLATION_LABEL[check.isolation]),
+            h('td', {}, check.ok ? [...check.warnings].join('；') || '通过' : `不能启动：${check.problems.join('；')}`),
+          ),
+        ),
+      ),
+    ),
+    ...workspaces.map((w, i) => {
+      const byRole = new Map((overrides[i] ?? []).map((o) => [o.role, o.executor]));
+      return h(
+        'details',
+        {},
+        h('summary', {}, `「${w.name}」的执行器覆盖（${byRole.size} 项）`),
+        h(
+          'dl',
+          { class: 'facts' },
+          ...agents.flatMap(({ profile }) => [
+            h('dt', {}, profile.displayName),
+            h(
+              'dd',
+              {},
+              executorSelect(`${w.name} 里${profile.displayName}的执行器`, byRole.get(profile.role) ?? '', true, (executor) =>
+                void act(() => call('agent.setOverride', { workspaceId: w.id, role: profile.role, executor }))(),
+              ),
+            ),
+          ]),
+        ),
+      );
+    }),
+  );
+}
 
 function channelForm({ settings, status, appId, recentlyRecovered }: ChannelOverview, act: Act): HTMLElement {
   const { provider } = settings;

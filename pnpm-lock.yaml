@@ -63,6 +63,9 @@ importers:
       '@paldock/platform':
         specifier: workspace:*
         version: link:../../packages/platform
+      '@paldock/runtime-claude':
+        specifier: workspace:*
+        version: link:../../packages/runtime-claude
       '@paldock/runtime-codex':
         specifier: workspace:*
         version: link:../../packages/runtime-codex

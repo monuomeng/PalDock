@@ -18,6 +18,7 @@ import type {
   RunResultRecord,
   RunReviewRecord,
   RunStatus,
+  RunUsageRecord,
 } from '@paldock/contracts';
 import { approvalMachine, runMachine } from '@paldock/domain';
 import type { Clock } from './clock.js';
@@ -74,6 +75,11 @@ const SQL = {
     SELECT ${COLUMNS.approval('x.')} FROM runs r JOIN approvals x ON x.run_id = r.id WHERE r.subtask_id = ? ORDER BY x.requested_at`,
   messagesOfSubtask: `
     SELECT ${COLUMNS.message('x.')} FROM runs r JOIN messages x ON x.run_id = r.id WHERE r.subtask_id = ? ORDER BY x.id`,
+  // 用量只写一次：input_tokens 为空才写
+  setUsage: `
+    UPDATE runs SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_write_tokens = ?, cost_usd = ?
+     WHERE id = ? AND input_tokens IS NULL`,
+  selectUsage: `SELECT ${COLUMNS.usage()} FROM runs WHERE id = ? AND input_tokens IS NOT NULL`,
 } as const;
 
 const TRANSITIONS = {
@@ -241,6 +247,14 @@ export class RunRepository implements RunStorePort {
       type: 'review.decided',
       payload: { decision },
     }));
+  }
+
+  recordUsage(runId: string, u: RunUsageRecord): void {
+    this.db.run(SQL.setUsage, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, u.costUsd, runId);
+  }
+
+  getUsage(runId: string): RunUsageRecord | undefined {
+    return this.db.get<RunUsageRecord>(SQL.selectUsage, runId);
   }
 
   addNotice(runId: string, code: RunNoticeCode, detail: string): PersistentEvent {

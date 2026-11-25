@@ -100,3 +100,9 @@ label.inline { display: inline; font-weight: normal; margin: 0; }
 .code { font-family: ui-monospace, Consolas, monospace; letter-spacing: 2px; }
 .channel-connected, .account-active { color: var(--ok); }
 .channel-error, .channel-reconnecting, .account-revoked { color: var(--danger); }
+
+/* 设置 → 助手 */
+table.agents { border-collapse: collapse; margin: 8px 0 12px; width: 100%; }
+table.agents th, table.agents td { padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.isolation.not_isolated, .isolation.unverified { color: var(--warn-fg); background: var(--warn-bg); font-weight: 600; }
+.isolation.read_only, .isolation.isolated { color: var(--ok); }

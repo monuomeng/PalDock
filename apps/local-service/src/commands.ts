@@ -1,4 +1,4 @@
-import type { ChannelService, TaskService } from '@paldock/application';
+import type { AgentService, ChannelService, TaskService } from '@paldock/application';
 import type { CommandArgs, CommandName, CommandResultOf } from '@paldock/contracts';
 import type { Store } from '@paldock/storage-sqlite';
 import type { z } from 'zod';
@@ -11,7 +11,7 @@ export type Handlers = {
 export type ServiceInfo = CommandResultOf<'service.status'>;
 
 /** 命令 → 用例的映射。每个处理函数只做参数到用例调用的转换，不含业务规则。 */
-export function createHandlers(store: Store, tasks: TaskService, channels: ChannelService, info: ServiceInfo): Handlers {
+export function createHandlers(store: Store, tasks: TaskService, channels: ChannelService, agents: AgentService, info: ServiceInfo): Handlers {
   return {
     'service.status': () => info,
     'task.create': ({ rootPath, goal, check, checkConfirmed, idempotencyKey, continuedFromTaskId }) =>
@@ -46,5 +46,9 @@ export function createHandlers(store: Store, tasks: TaskService, channels: Chann
     'channel.setAccountStatus': ({ accountId, expectedVersion, status }) => channels.setAccountStatus(accountId, expectedVersion, status),
     'channel.groups': () => channels.listGroups(),
     'channel.setGroupAllowed': ({ conversationId, expectedVersion, allowed }) => channels.setGroupAllowed(conversationId, expectedVersion, allowed),
+    'agent.settings': () => agents.settings(),
+    'agent.setExecutor': ({ role, expectedVersion, executor }) => agents.setExecutor(role, expectedVersion, executor),
+    'agent.overrides': ({ workspaceId }) => agents.overrides(workspaceId),
+    'agent.setOverride': ({ workspaceId, role, executor }) => agents.setOverride(workspaceId, role, executor),
   };
 }

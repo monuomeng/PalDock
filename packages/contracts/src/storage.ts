@@ -13,6 +13,9 @@ import type {
 } from './channels.js';
 import type { PersistentEvent, RunNoticeCode } from './events.js';
 import type {
+  AgentOverrideRecord,
+  AgentProfileRecord,
+  RunUsageRecord,
   ApprovalRecord,
   AttentionItem,
   CheckCommand,
@@ -28,6 +31,8 @@ import type {
   WorkspaceRecord,
 } from './records.js';
 import type {
+  AgentRole,
+  Executor,
   ApprovalChannel,
   ApprovalKind,
   ApprovalStatus,
@@ -146,6 +151,21 @@ export interface RunStorePort {
   runDetails(subtaskId: string): RunDetail[];
   /** 不改变状态、只需让用户知道的情况（未识别的请求、恢复失败、输出截断）。 */
   addNotice(runId: string, code: RunNoticeCode, detail: string): PersistentEvent;
+  /** Run 结束时记下用量（只写一次）；执行器不报告时不调用。 */
+  recordUsage(runId: string, usage: RunUsageRecord): void;
+  getUsage(runId: string): RunUsageRecord | undefined;
+}
+
+/** 助手角色设置与按项目的执行器覆盖。 */
+export interface AgentStorePort {
+  listProfiles(): AgentProfileRecord[];
+  getProfile(role: AgentRole): AgentProfileRecord | undefined;
+  setExecutor(role: AgentRole, expectedVersion: number, executor: Executor): Change<AgentProfileRecord>;
+  listOverrides(workspaceId: string): AgentOverrideRecord[];
+  /** executor 为 null 时取消覆盖。 */
+  setOverride(workspaceId: string, role: AgentRole, executor: Executor | null): Change<AgentOverrideRecord | null>;
+  /** 角色在某个项目里实际用的执行器：项目覆盖优先，否则角色默认。 */
+  resolveExecutor(workspaceId: string, role: AgentRole): Executor | undefined;
 }
 
 export interface NewChannelAction {
@@ -235,6 +255,7 @@ export interface InboxPort {
 export interface StorePort {
   tasks: TaskStorePort;
   runs: RunStorePort;
+  agents: AgentStorePort;
   messages: { append(sessionId: string, role: MessageRole, body: string, runId?: string | null): Change<MessageRecord> };
   attention: { list(): AttentionItem[]; markRead(kind: AttentionKind, itemId: string): void };
   channels: ChannelStorePort;

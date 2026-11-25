@@ -57,6 +57,16 @@ export const COLUMNS = {
      status, expires_at AS expiresAt`,
   ),
   settings: cols(`provider, enabled, proxy_url AS proxyUrl, version`),
+  agentProfile: cols(
+    `role, display_name AS displayName, description, prompt_version AS promptVersion, executor,
+     fallback_executor AS fallbackExecutor, workspace_access AS workspaceAccess, delivery_scope AS deliveryScope,
+     max_run_minutes AS maxRunMinutes, max_concurrency AS maxConcurrency, version, updated_at AS updatedAt`,
+  ),
+  agentOverride: cols(`workspace_id AS workspaceId, role, executor`),
+  usage: cols(
+    `input_tokens AS inputTokens, output_tokens AS outputTokens, cache_read_tokens AS cacheReadTokens,
+     cache_write_tokens AS cacheWriteTokens, cost_usd AS costUsd`,
+  ),
   outbox: cols(`id, channel AS provider, target AS conversationId, subject, payload, attempts`),
 } as const;
 

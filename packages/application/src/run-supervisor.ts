@@ -1,6 +1,9 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { AgentRole } from '@paldock/contracts';
 import type {
+  Executor,
+  WorkspaceAccess,
   ApprovalDecision,
   ApprovalRecord,
   EphemeralEvent,
@@ -19,7 +22,7 @@ import type {
   TaskRecord,
   TurnCheck,
 } from '@paldock/contracts';
-import { P1_DEFAULTS, taskKey } from '@paldock/domain';
+import { checkCapability, P1_DEFAULTS, taskKey } from '@paldock/domain';
 import { runCheck } from './check-runner.js';
 import { addWorktree, branchCommit, headCommit, stageAndDiffStat } from './git.js';
 import { redact } from './redact.js';
@@ -30,7 +33,11 @@ export type Limits = typeof P1_DEFAULTS;
 
 export interface SupervisorDeps {
   store: StorePort;
-  runtime: RuntimeAdapter;
+  /**
+   * 各执行器的适配器，按名字（codex、claude）索引。子任务按角色在项目里的执行器选用（项目覆盖优先），
+   * 启动前做能力检查；只有一个适配器时（测试、离线模拟）所有角色都用它，不做检查。
+   */
+  runtimes: Readonly<Record<string, RuntimeAdapter>>;
   dataRoot: string;
   publish(events: PersistentEvent[]): void;
   publishEphemeral(event: EphemeralEvent): void;
@@ -171,27 +178,61 @@ export class RunSupervisor {
     return change.events;
   }
 
+  /** 按名字取适配器；记录里的执行器已不在（例如改了配置）时返回 undefined。 */
+  private adapter(name: string): RuntimeAdapter | undefined {
+    const adapters = Object.values(this.deps.runtimes);
+    return adapters.length === 1 ? adapters[0] : this.deps.runtimes[name];
+  }
+
+  /**
+   * 子任务用哪个执行器：角色在项目里的执行器（项目覆盖优先）。只有一个适配器时直接用它。
+   * 角色不在设置里（旧数据）时退回开发助手的设置。
+   */
+  private executorOf(subtask: SubtaskRecord, task: TaskRecord): { name: string; access?: WorkspaceAccess; label: string } {
+    const adapters = Object.values(this.deps.runtimes);
+    if (adapters.length === 1) return { name: adapters[0]!.name, label: subtask.role };
+    const parsed = AgentRole.safeParse(subtask.role);
+    const role = parsed.success ? parsed.data : 'developer';
+    const profile = this.deps.store.agents.getProfile(role)!;
+    const name = this.deps.store.agents.resolveExecutor(task.workspaceId, role) ?? profile.executor;
+    return { name, access: profile.workspaceAccess, label: profile.displayName };
+  }
+
+  /** 启动前的能力检查（只在多执行器时做）；不满足时抛出原因，按启动失败处理。 */
+  private async readyRuntime(executor: { name: string; access?: WorkspaceAccess; label: string }): Promise<RuntimeAdapter> {
+    const runtime = this.adapter(executor.name);
+    if (!runtime) throw new Error(`没有名为 ${executor.name} 的执行器`);
+    if (!executor.access) return runtime;
+    const check = checkCapability(executor.access, executor.name as Executor, await runtime.discover());
+    if (!check.ok) throw new Error(`${executor.label}不能用 ${executor.name}：${check.problems.join('；')}`);
+    return runtime;
+  }
+
   private async launch(subtaskId: string, plan: RunPlan): Promise<void> {
     const { store } = this.deps;
     const session = store.tasks.getSessionOfSubtask(subtaskId);
     if (!session) return this.deps.log(`subtask ${subtaskId} 没有会话`);
+    let executor!: ReturnType<RunSupervisor['executorOf']>;
     const live = store.transaction(() => {
       const moved = moveSubtask(store, subtaskId, 'running');
       const taskEvents = moveTask(store, moved.record.taskId, 'running');
+      const task = store.tasks.getTask(moved.record.taskId)!;
+      executor = this.executorOf(moved.record, task);
       const run = store.runs.createRun({
         subtaskId,
         sessionId: session.id,
-        runtime: this.deps.runtime.name,
+        runtime: executor.name,
         ...(plan.threadId ? { nativeThreadId: plan.threadId } : {}),
         ...(plan.resumesRunId ? { resumesRunId: plan.resumesRunId } : {}),
       });
       this.publish([...moved.events, ...taskEvents, ...run.events]);
-      return this.track(run.record, moved.record, store.tasks.getTask(moved.record.taskId)!);
+      return this.track(run.record, moved.record, task);
     });
 
     try {
+      const runtime = await this.readyRuntime(executor);
       live.worktree = await this.ensureWorktree(live);
-      live.handle = await this.deps.runtime.start(
+      live.handle = await runtime.start(
         { runId: live.run.id, cwd: live.worktree, prompt: plan.prompt, ...(plan.threadId ? { resumeThreadId: plan.threadId } : {}) },
         (event) => this.onEvent(live, event),
       );
@@ -288,8 +329,10 @@ export class RunSupervisor {
       case 'notice':
         return this.publish([store.runs.addNotice(live.run.id, event.code, event.detail)]);
       case 'completed':
+        if (event.usage) store.runs.recordUsage(live.run.id, { ...event.usage, costUsd: event.usage.costUsd ?? null });
         return this.background(this.finishSucceeded(live, event.finalMessage));
       case 'failed':
+        if (event.usage) store.runs.recordUsage(live.run.id, { ...event.usage, costUsd: event.usage.costUsd ?? null });
         return this.finishFailed(live, `执行失败：${event.message}`);
       case 'interrupted':
         return this.finishInterrupted(live, '执行被中断');
@@ -460,11 +503,13 @@ export class RunSupervisor {
   }
 
   /** 按 thread + turn 核对，in_progress / not_found 时按间隔重试；没有 turn ID 直接视为无法确认。 */
-  private async pollTurn({ nativeThreadId: threadId, nativeTurnId: turnId }: RunRecord): Promise<TurnCheck> {
+  private async pollTurn(run: RunRecord): Promise<TurnCheck> {
+    const { nativeThreadId: threadId, nativeTurnId: turnId } = run;
     let check: TurnCheck = { status: 'not_found' };
     for (let attempt = 0; threadId && turnId && attempt < this.limits.confirmAttempts && !this.stopping; attempt++) {
       if (attempt > 0) await sleep(this.limits.confirmIntervalMs);
-      check = await this.deps.runtime.checkTurn(threadId, turnId).catch((): TurnCheck => ({ status: 'not_found' }));
+      const adapter = this.adapter(run.runtime);
+      check = adapter ? await adapter.checkTurn(threadId, turnId).catch((): TurnCheck => ({ status: 'not_found' })) : check;
       if (check.status !== 'in_progress' && check.status !== 'not_found') break;
     }
     return check;
