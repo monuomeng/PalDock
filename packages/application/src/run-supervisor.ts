@@ -335,8 +335,17 @@ export class RunSupervisor {
     return path;
   }
 
-  /** 新任务从项目 HEAD 出发；接续的任务从来源任务的分支出发（包含它提交的改动）。 */
+  /**
+   * 新任务从项目 HEAD 出发；接续的任务从来源任务的分支出发（包含它提交的改动）；
+   * 按计划拆分的任务从集成分支当时的最新提交出发（上游合进去的改动下游都看得到）。
+   */
   private async worktreeBase(task: TaskRecord, repo: string): Promise<string> {
+    const integration = task.integrationBranch;
+    if (integration) {
+      return branchCommit(repo, integration).catch(() => {
+        throw new Error(`任务集成分支 ${integration} 已不存在（可能已被删除），无法创建 worktree`);
+      });
+    }
     const source = task.continuedFromTaskId ? this.deps.store.tasks.getSubtaskOfTask(task.continuedFromTaskId) : undefined;
     if (!source?.branch) {
       return headCommit(repo).catch(() => {

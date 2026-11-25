@@ -19,7 +19,9 @@ export const COLUMNS = {
   task: cols(
     `id, workspace_id AS workspaceId, title, goal, status, check_command AS checkCommand,
      check_confirmed_at AS checkConfirmedAt, origin_conversation_id AS originConversationId,
-     continued_from_task_id AS continuedFromTaskId, version, created_at AS createdAt, updated_at AS updatedAt`,
+     continued_from_task_id AS continuedFromTaskId, integration_branch AS integrationBranch,
+     integration_worktree AS integrationWorktree, integration_base AS integrationBase,
+     version, created_at AS createdAt, updated_at AS updatedAt`,
   ),
   subtask: cols(
     `id, task_id AS taskId, role, goal, status, status_reason AS statusReason, rework_count AS reworkCount,
@@ -69,6 +71,10 @@ export const COLUMNS = {
      version, created_at AS createdAt, decided_at AS decidedAt`,
   ),
   planNode: cols(`plan_id AS planId, position, node_key AS key, role, title, goal, paths, depends_on AS dependsOn, check_command AS checkCommand`),
+  merge: cols(
+    `id, task_id AS taskId, subtask_id AS subtaskId, source_sha AS sourceSha, target_old AS targetOld,
+     candidate_sha AS candidateSha, phase, conflict_files AS conflictFiles, detail, created_at AS createdAt, updated_at AS updatedAt`,
+  ),
   handoff: cols(`run_id AS runId, summary, notes, submitted_at AS submittedAt`),
   usage: cols(
     `input_tokens AS inputTokens, output_tokens AS outputTokens, cache_read_tokens AS cacheReadTokens,

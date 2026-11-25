@@ -38,7 +38,7 @@ export function planNodePrompt(task: { goal: string }, node: { title: string; go
   if (node.paths.length > 0) parts.push(`相关路径：\n${node.paths.map((p) => `- ${p}`).join('\n')}`);
   if (upstream.length > 0) {
     const lines = upstream.map((u) => `- ${u.title}：${u.summary ? u.summary.slice(0, 2000) : '（没有交接说明）'}`);
-    parts.push(`上游子任务已经完成（它们的改动不在你的工作目录里，等任务集成分支上线后才会合到一起）：\n${lines.join('\n')}`);
+    parts.push(`上游子任务已经完成，它们的改动已合进任务集成分支，你的工作目录从那里出发：\n${lines.join('\n')}`);
   }
   parts.push(`整个任务的目标（背景）：\n${task.goal}`);
   return `${parts.join('\n\n')}\n\n${FRAME}`;
@@ -76,6 +76,15 @@ export function reviewPrompt(node: { title: string; goal: string; paths: readonl
 /** 审阅助手退回：回到开发助手同一个会话、同一个 worktree，按审阅意见接着改。 */
 export function reviewReworkPrompt(goal: string, reason: string): string {
   return `审阅助手退回了你的交付，意见：\n${reason}\n\n子任务的目标：\n${goal}\n\n${FRAME}`;
+}
+
+/** 合入集成分支失败交回重做：工作目录里已经合进集成分支的最新提交，冲突文件带冲突标记。 */
+export function mergeRedoPrompt(goal: string, conflicts: readonly string[], detail: string | null): string {
+  const what =
+    conflicts.length > 0
+      ? `你的交付和任务集成分支上其他子任务的改动冲突。工作目录里已经合入集成分支的最新提交，下面这些文件带着冲突标记，请解决冲突并保留双方的意图：\n${conflicts.map((f) => `- ${f}`).join('\n')}`
+      : `你的交付合进任务集成分支后检查没通过${detail ? `（${detail}）` : ''}。工作目录里已经合入集成分支的最新提交，请修好。`;
+  return `${what}\n\n子任务的目标：\n${goal}\n\n${FRAME}`;
 }
 
 export function resumePrompt(goal: string): string {

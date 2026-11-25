@@ -1,10 +1,13 @@
 import { CodedError, type McpToolArgs, type PersistentEvent, type PlanRecord, type StorePort } from '@paldock/contracts';
 import { validatePlan } from '@paldock/domain';
+import type { IntegrationService } from './integration.js';
 import type { TaskGraphScheduler } from './task-graph-scheduler.js';
 
 export interface PlanServiceDeps {
   store: StorePort;
   scheduler: TaskGraphScheduler;
+  /** 确认时建任务集成分支；缺省时（测试）不建，节点从项目 HEAD 出发、通过即成功。 */
+  integration?: IntegrationService;
   publish(events: PersistentEvent[]): void;
 }
 
@@ -40,12 +43,17 @@ export class PlanService {
     return record;
   }
 
-  /** 确认后按节点建子任务，没有依赖的立即交给监管器。 */
-  confirm(planId: string, expectedVersion: number): void {
+  /**
+   * 确认后建任务集成分支（从项目当前 HEAD），按节点建子任务，没有依赖的立即交给监管器。
+   * 集成分支先建：确认因版本冲突失败时分支留着，下次确认复用。
+   */
+  async confirm(planId: string, expectedVersion: number): Promise<void> {
     const { store } = this.deps;
     const plan = store.plans.getPlan(planId);
     if (!plan) throw new CodedError('not_found', '计划不存在');
+    if (plan.version !== expectedVersion || plan.status !== 'proposed') throw new CodedError('conflict', '计划已被修改或已处理，请刷新');
     validatePlan(store.plans.nodes(planId), this.specialistRoles());
+    if (this.deps.integration) await this.deps.integration.ensureBranch(store.tasks.getTask(plan.taskId)!);
     const { record: subtasks, events } = store.plans.confirm(planId, expectedVersion);
     this.deps.publish(events);
     for (const subtask of subtasks) if (subtask.status === 'queued') this.deps.scheduler.dispatch(subtask.id);

@@ -67,6 +67,14 @@ const SQL = {
     INSERT INTO sessions (id, kind, subtask_id, role, created_at) VALUES (?, 'agent', ?, ?, ?)
     RETURNING ${COLUMNS.session()}`,
   selectSessionBySubtask: `SELECT ${COLUMNS.session()} FROM sessions WHERE subtask_id = ?`,
+  // 集成分支只写一次
+  setIntegration: `
+    UPDATE tasks SET integration_branch = ?2, integration_worktree = ?3, integration_base = ?4, version = version + 1
+     WHERE id = ?1 AND integration_branch IS NULL
+    RETURNING ${COLUMNS.task()}`,
+  rebaseSubtask: `
+    UPDATE subtasks SET base_commit = ?3, version = version + 1 WHERE id = ?1 AND version = ?2
+    RETURNING ${COLUMNS.subtask()}`,
   insertLooseSession: `
     INSERT INTO sessions (id, kind, role, created_at) VALUES (?, 'agent', ?, ?)
     RETURNING ${COLUMNS.session()}`,
@@ -240,6 +248,17 @@ export class TaskRepository implements TaskStorePort {
     const { stage, outcome, runId, reason } = decision;
     const payload = reason === undefined ? { stage, outcome, runId } : { stage, outcome, runId, reason: reason.slice(0, 500) };
     return this.events.append(subtaskId, { type: 'gate.decided', payload });
+  }
+
+  setIntegration(taskId: string, branch: string, worktree: string, base: string): TaskRecord | undefined {
+    const row = this.db.get<TaskRow>(SQL.setIntegration, taskId, branch, worktree, base);
+    return row && toTask(row);
+  }
+
+  rebaseSubtask(subtaskId: string, expectedVersion: number, baseCommit: string): SubtaskRecord {
+    const record = this.db.get<SubtaskRecord>(SQL.rebaseSubtask, subtaskId, expectedVersion, baseCommit);
+    if (!record) throw new CodedError(this.getSubtask(subtaskId) ? 'conflict' : 'not_found', '子任务不存在或已被修改');
+    return record;
   }
 
   createSession(role: string): SessionRecord {

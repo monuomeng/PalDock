@@ -53,6 +53,10 @@ export interface TaskRecord {
   originConversationId: string | null;
   /** 接续自哪个已结束的任务（worktree 从它的分支出发）。 */
   continuedFromTaskId: string | null;
+  /** 按计划拆分的任务：集成分支、它的 worktree 和起点（计划确认时从项目 HEAD 建）。 */
+  integrationBranch: string | null;
+  integrationWorktree: string | null;
+  integrationBase: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;

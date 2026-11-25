@@ -10,6 +10,7 @@ import { agentProfilesSchema } from './005-agent-profiles.js';
 import { mcpBridgeSchema } from './006-mcp-bridge.js';
 import { taskGraphSchema } from './007-task-graph.js';
 import { reviewGateSchema } from './008-review-gate.js';
+import { integrationBranchSchema } from './009-integration-branch.js';
 
 export interface Migration {
   version: number;
@@ -27,6 +28,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 6, name: 'mcp-bridge', sql: mcpBridgeSchema },
   { version: 7, name: 'task-graph', sql: taskGraphSchema },
   { version: 8, name: 'review-gate', sql: reviewGateSchema },
+  { version: 9, name: 'integration-branch', sql: integrationBranchSchema },
 ];
 
 export interface MigrateResult {

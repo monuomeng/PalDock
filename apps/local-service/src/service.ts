@@ -1,6 +1,6 @@
 import type { Server, Socket } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { AgentService, ChannelService, McpGateway, PlanService, ReviewGate, RunSupervisor, TaskGraphScheduler, TaskService, type McpCaller, type AdapterFactory, type CredentialPort } from '@paldock/application';
+import { AgentService, ChannelService, IntegrationService, McpGateway, PlanService, ReviewGate, RunSupervisor, TaskGraphScheduler, TaskService, type McpCaller, type AdapterFactory, type CredentialPort } from '@paldock/application';
 import {
   ClientFrame,
   CodedError,
@@ -71,6 +71,7 @@ export class LocalService {
   private mcp!: McpGateway;
   private scheduler!: TaskGraphScheduler;
   private gate!: ReviewGate;
+  private integration!: IntegrationService;
 
   private constructor(
     private readonly store: Store,
@@ -130,9 +131,12 @@ export class LocalService {
         ...(options.limits ? { limits: options.limits } : {}),
       });
       service.scheduler = new TaskGraphScheduler({ store, supervisor: service.supervisor, publish, log });
-      service.gate = new ReviewGate({ store, supervisor: service.supervisor, publish, log, ...(options.limits ? { limits: options.limits } : {}) });
-      plans = new PlanService({ store, scheduler: service.scheduler, publish });
-      const tasks = new TaskService({ store, supervisor: service.supervisor, scheduler: service.scheduler, dataRoot, publish });
+      const limits = options.limits ? { limits: options.limits } : {};
+      const integration = new IntegrationService({ store, supervisor: service.supervisor, dataRoot, publish, log, ...limits });
+      service.integration = integration;
+      service.gate = new ReviewGate({ store, supervisor: service.supervisor, publish, log, integration, ...limits });
+      plans = new PlanService({ store, scheduler: service.scheduler, integration, publish });
+      const tasks = new TaskService({ store, supervisor: service.supervisor, scheduler: service.scheduler, integration, dataRoot, publish });
       service.channels = new ChannelService({
         store,
         tasks,
@@ -144,7 +148,7 @@ export class LocalService {
         ...(options.channels?.limits ? { limits: options.channels.limits } : {}),
       });
       const agents = new AgentService({ store, runtimes, publish });
-      service.handlers = createHandlers(store, tasks, plans, service.channels, agents, {
+      service.handlers = createHandlers(store, tasks, plans, integration, service.channels, agents, {
         version: SERVICE_VERSION,
         startedAt: new Date().toISOString(),
         interruptedRuns,
@@ -274,6 +278,7 @@ export class LocalService {
   async stop(): Promise<void> {
     await this.channels.stop();
     await this.supervisor.stop();
+    await this.integration.idle();
     this.broadcast(this.store.interruptActiveWork('应用退出').events);
     for (const client of this.clients) client.end();
     await new Promise<void>((resolve) => (this.server ? this.server.close(() => resolve()) : resolve()));

@@ -58,6 +58,25 @@ export const GATE_STAGES = ['review', 'human'] as const;
 export const GateStage = z.enum(GATE_STAGES);
 export type GateStage = z.infer<typeof GateStage>;
 
+export const MERGE_PHASES = ['started', 'candidate', 'done', 'conflict', 'check_failed'] as const;
+export const MergePhase = z.enum(MERGE_PHASES);
+export type MergePhase = z.infer<typeof MergePhase>;
+
+/** 把一个节点合进任务集成分支的一次操作（先写后做，重启时据此恢复）。 */
+export interface MergeOpRecord {
+  id: string;
+  taskId: string;
+  subtaskId: string;
+  sourceSha: string;
+  targetOld: string;
+  candidateSha: string | null;
+  phase: MergePhase;
+  conflictFiles: string[] | null;
+  detail: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** 节点最近一次交付的闸门情况：检查（SHA、检查结果、越界文件）和各轮审阅结论。 */
 export interface NodeGateView {
   result: RunResultRecord | null;
@@ -70,6 +89,8 @@ export interface PlanNodeView {
   subtask: SubtaskRecord | null;
   actions: TaskActions | null;
   gate: NodeGateView | null;
+  /** 最近一次合并进集成分支的操作；冲突时桌面据此给出「交回重做」和「重试合并」。 */
+  merge: MergeOpRecord | null;
 }
 
 export interface PlanDetail {

@@ -24,6 +24,7 @@ import { isInside, isSystemDirectory, samePath } from '@paldock/platform';
 import { commitStaged, headCommit, repositoryRoot } from './git.js';
 import { continuationPrompt, firstRunPrompt, nextStepPrompt, resumePrompt, titleOf } from './prompts.js';
 import type { RunSupervisor } from './run-supervisor.js';
+import type { IntegrationService } from './integration.js';
 import type { TaskGraphScheduler } from './task-graph-scheduler.js';
 import { requireSubtask, settleTask } from './transitions.js';
 
@@ -45,6 +46,8 @@ export interface TaskServiceDeps {
   supervisor: RunSupervisor;
   /** 计划子任务重新开始时用节点的提示词；缺省时（测试）按任务目标。 */
   scheduler?: TaskGraphScheduler;
+  /** 计划节点人工通过时合进任务集成分支；缺省时（测试）直接成功。 */
+  integration?: IntegrationService;
   dataRoot: string;
   publish(events: PersistentEvent[]): void;
 }
@@ -213,10 +216,11 @@ export class TaskService {
       plan,
       nodes: this.store.plans.nodes(plan.id).map((node) => {
         const subtask = subtasks.get(node.key) ?? null;
-        if (!subtask) return { node, subtask, actions: null, gate: null };
+        if (!subtask) return { node, subtask, actions: null, gate: null, merge: null };
         const latest = this.store.runs.latestRun(subtask.id);
         const gate = latest ? { result: this.store.runs.getResult(latest.id) ?? null, reviews: this.store.runs.reviewsOfRun(latest.id) } : null;
-        return { node, subtask, actions: actionsOf(subtask, latest, this.deps.supervisor.isActive(subtask.id)), gate };
+        const merge = this.store.merges.latestOf(subtask.id) ?? null;
+        return { node, subtask, actions: actionsOf(subtask, latest, this.deps.supervisor.isActive(subtask.id)), gate, merge };
       }),
       actions: { confirm: pending, reject: pending },
     };
@@ -288,6 +292,11 @@ export class TaskService {
     const run = this.store.runs.latestRun(subtaskId)!;
     const task = this.store.tasks.getTask(subtask.taskId)!;
 
+    // 计划节点人工通过（或冲突处理后重试）：和闸门通过一样合进任务集成分支，合并成功才算成功
+    if (decision === 'accept' && subtask.planId && this.deps.integration) {
+      this.publish(this.store.runs.addReview(run.id, 'accept', note ?? null).events);
+      return this.deps.integration.merge(subtaskId);
+    }
     if (decision === 'accept') {
       this.committing.add(subtaskId);
       try {

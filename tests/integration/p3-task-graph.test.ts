@@ -148,7 +148,7 @@ function propose(title = '加记住我'): { taskId: string; planId: string } {
 }
 
 function confirm(planId: string) {
-  plans.confirm(planId, store.plans.getPlan(planId)!.version);
+  return plans.confirm(planId, store.plans.getPlan(planId)!.version);
 }
 
 async function until<T>(read: () => T, ok: (value: T) => boolean, what: string): Promise<T> {
@@ -194,8 +194,8 @@ describe('P3 任务图调度', () => {
     expect(runtime.runs).toHaveLength(0);
 
     // 版本不对时先到者为准
-    expect(() => plans.confirm(planId, 9)).toThrow(/已被修改/);
-    confirm(planId);
+    await expect(plans.confirm(planId, 9)).rejects.toThrow(/已被修改/);
+    await confirm(planId);
     // 没有依赖的 A 确认后立即交给监管器（同步进入执行中），其余等依赖
     expect(statuses(taskId)).toEqual({ a: 'running', b: 'waiting_dependency', c: 'waiting_dependency', d: 'waiting_dependency' });
     await until(() => runtime.active(), (a) => a.length === 1, 'A 开始');
@@ -228,7 +228,7 @@ describe('P3 任务图调度', () => {
   it('上游失败时下游链式阻塞并写明原因；上游重新开始后自动解除', async () => {
     await setup();
     const { taskId, planId } = propose();
-    confirm(planId);
+    await confirm(planId);
     await until(() => runtime.active(), (a) => a.length === 1, 'A 开始');
     runtime.latest('加记住我-a').fail('编译不过');
     await until(() => statuses(taskId), (s) => s.d === 'blocked', '下游阻塞');
@@ -251,7 +251,7 @@ describe('P3 任务图调度', () => {
   it('取消任务：运行中的中断，没开始的直接取消，任务最终取消；草稿任务取消时计划一并退回', async () => {
     await setup();
     const { taskId, planId } = propose();
-    confirm(planId);
+    await confirm(planId);
     await until(() => runtime.active(), (a) => a.length === 1, 'A 开始');
     await finishNode(taskId, 'a', '加记住我-a');
     await until(() => runtime.active(), (a) => a.length === 2, 'B、C 开始');
@@ -267,7 +267,7 @@ describe('P3 任务图调度', () => {
     tasks.cancelTask(draft.taskId);
     expect(taskStatus(draft.taskId)).toBe('cancelled');
     expect(store.plans.getPlan(draft.planId)).toMatchObject({ status: 'rejected', decisionNote: '任务已取消' });
-    expect(() => confirm(draft.planId)).toThrow();
+    await expect(confirm(draft.planId)).rejects.toThrow();
     expect(runtime.runs.filter((r) => r.title.startsWith('草稿'))).toEqual([]);
   });
 
@@ -276,7 +276,7 @@ describe('P3 任务图调度', () => {
     const one = propose('一');
     const two = propose('二');
     const three = propose('三');
-    for (const p of [one, two, three]) confirm(p.planId);
+    for (const p of [one, two, three]) await confirm(p.planId);
     await until(() => runtime.active(), (a) => a.length === 2, '两个 A 开始');
     await new Promise((r) => setTimeout(r, 50));
     expect(runtime.active().sort()).toEqual(['一-a', '二-a']);

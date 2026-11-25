@@ -138,7 +138,7 @@ afterEach(async () => {
 });
 
 /** 协调助手提出并由用户确认：dev（开发，交付范围 src，带检查命令）→ docs（文档，依赖 dev）。 */
-function confirmPlan(check: CheckCommand = PASS): string {
+async function confirmPlan(check: CheckCommand = PASS): Promise<string> {
   const coord = store.tasks.createTask({ workspaceId, title: '协调', goal: 'g', role: 'coordinator', checkCommand: null, checkConfirmed: false, idempotencyKey: `c-${Math.random()}` }).record;
   const run = store.runs.createRun({ subtaskId: coord.subtask.id, sessionId: coord.session.id, runtime: 'claude' }).record;
   const caller = gateway.authenticate(gateway.issue(run.id, 'coordinator', 60_000))!;
@@ -152,7 +152,7 @@ function confirmPlan(check: CheckCommand = PASS): string {
   }) as { taskId: string; planId: string };
   // 计划卡片上列出了检查命令，确认计划就是确认它
   expect(store.plans.nodes(planId)[0]!.checkCommand).toEqual(check);
-  plans.confirm(planId, store.plans.getPlan(planId)!.version);
+  await plans.confirm(planId, store.plans.getPlan(planId)!.version);
   return taskId;
 }
 
@@ -182,7 +182,7 @@ function submitReview(run: FakeRun, decision: 'accept' | 'rework', reason?: stri
 describe('P3 验收闸门与审阅', () => {
   it('交付在范围内、检查通过 → 独立会话里审阅 → 通过后放行下游；结论绑定提交', async () => {
     await setup();
-    const taskId = confirmPlan();
+    const taskId = await confirmPlan();
     await waitRun('实现');
     const work = runtime.latest('实现');
     work.succeed({ 'src/remember.ts': 'export const remember = true;\n' });
@@ -226,7 +226,7 @@ describe('P3 验收闸门与审阅', () => {
 
   it('审阅退回 → 回到开发助手同一个会话按意见重做 → 再审通过', async () => {
     await setup();
-    const taskId = confirmPlan();
+    const taskId = await confirmPlan();
     await waitRun('实现');
     const first = runtime.latest('实现');
     first.succeed({ 'src/a.ts': 'a\n' });
@@ -258,7 +258,7 @@ describe('P3 验收闸门与审阅', () => {
 
   it('自动退回满轮数后交给人；人可以继续退回或直接通过', async () => {
     await setup(1);
-    const taskId = confirmPlan();
+    const taskId = await confirmPlan();
     await waitRun('实现');
     runtime.latest('实现').succeed({ 'src/a.ts': '1\n' });
     for (let round = 1; round <= 2; round++) {
@@ -283,7 +283,7 @@ describe('P3 验收闸门与审阅', () => {
 
   it('越出交付范围：不送审阅，交给人并标出文件；人工通过后放行', async () => {
     await setup();
-    const taskId = confirmPlan();
+    const taskId = await confirmPlan();
     await waitRun('实现');
     runtime.latest('实现').succeed({ 'src/a.ts': 'a\n', 'package.json': '{}\n' });
     await until(() => node(taskId, 'dev').gateStage, (s) => s === 'human', '交给人');
@@ -301,7 +301,7 @@ describe('P3 验收闸门与审阅', () => {
 
   it('检查命令失败：交给人；人写理由退回，回到原会话重做', async () => {
     await setup();
-    const taskId = confirmPlan(FAIL);
+    const taskId = await confirmPlan(FAIL);
     await waitRun('实现');
     const first = runtime.latest('实现');
     first.succeed({ 'src/a.ts': 'a\n' });

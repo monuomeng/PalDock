@@ -46,6 +46,8 @@ export const CommandArgs = {
   /** 服务重启后被中断的子任务：恢复（续做同一 thread）、重新开始（新 thread）或放弃。 */
   'run.recover': z.object({ subtaskId: Id, expectedVersion: Version, action: z.enum(['resume', 'restart', 'abandon']) }),
   'run.checkOutput': z.object({ runId: Id }),
+  /** 合入集成分支冲突的节点交回开发助手：把集成分支最新提交合进节点 worktree（留冲突标记），回原会话处理。 */
+  'merge.redo': z.object({ subtaskId: Id, expectedVersion: Version }),
   /** 确认协调助手提出的计划：按节点建子任务并开始派单。 */
   'plan.confirm': z.object({ planId: Id, expectedVersion: Version }),
   /** 退回计划，任务留在草稿，协调助手可以再提一版。 */
@@ -113,6 +115,7 @@ export interface CommandResults {
   'review.decide': void;
   'run.recover': void;
   'run.checkOutput': string;
+  'merge.redo': void;
   'plan.confirm': void;
   'plan.reject': void;
   'events.since': PersistentEvent[];

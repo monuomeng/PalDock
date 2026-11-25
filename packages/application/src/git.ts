@@ -1,3 +1,4 @@
+import { rmSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { childEnv } from '@paldock/platform';
 
@@ -76,4 +77,53 @@ export async function commitStaged(worktree: string, message: string): Promise<b
 export async function changedFiles(worktree: string, base: string, commit: string): Promise<string[]> {
   const out = await git(worktree, ['diff', '--name-only', '-z', base, commit]);
   return out.split('\0').filter((f) => f !== '');
+}
+
+const IDENTITY = ['-c', 'user.name=PalDock', '-c', 'user.email=paldock@localhost'];
+
+/** 未解决冲突的文件。 */
+async function unmergedFiles(worktree: string): Promise<string[]> {
+  return (await git(worktree, ['diff', '--name-only', '--diff-filter=U', '-z'])).split('\0').filter((f) => f !== '');
+}
+
+/** 在 worktree 里把 source 合进当前 HEAD（总是生成合并提交）；冲突时中止合并、恢复原状，返回冲突文件。 */
+export async function mergeInto(worktree: string, source: string, message: string): Promise<{ ok: true } | { ok: false; files: string[] }> {
+  try {
+    await git(worktree, [...IDENTITY, 'merge', '--no-ff', '--no-edit', '-m', message, source]);
+    return { ok: true };
+  } catch (error) {
+    const files = await unmergedFiles(worktree);
+    await git(worktree, ['merge', '--abort']).catch(() => {});
+    if (files.length === 0) throw error;
+    return { ok: false, files };
+  }
+}
+
+/** 把 commit 合进 worktree 但不提交：冲突文件留着冲突标记交给助手处理，返回冲突文件（没有冲突时为空）。 */
+export async function mergeNoCommit(worktree: string, commit: string): Promise<string[]> {
+  try {
+    await git(worktree, [...IDENTITY, 'merge', '--no-commit', '--no-ff', commit]);
+    return [];
+  } catch (error) {
+    const files = await unmergedFiles(worktree);
+    if (files.length === 0) throw error;
+    return files;
+  }
+}
+
+/**
+ * 删掉临时 worktree。Windows 上刚结束的进程（检查命令、杀毒扫描）可能还占着文件，`worktree remove` 偶尔失败：
+ * 重试几次，仍不行就直接删目录再 `worktree prune`。
+ */
+export async function removeWorktree(repo: string, path: string): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await git(repo, ['worktree', 'remove', '--force', path]);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+    }
+  }
+  rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  await git(repo, ['worktree', 'prune']);
 }

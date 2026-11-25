@@ -70,9 +70,19 @@ function planTaskView(detail: TaskDetail, error: HTMLElement, act: Act): Rendere
       { class: 'facts' },
       ...fact('状态', h('span', { class: `status status-${task.status}` }, SUBTASK_LABEL[task.status])),
       ...fact('项目', workspace.rootPath),
+      ...(task.integrationBranch ? fact('集成分支', task.integrationBranch) : []),
+      ...(task.integrationWorktree ? fact('集成 worktree', task.integrationWorktree) : []),
     ),
     h('details', {}, h('summary', {}, '目标'), h('pre', { class: 'goal' }, task.goal)),
     error,
+    // 全部节点通过：合进你自己的分支由你用 git 做，PalDock 不碰它
+    task.status === 'succeeded' && task.integrationBranch
+      ? h(
+          'section',
+          { class: 'panel review', 'aria-label': '待合并' },
+          h('p', {}, h('strong', {}, '待合并：'), `全部子任务已合进集成分支 ${task.integrationBranch}。请用 git 把它合进你自己的分支（PalDock 不推送、不改你的分支）。`),
+        )
+      : null,
     plan ? planView(plan, act) : null,
     cancel,
   );
@@ -124,15 +134,22 @@ function planView({ plan, nodes, actions: allowed }: PlanDetail, act: Act): HTML
 }
 
 /** 节点的一行：目标、路径、检查命令、依赖、状态与闸门（检查结果、越界文件、审阅结论），以及人工通过 / 退回 / 重新开始。 */
-function nodeRow({ node, subtask, actions: allowed, gate }: PlanNodeView, titles: Map<string, string>, act: Act): HTMLElement {
+function nodeRow({ node, subtask, actions: allowed, gate, merge }: PlanNodeView, titles: Map<string, string>, act: Act): HTMLElement {
   const deps = node.dependsOn.map((k) => titles.get(k) ?? k).join('、') || '—';
   const stage = subtask?.gateStage ? `（${GATE_LABEL[subtask.gateStage]}）` : '';
   const status = subtask ? h('span', { class: `status status-${subtask.status}` }, SUBTASK_LABEL[subtask.status], stage) : '未开始';
   const decide = (decision: 'accept' | 'rework', note?: string) =>
     act(() => call('review.decide', { subtaskId: subtask!.id, expectedVersion: subtask!.version, decision, ...(note ? { note } : {}) }));
   const note = h('input', { type: 'text', 'data-keep': `rework-${subtask?.id ?? node.key}`, placeholder: '退回理由', 'aria-label': `${node.title} 的退回理由` }) as HTMLInputElement;
-  const review =
-    subtask && allowed?.review
+  // 合进集成分支失败（冲突或集成检查没过）：交回开发助手在集成分支最新提交上重做，或你自己改好后重试合并
+  const mergeFailed = subtask && allowed?.review && merge && (merge.phase === 'conflict' || merge.phase === 'check_failed');
+  const review = mergeFailed
+    ? [
+        h('button', { type: 'button', class: 'primary', onclick: act(() => call('merge.redo', { subtaskId: subtask.id, expectedVersion: subtask.version })) }, '交回开发助手重做'),
+        h('button', { type: 'button', onclick: decide('accept') }, '我已处理，重试合并'),
+        h('div', { class: 'hint' }, `节点 worktree：${subtask.worktreePath ?? '—'}`),
+      ]
+    : subtask && allowed?.review
       ? [
           h('button', { type: 'button', class: 'primary', onclick: decide('accept') }, '通过'),
           note,
@@ -156,7 +173,14 @@ function nodeRow({ node, subtask, actions: allowed, gate }: PlanNodeView, titles
     ),
     h('td', {}, node.role),
     h('td', {}, deps),
-    h('td', {}, status, subtask?.statusReason ? h('div', { class: 'hint' }, subtask.statusReason) : null, gate ? gateView(gate) : null),
+    h(
+      'td',
+      {},
+      status,
+      subtask?.statusReason ? h('div', { class: 'hint' }, subtask.statusReason) : null,
+      gate ? gateView(gate) : null,
+      merge?.phase === 'done' && merge.candidateSha ? h('div', { class: 'hint' }, `已合进集成分支：${merge.candidateSha.slice(0, 10)}`) : null,
+    ),
     h('td', {}, ...review, restart),
   );
 }

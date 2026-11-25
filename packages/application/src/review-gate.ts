@@ -11,6 +11,8 @@ export interface ReviewGateDeps {
   supervisor: { enqueue(subtaskId: string, plan: RunPlan): void };
   publish(events: PersistentEvent[]): void;
   log(message: string): void;
+  /** 通过后合进任务集成分支（合并成功才算子任务成功）；缺省时直接成功（测试）。 */
+  integration?: { merge(subtaskId: string): Promise<void> };
   limits?: { maxAutoReworks?: number };
 }
 
@@ -122,9 +124,14 @@ export class ReviewGate {
     }
   }
 
-  /** 通过：子任务成功（放行下游由调度器按事件做），任务状态重新推导。 */
+  /** 通过：合进任务集成分支，合并成功子任务才成功（放行下游由调度器按事件做）；没接集成分支时直接成功。 */
   private accept(subtask: SubtaskRecord, decision: { stage: 'check' | 'review'; runId: string; reason?: string }): void {
     const { store } = this.deps;
+    if (this.deps.integration) {
+      this.deps.publish([store.tasks.gateDecided(subtask.id, { ...decision, outcome: 'passed' })]);
+      void this.deps.integration.merge(subtask.id);
+      return;
+    }
     this.deps.publish(
       store.transaction(() => [
         store.tasks.gateDecided(subtask.id, { ...decision, outcome: 'passed' }),

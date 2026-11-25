@@ -12,7 +12,7 @@ import type {
   PairingRecord,
 } from './channels.js';
 import type { PersistentEvent, RunNoticeCode } from './events.js';
-import type { GateStage, GraphNode, PlanNodeInput, PlanNodeRecord, PlanRecord } from './plans.js';
+import type { GateStage, GraphNode, MergeOpRecord, MergePhase, PlanNodeInput, PlanNodeRecord, PlanRecord } from './plans.js';
 import type {
   AgentOverrideRecord,
   AgentProfileRecord,
@@ -141,6 +141,10 @@ export interface TaskStorePort {
   gateDecided(subtaskId: string, decision: GateDecision): PersistentEvent;
   /** 新建一个不挂在子任务上的助手会话（审阅助手每轮一个）。 */
   createSession(role: string): SessionRecord;
+  /** 记下任务的集成分支（只写一次）。 */
+  setIntegration(taskId: string, branch: string, worktree: string, base: string): TaskRecord | undefined;
+  /** 节点改从新的基线继续（合入集成分支最新提交后重做），带版本。 */
+  rebaseSubtask(subtaskId: string, expectedVersion: number, baseCommit: string): SubtaskRecord;
   transitionTask(id: string, expectedVersion: number, to: TaskStatus, reason?: string): Change<TaskRecord>;
   transitionSubtask(id: string, expectedVersion: number, to: SubtaskStatus, reason?: string): Change<SubtaskRecord>;
   /** 任务的全部子任务（单子任务的任务只有一个），按创建顺序。 */
@@ -159,10 +163,24 @@ export interface NewPlan {
 
 /** 闸门的一个结论（gate.decided 事件的载荷）。 */
 export interface GateDecision {
-  stage: 'check' | 'review';
+  stage: 'check' | 'review' | 'merge';
   outcome: 'passed' | 'rework' | 'human';
   runId: string;
   reason?: string;
+}
+
+export interface NewMergeOp {
+  taskId: string;
+  subtaskId: string;
+  sourceSha: string;
+  targetOld: string;
+}
+
+export interface MergeStorePort {
+  start(input: NewMergeOp): MergeOpRecord;
+  /** 推进阶段；只能从没结束的阶段（started / candidate）往后走。 */
+  advance(id: string, phase: MergePhase, fields?: { candidateSha?: string; conflictFiles?: string[]; detail?: string }): MergeOpRecord;
+  latestOf(subtaskId: string): MergeOpRecord | undefined;
 }
 
 export interface PlanStorePort {
@@ -318,6 +336,7 @@ export interface StorePort {
   runs: RunStorePort;
   agents: AgentStorePort;
   plans: PlanStorePort;
+  merges: MergeStorePort;
   audit: AuditPort;
   messages: { append(sessionId: string, role: MessageRole, body: string, runId?: string | null): Change<MessageRecord> };
   attention: { list(): AttentionItem[]; markRead(kind: AttentionKind, itemId: string): void };
