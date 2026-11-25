@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 许可证检查：产品暂不开源，只允许可闭源分发的依赖（含传递依赖）。
+// 许可证检查：产品以 Apache-2.0 开源，只允许宽松许可的依赖（含传递依赖），不引入 GPL / AGPL 等 copyleft 依赖。
 // 依赖清单来自 `pnpm licenses list --json`；按 SPDX 表达式判定：OR 有一支允许即可，AND 每一支都要允许。
 import { execSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
