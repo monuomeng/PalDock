@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { childEnv, nodeRuntimeEnv, resolveExecutable, versionAtLeast } from '@paldock/platform';
@@ -8,18 +8,20 @@ export interface ClaudeCommand {
   command: string;
   /** 放在 CLI 参数之前，例如 npm 安装时的 cli.js 入口。 */
   prefixArgs: string[];
-  source: 'configured' | 'path' | 'npm-shim';
+  /** 从哪里找到的：设置里填的、PATH、独立安装的常见位置、Claude 桌面版自带。 */
+  source: 'configured' | 'path' | 'npm-shim' | 'standalone' | 'desktop-bundled';
 }
 
 const NPM_ENTRY = join('node_modules', '@anthropic-ai', 'claude-code', 'cli.js');
+const EXE = process.platform === 'win32' ? 'claude.exe' : 'claude';
+const isFile = (path: string) => existsSync(path) && statSync(path).isFile();
 
 /**
- * 找到可直接 spawn 的 Claude Code 命令：设置里填的路径优先，否则在 PATH 上找 `claude`。
- * Windows 上 npm 安装只提供 claude.cmd 外壳，Node 不允许不经 shell 启动 .cmd，改用 Node 运行包里的 cli.js；
- * 找不到时请用户在设置里填写可执行文件路径。
- * Claude 桌面版自带的那份路径含版本号和构建号，升级后会变（P0-02），不自动使用。
+ * 找到可直接 spawn 的 Claude Code 命令，按顺序：设置里填的路径 → PATH → 独立安装的常见位置 → Claude 桌面版自带的那份。
+ * 每次启动 Run 都重新查找，不缓存路径：桌面版自带的那份路径含版本号和构建号，升级后会变（P0-02）。
+ * Windows 上 npm 安装只提供 claude.cmd 外壳，Node 不允许不经 shell 启动 .cmd，改用 Node 运行包里的 cli.js。
  */
-export function resolveClaudeCommand(configured?: string, nodePath = process.execPath): ClaudeCommand | undefined {
+export function resolveClaudeCommand(configured?: string, nodePath = process.execPath, env: NodeJS.ProcessEnv = process.env): ClaudeCommand | undefined {
   if (configured) {
     if (!existsSync(configured)) return undefined;
     // 配置为 .js / .mjs 入口时（npm 布局或离线模拟执行器）用 Node 运行
@@ -27,11 +29,61 @@ export function resolveClaudeCommand(configured?: string, nodePath = process.exe
       ? { command: nodePath, prefixArgs: [configured], source: 'configured' }
       : { command: configured, prefixArgs: [], source: 'configured' };
   }
-  const found = resolveExecutable('claude');
-  if (!found) return undefined;
-  if (!/\.(?:cmd|bat)$/i.test(found)) return { command: found, prefixArgs: [], source: 'path' };
-  const entry = join(dirname(found), NPM_ENTRY);
-  return existsSync(entry) ? { command: nodePath, prefixArgs: [entry], source: 'npm-shim' } : undefined;
+  const found = resolveExecutable('claude', env);
+  if (found && !/\.(?:cmd|bat)$/i.test(found)) return { command: found, prefixArgs: [], source: 'path' };
+  const entry = found && join(dirname(found), NPM_ENTRY);
+  if (entry && existsSync(entry)) return { command: nodePath, prefixArgs: [entry], source: 'npm-shim' };
+  const standalone = standaloneLocations(env).find(isFile);
+  if (standalone) return { command: standalone, prefixArgs: [], source: 'standalone' };
+  const bundled = desktopBundledClaude(env);
+  return bundled ? { command: bundled, prefixArgs: [], source: 'desktop-bundled' } : undefined;
+}
+
+/** 独立安装的常见位置：原生安装器放在 ~/.local/bin（不一定在 PATH 上），旧版本地安装在 ~/.claude/local。 */
+function standaloneLocations(env: NodeJS.ProcessEnv): string[] {
+  const home = env.USERPROFILE ?? env.HOME;
+  if (!home) return [];
+  const own = [join(home, '.local', 'bin', EXE), join(home, '.claude', 'local', EXE)];
+  return process.platform === 'win32' ? own : [...own, '/opt/homebrew/bin/claude', '/usr/local/bin/claude'];
+}
+
+/**
+ * Claude 桌面版自带的 Claude Code：Windows 在 %LOCALAPPDATA%\Claude-Data\<配置>\claude-code\<版本>\<构建>\claude.exe（实测），
+ * macOS 按 ~/Library/Application Support/Claude/claude-code/<版本>/… 查找（未实测）。多个版本时取版本号最大的。
+ * 这份需要在 Claude Code 里单独登录（P0-02），未登录时由 discover 报告。
+ */
+export function desktopBundledClaude(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const roots: string[] = [];
+  if (process.platform === 'win32') {
+    const base = env.LOCALAPPDATA && join(env.LOCALAPPDATA, 'Claude-Data');
+    if (base && existsSync(base)) roots.push(...subdirs(base).map((profile) => join(base, profile, 'claude-code')));
+  } else if (env.HOME) {
+    roots.push(join(env.HOME, 'Library', 'Application Support', 'Claude', 'claude-code'));
+  }
+  const candidates = roots.flatMap((root) =>
+    subdirs(root).flatMap((version) => {
+      const dir = join(root, version);
+      const exe = [join(dir, EXE), ...subdirs(dir).map((build) => join(dir, build, EXE))].find(isFile);
+      return exe ? [{ version, exe }] : [];
+    }),
+  );
+  return candidates.sort((a, b) => compareVersions(b.version, a.version))[0]?.exe;
+}
+
+const subdirs = (dir: string): string[] => {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+  } catch {
+    return [];
+  }
+};
+
+/** 按 major.minor.patch 数值比较（不按字符串：2.1.99 小于 2.1.100），解析不了的排最后。 */
+const versionParts = (v: string) => /^(\d+)\.(\d+)\.(\d+)/.exec(v)?.slice(1).map(Number) ?? [-1, -1, -1];
+function compareVersions(a: string, b: string): number {
+  const [x, y] = [versionParts(a), versionParts(b)];
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i]! - y[i]!;
+  return 0;
 }
 
 /** 只在 2.1.325 上实测过 stream-json、宿主审批与按会话注入 MCP（P3-00），更低的版本拒绝启动。 */

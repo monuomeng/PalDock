@@ -88,7 +88,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     if (!version) return unavailable('无法运行 claude --version');
     if (!meetsMinimum(version)) return unavailable(`Claude Code ${version} 版本过低，需要 ${MIN_CLAUDE_VERSION} 或更高，请升级`, version);
     if ((await claudeLoggedIn(cmd, env)) === false) return unavailable('Claude Code 未登录，请先在终端运行 claude 登录', version);
-    return { runtime: this.name, available: true, version, capabilities: CAPABILITIES };
+    return { runtime: this.name, available: true, version, executable: { path: cmd.prefixArgs[0] ?? cmd.command, source: cmd.source }, capabilities: CAPABILITIES };
   }
 
   /** 每个适配器只检查一次；不满足时不缓存，升级或登录后下一次 Run 重新检查。 */

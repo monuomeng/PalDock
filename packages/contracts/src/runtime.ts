@@ -22,6 +22,8 @@ export interface RuntimeDiscovery {
   version?: string;
   /** 不可用时的原因，例如未安装、未登录。 */
   reason?: string;
+  /** 找到的可执行文件及来源（例如 PATH、桌面版自带），设置页据此提示。 */
+  executable?: { path: string; source: string };
   capabilities: RuntimeCapabilities;
 }
 

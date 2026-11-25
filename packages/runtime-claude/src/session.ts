@@ -3,9 +3,8 @@
  * 在 Claude 桌面版或另一个 Claude Code 会话里启动时，继承的 CLAUDE_* 变量会让子进程挂到宿主会话上。
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { killProcessTree, readFrames, writeFrame } from '@paldock/platform';
+import { resolveClaudeCommand } from './discover.js';
 
 export type Message = Record<string, unknown> & { type: string; subtype?: string };
 
@@ -13,24 +12,11 @@ export type Message = Record<string, unknown> & { type: string; subtype?: string
 const CLEAN_ENV_KEYS = ['PATH', 'SYSTEMROOT', 'WINDIR', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC'];
 export const cleanEnv = Object.fromEntries(CLEAN_ENV_KEYS.flatMap((k) => (process.env[k] ? [[k, process.env[k]]] : [])));
 
-/** PATH 上的 claude；否则找 Claude 桌面版自带的最新一份（路径随版本变化，仅供 P0 探测）。 */
+/** 探测用：PALDOCK_CLAUDE_PATH 优先，否则按适配器的查找顺序（含桌面版自带的那份）。 */
 export function resolveClaude(): string | undefined {
   if (process.env.PALDOCK_CLAUDE_PATH) return process.env.PALDOCK_CLAUDE_PATH;
-  for (const dir of (process.env.PATH ?? '').split(process.platform === 'win32' ? ';' : ':')) {
-    const candidate = join(dir, process.platform === 'win32' ? 'claude.exe' : 'claude');
-    if (dir && existsSync(candidate)) return candidate;
-  }
-  const root = join(process.env.LOCALAPPDATA ?? '', 'Claude-Data');
-  if (!existsSync(root)) return undefined;
-  for (const profile of readdirSync(root)) {
-    const versions = join(root, profile, 'claude-code');
-    if (!existsSync(versions)) continue;
-    const latest = readdirSync(versions).sort().at(-1);
-    const build = latest && readdirSync(join(versions, latest)).at(0);
-    const exe = build && join(versions, latest, build, 'claude.exe');
-    if (exe && existsSync(exe)) return exe;
-  }
-  return undefined;
+  const cmd = resolveClaudeCommand();
+  return cmd && cmd.prefixArgs.length === 0 ? cmd.command : undefined;
 }
 
 /** 宿主审批：返回 true 批准这次工具调用。探测默认一律拒绝。 */
