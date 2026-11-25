@@ -23,6 +23,7 @@ const notifications = new Map<string, number>();
 let cmd: CodexCommand;
 const serverRequests: string[] = [];
 const waiters = new Map<string, (params: unknown) => void>();
+let stderrTail = '';
 
 function waitFor(method: string, timeoutMs: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -94,6 +95,10 @@ async function openAppServer(): Promise<JsonRpcStdioClient> {
       return { decision: 'decline' };
     },
   });
+  // app-server 启动失败时只有退出码；保留 stderr 末尾，便于判断是否为版本不兼容（Mac 上 0.138 实测退出 1）
+  rpc.stderr.on('data', (chunk: Buffer) => {
+    stderrTail = (stderrTail + chunk.toString()).slice(-600);
+  });
   const init = await rpc.request<{ userAgent: string; platformOs: string }>('initialize', {
     clientInfo: { name: 'paldock_probe', title: 'PalDock P0 probe', version: '0.0.0' },
     capabilities: { experimentalApi: false, requestAttestation: false },
@@ -137,5 +142,6 @@ async function interruptTurn(rpc: JsonRpcStdioClient, threadId: string) {
 main()
   .catch((error: Error) => {
     report.error = error.message;
+    if (stderrTail) report.stderrTail = stderrTail.trim();
   })
   .finally(() => console.log(JSON.stringify(report, null, 2)));
