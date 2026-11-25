@@ -38,10 +38,17 @@ export function resolveCodexCommand(configured?: string, nodePath = process.exec
     // 配置为 .js / .mjs 入口时（npm 布局或离线模拟执行器）用 Node 运行
     return /\.m?js$/i.test(configured)
       ? { command: nodePath, prefixArgs: [configured], source: 'configured' }
-      : { command: configured, prefixArgs: [], source: 'configured' };
+      : /\.cmd$/i.test(configured)
+        ? fromNpmShim(configured, nodePath) // Node 不经 shell 起不了 .cmd（P3-11 实测：填 codex.cmd 时一律「无法运行 codex --version」）
+        : { command: configured, prefixArgs: [], source: 'configured' };
   }
   const found = resolveExecutable('codex');
   if (!found?.toLowerCase().endsWith('.cmd')) return found ? { command: found, prefixArgs: [], source: 'native' } : undefined;
+  return fromNpmShim(found, nodePath);
+}
+
+/** npm 的 codex.cmd 外壳：改为直接运行包里的原生程序，没有就用 Node 运行 codex.js。 */
+function fromNpmShim(found: string, nodePath: string): CodexCommand | undefined {
   const packageRoot = join(dirname(found), NPM_PACKAGE);
   const native = npmNativeBinary(packageRoot);
   if (native) return { command: native, prefixArgs: [], source: 'npm-native', env: { CODEX_MANAGED_PACKAGE_ROOT: packageRoot, CODEX_MANAGED_BY_NPM: '1' } };

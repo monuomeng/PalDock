@@ -1,18 +1,19 @@
-import type { AutoDecisionKind, PersistentEvent, RunRecord, StorePort, SubtaskRecord, TaskRecord } from '@paldock/contracts';
+import type { AutoDecisionKind, PersistentEvent, RunRecord, RunResultRecord, StorePort, SubtaskRecord, TaskRecord } from '@paldock/contracts';
 import { AgentRole } from '@paldock/contracts';
 import { gateAfterReview, gateAfterWork, P1_DEFAULTS, runMachine } from '@paldock/domain';
 import { reviewPrompt, reviewReworkPrompt } from './prompts.js';
 import type { RunPlan } from './run-supervisor.js';
-import { nodeOf } from './task-graph-scheduler.js';
+import { handoffOf, nodeOf } from './task-graph-scheduler.js';
 import { settleTask } from './transitions.js';
+import { MicroBatch } from './util.js';
 
 export interface ReviewGateDeps {
   store: StorePort;
   supervisor: { enqueue(subtaskId: string, plan: RunPlan): void };
   publish(events: PersistentEvent[]): void;
   log(message: string): void;
-  /** 通过后合进任务集成分支（合并成功才算子任务成功）；缺省时直接成功（测试）。 */
-  integration?: { merge(subtaskId: string): Promise<void> };
+  /** 通过后合进任务集成分支，合并成功才算子任务成功（没有集成分支的任务由它直接记成功）。 */
+  integration: { merge(subtaskId: string): Promise<void> };
   limits?: { maxAutoReworks?: number };
 }
 
@@ -26,36 +27,25 @@ const REVIEWER: AgentRole = 'reviewer';
  * 所有写入带读到的版本，子任务已被别处改动（取消、人工覆盖）时不处理。
  */
 export class ReviewGate {
-  private readonly pending: { kind: 'work' | 'review'; runId: string }[] = [];
-  private flushing = false;
+  private readonly batch: MicroBatch<{ kind: 'work' | 'review'; runId: string }>;
   private readonly maxAutoReworks: number;
 
   constructor(private readonly deps: ReviewGateDeps) {
     this.maxAutoReworks = deps.limits?.maxAutoReworks ?? P1_DEFAULTS.maxAutoReworks;
+    this.batch = new MicroBatch(
+      ({ kind, runId }) => (kind === 'work' ? this.afterWork(runId) : this.afterReview(runId)),
+      deps.log,
+      'gate',
+      ({ kind, runId }) => `${kind} ${runId}`,
+    );
   }
 
   onEvents(events: readonly PersistentEvent[]): void {
     for (const event of events) {
-      if (event.type === 'run.result_collected') this.pending.push({ kind: 'work', runId: event.aggregateId });
+      if (event.type === 'run.result_collected') this.batch.add({ kind: 'work', runId: event.aggregateId });
       else if (event.type === 'run.status_changed' && runMachine.isTerminal(event.payload.to)) {
         const run = this.deps.store.runs.getRun(event.aggregateId);
-        if (run?.purpose === 'review') this.pending.push({ kind: 'review', runId: run.id });
-      }
-    }
-    if (this.pending.length > 0 && !this.flushing) {
-      this.flushing = true;
-      queueMicrotask(() => this.flush());
-    }
-  }
-
-  private flush(): void {
-    this.flushing = false;
-    for (const { kind, runId } of this.pending.splice(0)) {
-      try {
-        if (kind === 'work') this.afterWork(runId);
-        else this.afterReview(runId);
-      } catch (error) {
-        this.deps.log(`gate ${kind} ${runId} failed: ${error instanceof Error ? error.message : String(error)}`);
+        if (run?.purpose === 'review') this.batch.add({ kind: 'review', runId: run.id });
       }
     }
   }
@@ -91,7 +81,7 @@ export class ReviewGate {
         }
         const { record, events } = store.tasks.setGateStage(subtask.id, subtask.version, 'review', { stage: 'check', outcome: 'passed', runId });
         this.deps.publish(events);
-        return this.startReview(record, run!, result.commitSha, result.diffStat);
+        return this.startReview(record, run!, result);
       }
     }
   }
@@ -104,17 +94,21 @@ export class ReviewGate {
     const work = store.runs.latestRun(subtask.id);
     const result = work && store.runs.getResult(work.id);
     if (!work || !result) return false;
-    this.startReview(subtask, work, result.commitSha, result.diffStat);
+    this.startReview(subtask, work, result);
     return true;
   }
 
   /** 每轮审阅一个新的审阅助手会话（不沿用开发助手的会话和上下文），执行器按审阅角色的设置。 */
-  private startReview(subtask: SubtaskRecord, work: RunRecord, commitSha: string | null, diffStat: string | null): void {
+  private startReview(subtask: SubtaskRecord, work: RunRecord, result: RunResultRecord): void {
     const { store } = this.deps;
-    const node = nodeOf(store, subtask)!;
+    const node = nodeOf(store, subtask) ?? { title: subtask.goal.slice(0, 40), goal: subtask.goal, paths: [] };
     const session = store.tasks.createSession(REVIEWER);
-    const handoff = store.runs.getHandoff(work.id)?.summary ?? store.runs.getResult(work.id)?.finalMessage ?? null;
-    const prompt = reviewPrompt(node, { commitSha: commitSha ?? 'HEAD', baseCommit: subtask.baseCommit ?? 'HEAD', diffStat, handoff });
+    const prompt = reviewPrompt(node, {
+      commitSha: result.commitSha ?? 'HEAD',
+      baseCommit: subtask.baseCommit ?? 'HEAD',
+      diffStat: result.diffStat,
+      handoff: handoffOf(store, work.id),
+    });
     this.deps.supervisor.enqueue(subtask.id, { prompt, review: { sessionId: session.id, role: REVIEWER } });
   }
 
@@ -153,21 +147,10 @@ export class ReviewGate {
     );
   }
 
-  /** 通过：合进任务集成分支，合并成功子任务才成功（放行下游由调度器按事件做）；没接集成分支时直接成功。 */
+  /** 通过：合进任务集成分支，合并成功子任务才成功（放行下游由调度器按事件做）。 */
   private accept(subtask: SubtaskRecord, decision: { stage: 'check' | 'review'; runId: string; reason?: string }): void {
-    const { store } = this.deps;
-    if (this.deps.integration) {
-      this.deps.publish([store.tasks.gateDecided(subtask.id, { ...decision, outcome: 'passed' })]);
-      void this.deps.integration.merge(subtask.id);
-      return;
-    }
-    this.deps.publish(
-      store.transaction(() => [
-        store.tasks.gateDecided(subtask.id, { ...decision, outcome: 'passed' }),
-        ...store.tasks.transitionSubtask(subtask.id, subtask.version, 'succeeded').events,
-        ...settleTask(store, subtask.taskId),
-      ]),
-    );
+    this.deps.publish([this.deps.store.tasks.gateDecided(subtask.id, { ...decision, outcome: 'passed' })]);
+    void this.deps.integration.merge(subtask.id);
   }
 
   /** 退回：回到开发助手同一个会话（最近一次工作 Run 的 thread）按审阅意见接着改。 */

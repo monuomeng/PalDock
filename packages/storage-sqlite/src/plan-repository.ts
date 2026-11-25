@@ -12,7 +12,7 @@ import {
   type PlanStorePort,
   type SubtaskRecord,
 } from '@paldock/contracts';
-import { planDiff, planMachine } from '@paldock/domain';
+import { planDiff, planMachine, taskMachine } from '@paldock/domain';
 import type { Clock } from './clock.js';
 import { COLUMNS, toTask, type TaskRow } from './columns.js';
 import type { Database } from './database.js';
@@ -21,7 +21,7 @@ import type { TaskRepository } from './task-repository.js';
 import { applyTransition, newId, statusChanged, type TransitionSpec } from './writes.js';
 
 type NodeRow = Omit<PlanNodeRecord, 'paths' | 'dependsOn' | 'checkCommand'> & { paths: string; dependsOn: string; checkCommand: string | null };
-const TERMINAL_TASK = new Set(['succeeded', 'failed', 'cancelled']);
+/** 取消子任务时不碰已经结束的（failed 在子任务状态机里还能重新排队，但这里也不动它）。 */
 const FINISHED_SUBTASK = new Set(['succeeded', 'failed', 'cancelled']);
 const toNode = (row: NodeRow): PlanNodeRecord => ({
   ...row,
@@ -34,7 +34,6 @@ const SQL = {
   insertDraftTask: `
     INSERT INTO tasks (id, workspace_id, title, goal, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'draft', ?5, ?5)
     RETURNING ${COLUMNS.task()}`,
-  selectTask: `SELECT ${COLUMNS.task()} FROM tasks WHERE id = ?`,
   // 新一版的版本号与「还在等确认的旧版本」都走 UNIQUE (task_id, revision) 的自动索引
   insertPlan: `
     INSERT INTO plans (id, task_id, revision, status, proposed_by_run_id, created_at)
@@ -51,6 +50,9 @@ const SQL = {
   unshiftNodes: `UPDATE plan_nodes SET position = -position - 2 WHERE plan_id = ? AND position < 0`,
   bumpPlan: `UPDATE plans SET version = version + 1 WHERE id = ? AND version = ? AND status = 'proposed' RETURNING ${COLUMNS.plan()}`,
   // 当前确认版本：UNIQUE (task_id, revision) 的自动索引按 task_id 找，再按状态过滤（每个任务只有几版）
+  openPlanTasks: `
+    SELECT p.task_id AS taskId FROM plans p JOIN tasks t ON t.id = p.task_id
+     WHERE p.status = 'confirmed' AND t.status NOT IN ('succeeded', 'failed', 'cancelled')`,
   confirmedOfTask: `SELECT ${COLUMNS.plan()} FROM plans WHERE task_id = ? AND status = 'confirmed'`,
   subtasksOfPlan: `SELECT ${COLUMNS.subtask()} FROM subtasks WHERE task_id = ? AND plan_id = ?`,
   movePlan: `UPDATE subtasks SET plan_id = ?, version = version + 1 WHERE id = ?`,
@@ -59,6 +61,7 @@ const SQL = {
   latestPlan: `SELECT ${COLUMNS.plan()} FROM plans WHERE task_id = ? ORDER BY revision DESC LIMIT 1`,
   // 主键 (plan_id, position)：按节点顺序读，不排序
   nodes: `SELECT ${COLUMNS.planNode()} FROM plan_nodes WHERE plan_id = ? ORDER BY position`,
+  node: `SELECT ${COLUMNS.planNode()} FROM plan_nodes WHERE plan_id = ? AND node_key = ?`,
   insertSubtask: `
     INSERT INTO subtasks (id, task_id, role, goal, status, plan_id, node_key, created_at, updated_at)
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
@@ -102,10 +105,10 @@ export class PlanRepository implements PlanStorePort {
       const events: PersistentEvent[] = [];
       let taskId = input.taskId;
       if (taskId) {
-        const task = this.db.get<TaskRow>(SQL.selectTask, taskId);
+        const task = this.tasks.getTask(taskId);
         if (!task || task.workspaceId !== input.workspaceId) throw new CodedError('not_found', '任务不存在');
         // 草稿任务提新一版替换待确认的；运行中的任务也能提新一版（确认后替换正在执行的那一版）
-        if (TERMINAL_TASK.has(task.status)) throw new CodedError('conflict', '任务已结束，不能再提新一版');
+        if (taskMachine.isTerminal(task.status)) throw new CodedError('conflict', '任务已结束，不能再提新一版');
         for (const old of this.db.all<{ id: string; version: number }>(SQL.proposedOfTask, taskId)) {
           events.push(...this.transition(old.id, old.version, 'superseded', '有了新一版').events);
         }
@@ -146,6 +149,11 @@ export class PlanRepository implements PlanStorePort {
     return this.db.all<NodeRow>(SQL.nodes, planId).map(toNode);
   }
 
+  node(planId: string, key: string): PlanNodeRecord | undefined {
+    const row = this.db.get<NodeRow>(SQL.node, planId, key);
+    return row && toNode(row);
+  }
+
   /**
    * 确认。草稿任务：按节点建子任务（没有依赖的 queued，有依赖的 waiting_dependency），任务 draft → queued。
    * 运行中的任务：上一版 superseded；没变的节点沿用原子任务（换挂到新版本），改了的、新增的建新子任务
@@ -156,7 +164,7 @@ export class PlanRepository implements PlanStorePort {
       const plan0 = this.getPlan(id);
       const task = plan0 && this.tasks.getTask(plan0.taskId);
       if (!plan0 || !task) throw new CodedError('not_found', '计划不存在');
-      if (TERMINAL_TASK.has(task.status)) throw new CodedError('conflict', '任务已结束（可能已取消）');
+      if (taskMachine.isTerminal(task.status)) throw new CodedError('conflict', '任务已结束（可能已取消）');
       // 只有待确认的才能确认（先于取代上一版检查，免得把正在执行的那一版当成「上一版」）
       planMachine.assertTransition(plan0.status, 'confirmed');
       const previous = task.status === 'draft' ? undefined : this.confirmedPlan(task.id);
@@ -200,6 +208,10 @@ export class PlanRepository implements PlanStorePort {
       if (!previous) events.push(...this.tasks.transitionTask(task.id, task.version, 'queued', `计划第 ${plan.revision} 版已确认`).events);
       return { record: { created, cancelled }, events };
     });
+  }
+
+  openPlanTasks(): string[] {
+    return this.db.all<{ taskId: string }>(SQL.openPlanTasks).map((r) => r.taskId);
   }
 
   confirmedPlan(taskId: string): PlanRecord | undefined {

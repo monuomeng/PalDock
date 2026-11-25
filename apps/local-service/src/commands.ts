@@ -48,6 +48,7 @@ export function createHandlers(
     'messages.search': ({ query, limit }) => store.messages.search(query, limit),
     'maintenance.backup': () => store.backup(),
     'workspace.list': () => store.tasks.listWorkspaces(),
+    'workspace.add': ({ rootPath }) => tasks.addWorkspace(rootPath),
     'workspace.setRemoteApprovalLevel': ({ workspaceId, expectedVersion, level }) => tasks.setRemoteApprovalLevel(workspaceId, expectedVersion, level),
     'workspace.setPrepareCommand': ({ workspaceId, expectedVersion, command }) => tasks.setPrepareCommand(workspaceId, expectedVersion, command),
     'channel.overview': () => channels.overview(),

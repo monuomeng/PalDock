@@ -12,6 +12,7 @@ import {
   type StorePort,
 } from '@paldock/contracts';
 import type { P2Limits } from '@paldock/domain';
+import { errorText } from '../util.js';
 
 export type InboundOutcome = 'done' | 'rejected';
 
@@ -25,7 +26,6 @@ export interface ChannelHubDeps {
   limits: P2Limits;
 }
 
-const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 300);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** inbox 的队列名与会话键；会话键决定串行处理的粒度。 */

@@ -14,7 +14,7 @@ const packageAliases = Object.fromEntries(
 );
 
 /** 真实执行器测试（*.live.test.ts）会消耗额度，只在显式开启时运行。 */
-const live = process.env.PALDOCK_LIVE_CODEX === '1';
+const live = process.env.PALDOCK_LIVE_CODEX === '1' || process.env.PALDOCK_LIVE_P3 === '1';
 
 export default defineConfig({
   resolve: { alias: packageAliases },

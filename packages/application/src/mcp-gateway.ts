@@ -14,7 +14,7 @@ import {
 import { createToken } from '@paldock/platform';
 import type { CoordinatorService } from './coordinator.js';
 import type { PlanService } from './plan-service.js';
-import { nodeOf, upstreamOf } from './task-graph-scheduler.js';
+import { handoffOf, nodeOf, upstreamOf } from './task-graph-scheduler.js';
 
 /** 令牌对应的调用者：只认服务签发时记下的 Run 和角色，不信模型自报身份。 */
 export interface McpCaller {
@@ -127,7 +127,11 @@ export class McpGateway {
       }
       case 'get_status': {
         const { limit } = args as McpToolArgs<'get_status'>;
-        return this.deps.store.tasks.listTasks(limit).map((t) => ({ taskId: t.task.id, title: t.task.title, status: t.task.status, subtaskStatus: t.subtaskStatus, lastActivityAt: t.lastActivityAt }));
+        // 只看调用方这次 Run 所在的项目，别的项目的任务不给它
+        const run = this.deps.store.runs.getRun(caller.runId);
+        const own = run && this.deps.store.tasks.getTask(this.deps.store.tasks.getSubtask(run.subtaskId)!.taskId);
+        if (!own) return [];
+        return this.deps.store.tasks.listTasksOfWorkspace(own.workspaceId, limit).map((t) => ({ taskId: t.task.id, title: t.task.title, status: t.task.status, subtaskStatus: t.subtaskStatus, lastActivityAt: t.lastActivityAt }));
       }
       case 'submit_review': {
         const { decision, reason } = args as McpToolArgs<'submit_review'>;
@@ -206,7 +210,7 @@ export class McpGateway {
               commitSha: delivered?.commitSha ?? null,
               baseCommit: subtask.baseCommit,
               diffStat: delivered?.diffStat ?? null,
-              handoff: store.runs.getHandoff(work.id)?.summary ?? delivered?.finalMessage ?? null,
+              handoff: handoffOf(store, work.id),
             },
           }
         : {}),

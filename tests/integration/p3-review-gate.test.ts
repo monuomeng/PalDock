@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { McpGateway, PlanService, ReviewGate, RunSupervisor, TaskGraphScheduler, TaskService } from '@paldock/application';
+import { IntegrationService, McpGateway, PlanService, ReviewGate, RunSupervisor, TaskGraphScheduler, TaskService } from '@paldock/application';
 import type { CheckCommand, PersistentEvent, RunStartRequest, RuntimeAdapter, RuntimeEvent, SubtaskRecord } from '@paldock/contracts';
 import { openStore, type Store } from '@paldock/storage-sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -122,7 +122,8 @@ async function setup(maxAutoReworks = 2) {
     log,
   });
   scheduler = new TaskGraphScheduler({ store, supervisor, publish, log });
-  gate = new ReviewGate({ store, supervisor, publish, log, limits: { maxAutoReworks } });
+  // 没有集成分支的任务（这里的计划确认时不建）由它直接记成功
+  gate = new ReviewGate({ store, supervisor, publish, log, integration: new IntegrationService({ store, supervisor, dataRoot: join(root, 'data'), publish, log }), limits: { maxAutoReworks } });
   plans = new PlanService({ store, scheduler, publish });
   tasks = new TaskService({ store, supervisor, scheduler, dataRoot, publish });
   workspaceId = store.tasks.ensureWorkspace('repo', repo).id;
@@ -215,7 +216,7 @@ describe('P3 验收闸门与审阅', () => {
     review.succeed();
     await until(() => node(taskId, 'dev').status, (s) => s === 'succeeded', 'dev 通过');
     expect(store.runs.reviewsOfRun(workRun.id)).toEqual([expect.objectContaining({ decision: 'accept', reviewerRunId: review.request.runId, commitSha: result.commitSha })]);
-    expect(gateEvents(dev.id)).toEqual(['check:passed', 'review:passed']);
+    expect(gateEvents(dev.id)).toEqual(['check:passed', 'review:passed', 'merge:passed']);
     // 下游放行
     await waitRun('写文档');
     expect(node(taskId, 'docs').status).toBe('running');
@@ -252,7 +253,7 @@ describe('P3 验收闸门与审阅', () => {
     submitReview(review2, 'accept');
     review2.succeed();
     await until(() => node(taskId, 'dev').status, (s) => s === 'succeeded', 'dev 通过');
-    expect(gateEvents(dev.id)).toEqual(['check:passed', 'review:rework', 'check:passed', 'review:passed']);
+    expect(gateEvents(dev.id)).toEqual(['check:passed', 'review:rework', 'check:passed', 'review:passed', 'merge:passed']);
     expect(store.runs.autoReworkCount(dev.id)).toBe(1);
   });
 

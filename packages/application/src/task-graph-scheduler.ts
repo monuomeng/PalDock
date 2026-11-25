@@ -3,6 +3,7 @@ import { graphStep, taskMachine } from '@paldock/domain';
 import { planNodePrompt, type UpstreamHandoff } from './prompts.js';
 import type { RunPlan } from './run-supervisor.js';
 import { settleTask } from './transitions.js';
+import { MicroBatch } from './util.js';
 
 export interface SchedulerDeps {
   store: StorePort;
@@ -14,19 +15,25 @@ export interface SchedulerDeps {
 
 /** 计划节点（按子任务所属的计划和节点键找）。 */
 export function nodeOf(store: StorePort, subtask: SubtaskRecord): PlanNodeRecord | undefined {
-  if (!subtask.planId) return undefined;
-  return store.plans.nodes(subtask.planId).find((n) => n.key === subtask.nodeKey);
+  return subtask.planId && subtask.nodeKey ? store.plans.node(subtask.planId, subtask.nodeKey) : undefined;
 }
 
-/** 上游子任务的交接：最新一次 Run 的交接摘要，没有时用最终回复。 */
+/** 节点在界面和消息里的名字：节点标题，找不到节点时用目标开头。 */
+export const nodeTitle = (store: StorePort, subtask: SubtaskRecord) => nodeOf(store, subtask)?.title ?? subtask.goal.slice(0, 40);
+
+/** 一次 Run 的交接摘要（submit_result），没有时用最终回复。 */
+export function handoffOf(store: StorePort, runId: string): string | null {
+  return store.runs.getHandoff(runId)?.summary ?? store.runs.getResult(runId)?.finalMessage ?? null;
+}
+
+/** 上游子任务的交接：各自最新一次工作 Run 的交接摘要。 */
 export function upstreamOf(store: StorePort, subtask: SubtaskRecord): UpstreamHandoff[] {
   if (!subtask.planId) return [];
   const graph = store.plans.graph(subtask.taskId);
   const self = graph.find((n) => n.id === subtask.id);
   return (self?.dependsOn ?? []).map((id) => {
     const latest = store.runs.latestRun(id);
-    const summary = latest ? (store.runs.getHandoff(latest.id)?.summary ?? store.runs.getResult(latest.id)?.finalMessage ?? null) : null;
-    return { title: graph.find((n) => n.id === id)?.title ?? id, summary };
+    return { title: graph.find((n) => n.id === id)?.title ?? id, summary: latest ? handoffOf(store, latest.id) : null };
   });
 }
 
@@ -36,33 +43,17 @@ export function upstreamOf(store: StorePort, subtask: SubtaskRecord): UpstreamHa
  * 把新排队的交给监管器。所有迁移都带读到的版本，冲突说明别处先改了，整批放弃，等下一次事件再算。
  */
 export class TaskGraphScheduler {
-  private readonly pending = new Set<string>();
-  private flushing = false;
+  private readonly batch: MicroBatch<string>;
 
-  constructor(private readonly deps: SchedulerDeps) {}
+  constructor(private readonly deps: SchedulerDeps) {
+    this.batch = new MicroBatch((taskId) => void this.advance(taskId), deps.log, 'advance');
+  }
 
   onEvents(events: readonly PersistentEvent[]): void {
     for (const event of events) {
       if (event.type !== 'subtask.status_changed') continue;
       const subtask = this.deps.store.tasks.getSubtask(event.aggregateId);
-      if (subtask?.planId) this.pending.add(subtask.taskId);
-    }
-    if (this.pending.size > 0 && !this.flushing) {
-      this.flushing = true;
-      queueMicrotask(() => this.flush());
-    }
-  }
-
-  private flush(): void {
-    this.flushing = false;
-    const taskIds = [...this.pending];
-    this.pending.clear();
-    for (const taskId of taskIds) {
-      try {
-        this.advance(taskId);
-      } catch (error) {
-        this.deps.log(`advance ${taskId} failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      if (subtask?.planId) this.batch.add(subtask.taskId);
     }
   }
 
@@ -100,7 +91,7 @@ export class TaskGraphScheduler {
   promptFor(subtask: SubtaskRecord): string {
     const { store } = this.deps;
     const task = store.tasks.getTask(subtask.taskId)!;
-    const node = nodeOf(store, subtask);
-    return planNodePrompt(task, node ?? { title: subtask.goal.slice(0, 40), goal: subtask.goal, paths: [] }, upstreamOf(store, subtask));
+    const node = nodeOf(store, subtask) ?? { title: nodeTitle(store, subtask), goal: subtask.goal, paths: [] };
+    return planNodePrompt(task, node, upstreamOf(store, subtask));
   }
 }

@@ -13,7 +13,7 @@ import type {
   NoticeRecord,
 } from '@paldock/contracts';
 import { noticeRef } from '@paldock/contracts';
-import { taskKey } from '@paldock/domain';
+import { taskRef } from '@paldock/domain';
 
 /**
  * 发到外部渠道的卡片文案。内容一律当纯文本（适配器不解析标记）；任务目标、执行器回复等都会截断，
@@ -44,7 +44,7 @@ export function clip(text: string, max: number): string {
 }
 
 /** 任务的短编号：taskKey 的前 6 位，命令里用 `#a1b2c3` 引用。 */
-export const taskRef = (taskId: string) => taskKey(taskId).slice(0, 6);
+export { taskRef };
 
 /** 改动统计的最后一行（「n files changed, …」）。 */
 const diffSummary = (result: RunResultRecord | null | undefined, max: number) =>

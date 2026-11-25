@@ -159,7 +159,7 @@ async function boot(options: { restart: boolean; limits?: { maxRunsPerTask?: num
   coordinator = new CoordinatorService({ store, supervisor, publish, log });
   plans = new PlanService({ store, scheduler, integration, supervisor, publish });
   const tasks = new TaskService({ store, supervisor, scheduler, integration, dataRoot, publish });
-  const recovery = new RecoveryService({ store, runtimes: { claude: runtime }, supervisor, scheduler, gate, integration, coordinator, publish, log });
+  const recovery = new RecoveryService({ store, supervisor, scheduler, gate, integration, coordinator, publish, log });
   const recovered = report ? await recovery.recover(report) : (coordinator.start(), []);
   live = { store, supervisor, plans, tasks, coordinator, integration, gateway, recovered };
   return live;

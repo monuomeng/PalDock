@@ -1,4 +1,4 @@
-import { EXECUTORS, type AgentOverrideRecord, type AgentRole, type AgentSettings, type Executor, type PersistentEvent, type RuntimeAdapter, type StorePort } from '@paldock/contracts';
+import { AgentRole, EXECUTORS, type AgentOverrideRecord, type AgentSettings, type Executor, type PersistentEvent, type RuntimeAdapter, type StorePort } from '@paldock/contracts';
 import { checkCapability } from '@paldock/domain';
 
 export interface AgentServiceDeps {
@@ -33,4 +33,10 @@ export class AgentService {
   setOverride(workspaceId: string, role: AgentRole, executor: Executor | null): void {
     this.deps.publish(this.deps.store.agents.setOverride(workspaceId, role, executor).events);
   }
+}
+
+/** 角色在项目里实际会用的执行器（项目覆盖优先，否则角色默认；不认识的角色原样返回）。 */
+export function executorOfRole(store: StorePort, workspaceId: string, role: string): string {
+  const parsed = AgentRole.safeParse(role);
+  return (parsed.success && store.agents.resolveExecutor(workspaceId, parsed.data)) || role;
 }

@@ -10,7 +10,7 @@ import type {
 } from '@paldock/contracts';
 import { codexVersion, commandEnv, meetsMinimum, MIN_CODEX_VERSION, resolveCodexCommand } from './discover.js';
 import { JsonRpcStdioClient, RpcError, type RpcHandlers } from './json-rpc.js';
-import { approvalResponse, finalTurnEvent, toApprovalRequest, toTurnCheck, type CodexTurn } from './event-mapping.js';
+import { approvalResponse, CodexUsageMeter, finalTurnEvent, toApprovalRequest, toTurnCheck, type CodexTurn } from './event-mapping.js';
 
 export interface CodexAdapterOptions {
   /** 设置里填写的 codex 可执行文件或 .js 入口；为空时在 PATH 上查找。 */
@@ -138,6 +138,7 @@ class CodexRun implements RuntimeRun {
   private finished = false;
   private disposing = false;
   private lastAgentMessage: string | null = null;
+  private readonly usage = new CodexUsageMeter();
   /** fileChange 条目的路径（审批请求本身不带路径，要从 item/started 里取）。 */
   private readonly fileChanges = new Map<string, string[]>();
   /** 执行器请求 ID → 回复函数。 */
@@ -254,6 +255,10 @@ class CodexRun implements RuntimeRun {
         if (method === 'item/completed' && item.type === 'agentMessage' && typeof item.text === 'string') this.lastAgentMessage = item.text;
         return;
       }
+      case 'thread/tokenUsage/updated':
+        // 本连接只服务这一次 Run，子代理的 thread 也在这上面，一并计入
+        if (typeof params.threadId === 'string') this.usage.update(params.threadId, params.tokenUsage as Parameters<CodexUsageMeter['update']>[1]);
+        return;
       case 'serverRequest/resolved': {
         const id = String(params.requestId);
         if (this.approvals.delete(id)) this.emit({ type: 'approval_withdrawn', nativeRequestId: id });
@@ -271,7 +276,7 @@ class CodexRun implements RuntimeRun {
   }
 
   private complete(turn: CodexTurn): void {
-    this.finish(finalTurnEvent(turn, this.lastAgentMessage));
+    this.finish(finalTurnEvent(turn, this.lastAgentMessage, this.usage.usage()));
     void this.dispose();
   }
 

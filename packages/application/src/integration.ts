@@ -1,13 +1,14 @@
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { CodedError, type CheckCommand, type GateDecision, type PersistentEvent, type StorePort, type SubtaskRecord, type TaskRecord } from '@paldock/contracts';
 import { P1_DEFAULTS, taskKey } from '@paldock/domain';
 import { runCheck } from './check-runner.js';
 import { addWorktree, branchCommit, git, headCommit, mergeInto, mergeNoCommit, removeWorktree } from './git.js';
 import { mergeRedoPrompt } from './prompts.js';
 import type { RunPlan } from './run-supervisor.js';
-import { nodeOf } from './task-graph-scheduler.js';
-import { settleTask } from './transitions.js';
+import { nodeTitle } from './task-graph-scheduler.js';
+import { requireSubtask, settleTask, succeedSubtask } from './transitions.js';
+import { errorText } from './util.js';
 
 export interface IntegrationDeps {
   store: StorePort;
@@ -20,7 +21,6 @@ export interface IntegrationDeps {
   checkpoint?: (point: 'started' | 'candidate' | 'fast_forward') => Promise<void>;
 }
 
-const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 300);
 const commandText = (c: CheckCommand) => [c.executable, ...c.args].join(' ');
 
 /**
@@ -65,7 +65,7 @@ export class IntegrationService {
         this.deps.publish(
           store.transaction(() => {
             store.merges.advance(op.id, 'done', { detail: '重启后核对：集成分支已快进，补记完成' });
-            return subtask.status === 'review' ? this.succeedEvents(subtask, { stage: 'merge', outcome: 'passed', runId }) : [];
+            return subtask.status === 'review' ? succeedSubtask(store, subtask, { stage: 'merge', outcome: 'passed', runId }) : [];
           }),
         );
         items.push({ targetId: op.id, outcome: '补记完成', detail: `集成分支已在候选提交 ${op.candidateSha.slice(0, 10)}` });
@@ -98,15 +98,14 @@ export class IntegrationService {
       else rmSync(path, { recursive: true, force: true });
       items.push({ targetId: name, outcome: '清理临时 worktree', detail: path });
     }
-    for (const workspace of store.tasks.listWorkspaces()) {
-      for (const summary of store.tasks.listTasks(500)) {
-        const task = summary.task;
-        if (task.workspaceId !== workspace.id || !task.integrationWorktree || !existsSync(task.integrationWorktree)) continue;
-        const merging = await git(task.integrationWorktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).then(() => true, () => false);
-        if (!merging) continue;
-        await git(task.integrationWorktree, ['merge', '--abort']).catch(() => {});
-        items.push({ targetId: task.id, outcome: '清理集成 worktree 的合并残留', detail: task.integrationWorktree });
-      }
+    // 只看还没结束的计划任务；先查文件，有合并残留才动 git
+    for (const taskId of store.plans.openPlanTasks()) {
+      const task = store.tasks.getTask(taskId);
+      if (!task?.integrationWorktree || !existsSync(task.integrationWorktree)) continue;
+      const gitDir = await git(task.integrationWorktree, ['rev-parse', '--git-dir']).then((d) => resolve(task.integrationWorktree!, d.trim()), () => undefined);
+      if (!gitDir || !existsSync(join(gitDir, 'MERGE_HEAD'))) continue;
+      await git(task.integrationWorktree, ['merge', '--abort']).catch(() => {});
+      items.push({ targetId: task.id, outcome: '清理集成 worktree 的合并残留', detail: task.integrationWorktree });
     }
     return items;
   }
@@ -132,12 +131,29 @@ export class IntegrationService {
     const subtask = this.deps.store.tasks.getSubtask(subtaskId);
     if (!subtask) return Promise.resolve();
     const previous = this.queues.get(subtask.taskId) ?? Promise.resolve();
-    const next = previous.then(() => this.mergeNow(subtaskId)).catch((error) => this.deps.log(`merge ${subtaskId} failed: ${errorText(error)}`));
+    const next = previous.then(() => this.mergeNow(subtaskId)).catch((error) => this.mergeFailed(subtaskId, error));
     this.queues.set(subtask.taskId, next);
     void next.finally(() => {
       if (this.queues.get(subtask.taskId) === next) this.queues.delete(subtask.taskId);
     });
     return next;
+  }
+
+  /**
+   * 合并出了不是冲突的 git 错误（建临时 worktree 失败、快进失败、文件被占用……）：这次操作记失败，节点交给人，
+   * 不让它卡在待验收里没人知道。
+   */
+  private mergeFailed(subtaskId: string, error: unknown): void {
+    const reason = `合并到集成分支时出错：${errorText(error)}`;
+    this.deps.log(`merge ${subtaskId} failed: ${errorText(error)}`);
+    try {
+      const op = this.deps.store.merges.latestOf(subtaskId);
+      if (op && (op.phase === 'started' || op.phase === 'candidate')) this.deps.store.merges.advance(op.id, 'check_failed', { detail: reason });
+      const runId = this.deps.store.runs.latestRun(subtaskId)?.id ?? subtaskId;
+      this.handOver(subtaskId, { stage: 'merge', outcome: 'human', runId, reason });
+    } catch (inner) {
+      this.deps.log(`merge ${subtaskId} hand over failed: ${errorText(inner)}`);
+    }
   }
 
   private async mergeNow(subtaskId: string): Promise<void> {
@@ -156,7 +172,7 @@ export class IntegrationService {
     if (!source) return this.handOver(subtask.id, { stage: 'merge', outcome: 'human', runId, reason: '找不到节点的交付提交' });
     const oldHead = await branchCommit(repo, task.integrationBranch);
     const op = store.merges.start({ taskId: task.id, subtaskId: subtask.id, sourceSha: source, targetOld: oldHead });
-    const title = nodeOf(store, subtask)?.title ?? subtask.goal.slice(0, 40);
+    const title = nodeTitle(store, subtask);
     const temp = join(this.deps.dataRoot, 'merges', op.id);
     mkdirSync(join(this.deps.dataRoot, 'merges'), { recursive: true });
     await this.deps.checkpoint?.('started');
@@ -190,7 +206,7 @@ export class IntegrationService {
       this.deps.publish(
         store.transaction(() => {
           store.merges.advance(op.id, 'done');
-          return this.succeedEvents(fresh, { stage: 'merge', outcome: 'passed', runId });
+          return succeedSubtask(store, fresh, { stage: 'merge', outcome: 'passed', runId });
         }),
       );
     } finally {
@@ -210,15 +226,12 @@ export class IntegrationService {
       .filter((n) => merged.has(n.key) && n.checkCommand)
       .map((n) => n.checkCommand!)
       .filter((c) => !seen.has(JSON.stringify(c)) && seen.add(JSON.stringify(c)));
-    // 候选 worktree 是新建的：有检查要跑时先跑项目的准备命令（例如安装依赖）
+    // 候选 worktree 是新建的：有检查要跑时先跑项目的准备命令（例如安装依赖），失败就不跑检查
     const prepare = commands.length > 0 ? store.tasks.getWorkspace(task.workspaceId)?.prepareCommand : null;
-    if (prepare) {
-      const outcome = await runCheck(prepare, { cwd, timeoutMs: this.limits.checkTimeoutMs, maxOutputBytes: this.limits.checkOutputMaxBytes });
-      if (outcome.status !== 'passed') return `准备命令失败：${commandText(prepare)}（${outcome.exitCode === null ? outcome.status : `退出码 ${outcome.exitCode}`}）`;
-    }
-    for (const command of commands) {
+    const steps = [...(prepare ? [{ command: prepare, failure: '准备命令失败' }] : []), ...commands.map((command) => ({ command, failure: '集成检查没通过' }))];
+    for (const { command, failure } of steps) {
       const outcome = await runCheck(command, { cwd, timeoutMs: this.limits.checkTimeoutMs, maxOutputBytes: this.limits.checkOutputMaxBytes });
-      if (outcome.status !== 'passed') return `集成检查没通过：${commandText(command)}（${outcome.exitCode === null ? outcome.status : `退出码 ${outcome.exitCode}`}）`;
+      if (outcome.status !== 'passed') return `${failure}：${commandText(command)}（${outcome.exitCode === null ? outcome.status : `退出码 ${outcome.exitCode}`}）`;
     }
     return undefined;
   }
@@ -230,13 +243,7 @@ export class IntegrationService {
   }
 
   private succeed(subtask: SubtaskRecord, decision: GateDecision): void {
-    this.deps.publish(this.deps.store.transaction(() => this.succeedEvents(subtask, decision)));
-  }
-
-  /** 节点成功（调度器据此放行下游），任务状态重新推导。 */
-  private succeedEvents(subtask: SubtaskRecord, decision: GateDecision): PersistentEvent[] {
-    const { store } = this.deps;
-    return [store.tasks.gateDecided(subtask.id, decision), ...store.tasks.transitionSubtask(subtask.id, subtask.version, 'succeeded').events, ...settleTask(store, subtask.taskId)];
+    this.deps.publish(this.deps.store.transaction(() => succeedSubtask(this.deps.store, subtask, decision)));
   }
 
   /**
@@ -245,9 +252,7 @@ export class IntegrationService {
    */
   async redo(subtaskId: string, expectedVersion: number): Promise<void> {
     const { store } = this.deps;
-    const subtask = store.tasks.getSubtask(subtaskId);
-    if (!subtask) throw new CodedError('not_found', '子任务不存在');
-    if (subtask.status !== 'review' || subtask.version !== expectedVersion) throw new CodedError('conflict', '子任务状态已变化，请刷新');
+    const subtask = requireSubtask(store, subtaskId, 'review', expectedVersion);
     const op = store.merges.latestOf(subtask.id);
     if (!op || (op.phase !== 'conflict' && op.phase !== 'check_failed')) throw new CodedError('bad_request', '只有合入集成分支失败的节点能交回重做');
     const task = store.tasks.getTask(subtask.taskId)!;

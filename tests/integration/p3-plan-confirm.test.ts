@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { McpGateway, PlanService, ReviewGate, RunSupervisor, TaskGraphScheduler, TaskService } from '@paldock/application';
+import { IntegrationService, McpGateway, PlanService, ReviewGate, RunSupervisor, TaskGraphScheduler, TaskService } from '@paldock/application';
 import type { PersistentEvent, RunStartRequest, RuntimeAdapter, RuntimeEvent, SubtaskRecord } from '@paldock/contracts';
 import { openStore, type Store } from '@paldock/storage-sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -118,7 +118,8 @@ async function setup() {
     log,
   });
   scheduler = new TaskGraphScheduler({ store, supervisor, publish, log });
-  gate = new ReviewGate({ store, supervisor, publish, log });
+  // 没有集成分支的任务（这里的计划确认时不建）由它直接记成功
+  gate = new ReviewGate({ store, supervisor, publish, log, integration: new IntegrationService({ store, supervisor, dataRoot: join(root, 'data'), publish, log }) });
   plans = new PlanService({ store, scheduler, supervisor, publish });
   tasks = new TaskService({ store, supervisor, scheduler, dataRoot: join(root, 'data'), publish });
   workspaceId = store.tasks.ensureWorkspace('repo', repo).id;
@@ -220,6 +221,9 @@ describe('P3 计划确认与自动处理记录', () => {
     // 新 b 按新目标开始，c 等它
     const newB = await started('b', 2);
     expect(newB.request.prompt).toContain('换个做法');
+    // 被替换的节点在新的 worktree 和分支里从头做，不落进旧子任务的
+    expect(newB.request.cwd).not.toBe(oldB.request.cwd);
+    expect(node(taskId, 'b').branch).toMatch(/-b-r2$/);
     expect(node(taskId, 'b').id).not.toBe(before.b);
     expect(node(taskId, 'c').status).toBe('waiting_dependency');
     expect(store.tasks.listSubtasks(taskId).map((s) => s.nodeKey).sort()).toEqual(['a', 'b', 'c']);

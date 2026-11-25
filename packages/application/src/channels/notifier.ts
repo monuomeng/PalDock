@@ -1,4 +1,4 @@
-import { AgentRole } from '@paldock/contracts';
+import { executorOfRole } from '../agent-service.js';
 import type {
   Card,
   ChannelProvider,
@@ -142,7 +142,7 @@ export class ChannelNotifier {
       const lines = nodes.map((n) => ({
         title: n.title,
         role: n.role,
-        executor: n.executor ?? this.executorOf(task.workspaceId, n.role),
+        executor: n.executor ?? executorOfRole(store, task.workspaceId, n.role),
         dependsOn: n.dependsOn.map((k) => nodes.find((x) => x.key === k)?.title ?? k),
         check: n.checkCommand ? [n.checkCommand.executable, ...n.checkCommand.args].join(' ') : null,
       }));
@@ -163,12 +163,6 @@ export class ChannelNotifier {
         this.deps.publish([event]);
       });
     }
-  }
-
-  private executorOf(workspaceId: string, role: string): string {
-    const parsed = AgentRole.safeParse(role);
-    if (!parsed.success) return role;
-    return this.deps.store.agents.resolveExecutor(workspaceId, parsed.data) ?? this.deps.store.agents.getProfile(parsed.data)?.executor ?? role;
   }
 
   /** 已升级的审批被处理（桌面、外部或过期）：作废按钮，并更新每个单聊里的那张卡片。 */

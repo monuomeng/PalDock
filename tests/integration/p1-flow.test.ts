@@ -215,10 +215,10 @@ describe('P1 主流程', () => {
 
 describe('审批', () => {
   it('拒绝：执行器收到 decline，不写入；只移除这条审批', async () => {
-    const created = await create('[mock:file-approval] 写文件');
+    const created = await create('[mock:file-outside] 写文件');
     const waiting = await until(created.task.id, (d) => !!pendingApproval(d));
     const approval = pendingApproval(waiting)!;
-    expect(approval).toMatchObject({ kind: 'file_change', riskLevel: 'low' });
+    expect(approval).toMatchObject({ kind: 'file_change', riskLevel: 'high' });
     expect(latest(waiting).run.status).toBe('waiting_approval');
     expect((await attention()).map((i) => [i.kind, i.itemId])).toEqual([['approval', approval.id]]);
 
@@ -256,10 +256,18 @@ describe('审批', () => {
   it('审批过期即拒绝并回复执行器', async () => {
     await stopService();
     await startService({}, { approvalTtlMs: 100 });
-    const created = await create('[mock:file-approval] 写文件');
+    const created = await create('[mock:file-outside] 写文件');
     const reviewed = await until(created.task.id, (d) => d.subtask.status === 'review');
     expect(latest(reviewed).approvals[0]).toMatchObject({ status: 'expired', decidedVia: 'policy' });
     expect(existsSync(join(reviewed.subtask.worktreePath!, 'approved.txt'))).toBe(false);
+  });
+
+  it('写自己 worktree 里的文件由宿主直接批准：不建审批、不进待我处理，记一条审计', async () => {
+    const created = await create('[mock:file-approval] 写文件');
+    const reviewed = await until(created.task.id, (d) => d.subtask.status === 'review');
+    expect(latest(reviewed).approvals).toEqual([]);
+    expect(existsSync(join(reviewed.subtask.worktreePath!, 'approved.txt'))).toBe(true);
+    expect(events.some((e) => e.type === 'approval.requested')).toBe(false);
   });
 
   it('未识别的请求被记录，turn 正常结束', async () => {
@@ -280,7 +288,7 @@ describe('取消', () => {
   });
 
   it('等待审批时取消：挂起审批被取消', async () => {
-    const created = await create('[mock:file-approval]');
+    const created = await create('[mock:file-outside]');
     await until(created.task.id, (d) => !!pendingApproval(d));
     await call('task.cancel', { taskId: created.task.id });
     const cancelled = await until(created.task.id, (d) => d.task.status === 'cancelled');
@@ -332,7 +340,7 @@ describe('崩溃与恢复', () => {
   });
 
   it('服务重启：进行中的 Run 中断、审批取消、任务阻塞；重新开始新建 thread，旧证据保留', async () => {
-    const created = await create('[mock:file-approval]');
+    const created = await create('[mock:file-outside]');
     const waiting = await until(created.task.id, (d) => !!pendingApproval(d));
     const before = latest(waiting).run;
 
@@ -394,7 +402,7 @@ describe('崩溃与恢复', () => {
 
 describe('待我处理 A/B 场景', () => {
   it('A 停在审批、B 待验收；重开窗口不变；拒绝 A 只移除 A；退回 B 重跑后旧证据可查', async () => {
-    const a = await create('[mock:file-approval] A');
+    const a = await create('[mock:file-outside] A');
     const approval = pendingApproval(await until(a.task.id, (d) => !!pendingApproval(d)))!;
     const b = await create('B');
     const bReview = await until(b.task.id, (d) => d.subtask.status === 'review');

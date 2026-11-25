@@ -2,7 +2,7 @@
 
 本地优先的 AI 桌面助手与多会话协作平台。用户可以通过桌面界面或授权的外部聊天渠道发起任务，由协调助手分派给拥有独立会话的专业助手；执行器可接入本地 Codex、Claude Code 或其他兼容能力。
 
-> 当前阶段：P2 外部渠道已合入（飞书、Telegram 部分项待实机），P3 多助手协作计划中。桌面管理窗口 + 本地任务 + Codex + 外部渠道已能跑通；多助手协作、桌宠尚未实现。进度见 [项目演进总表](docs/roadmap.md)。
+> 当前阶段：P2 外部渠道已合入（飞书、Telegram 部分项待实机），P3 多助手协作开发完成、待实测与合并。桌面管理窗口 + 本地任务 + Codex / Claude + 外部渠道 + 协调助手带开发、测试、审阅助手按计划协作已能跑通；桌宠尚未实现。进度见 [项目演进总表](docs/roadmap.md)。
 
 本地验证：`pnpm install` 后运行 `pnpm build` 和 `pnpm test`（需 Node 24+）；桌面端到端检查 `node scripts/p1/e2e-check.mjs`（离线模拟执行器）；真实 Codex 验收 `PALDOCK_LIVE_CODEX=1 pnpm exec vitest run tests/live`（消耗少量额度）。
 

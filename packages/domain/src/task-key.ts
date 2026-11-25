@@ -4,6 +4,9 @@
  */
 export const taskKey = (taskId: string) => taskId.replace(/^task_/, '').replaceAll('-', '').toLowerCase();
 
+/** 任务的短编号（#a1b2c3 里的 6 位）：外部渠道、协调助手的任务板和提示词共用。 */
+export const taskRef = (taskId: string) => taskKey(taskId).slice(0, 6);
+
 /**
  * taskKey 的前缀（短编号、分支名里的编号）还原成任务 ID 的前缀，用于按主键范围查找。
  * ID 是 `task_` + 小写 UUID，第 8 位之后才有连字符；不是十六进制时返回 undefined。

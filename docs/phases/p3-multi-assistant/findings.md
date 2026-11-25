@@ -57,3 +57,48 @@
 | 会话记录结构 | 除 user / assistant 外还有 attachment、queue-operation、api-request 等十余种行，核对时只看 user / assistant；完成的回复 `stop_reason` 为 end_turn，被中断的为 null |
 
 遗留：用量目前只放在 completed / failed 事件里，P3-02 的迁移 005 再落到 Run 上；Codex 侧用量同时补上。
+
+## P3-11 真实执行器端到端实测（2026-11-25，Windows 11 x64，Codex 0.166.0，Claude Code 2.1.325）
+
+`PALDOCK_LIVE_P3=1 npx vitest run tests/live/p3.live.test.ts`。本地服务用构建好的 `apps/local-service/dist/main.js` 跑在子进程里（可以真的强杀），每个场景独立的临时数据根和临时小仓库（`math.js` + `node --test`），不接真实飞书。Codex 按 `D:\software\codex-cli\codex.cmd`，Claude 自动发现（桌面版自带的那份）。执行器分工按出厂设置：协调、开发用 Claude，测试、审阅用 Codex。脚本对 `approval.requested` 一律代为「允许一次」并计数。每个场景成功跑一次。
+
+| 场景 | 结果 | 用时 | 代为批准 |
+|---|---|---|---|
+| 完整链路：协调助手经 `propose_plan` 提两节点计划（开发 → 测试）→ 确认 → Claude 开发 → Codex 审阅 → 合入集成分支 → Codex 测试 → Codex 审阅 → 合入 → 「待合并」 | ✅ 任务成功，集成分支 `paldock/<任务编号>` 上有 `math.js`、`package.json`、`test/add.test.js`、`test/sub.test.js` 的改动 | 共 162 秒；提计划 10 秒；开发 16 秒、审阅 47 秒、测试 39 秒、审阅 45 秒 | 1（Claude 跑 `node --test`） |
+| 强杀重启：开发 Run 拿到 turn 后 `taskkill /F` 杀本地服务，10 秒后重启 | ✅ 杀完当时和 10 秒后都**没有**残留的 codex / claude 进程；重启 2 秒内恢复程序按 `checkTurn`（Claude 会话里这轮没做完）把节点放回队列、按原会话续做；续做 13 秒完成，审阅 40 秒，任务成功 | 共 82 秒；重启到任务成功 56 秒 | 1（续做时 Claude 跑 `node --test`） |
+| 冲突：两个并行开发节点改 `math.js` 同一行 | ✅ 两个节点并行开发（各 14 秒）、各自审阅（56 / 60 秒）；先到的合入，后到的合并冲突，交给人，原因写明「合并到集成分支冲突：math.js」，`merge_ops` 记 `conflict` 和冲突文件 | 共 116 秒 | 0 |
+
+用量（Claude 的是 CLI 估算值，订阅登录不按此扣费；Codex 不报费用，只有 token）：
+
+| 场景 | Claude | Codex |
+|---|---|---|
+| 完整链路 | 协调 0.197 美元、开发 0.165 美元 | 三次 Run 没记到（当时 Codex 用量还没接，见下面第 4 条） |
+| 强杀重启 | 协调 0.186、续做 0.138 美元（被杀那次没有用量） | 审阅 6,849 输入 / 579 输出 |
+| 冲突 | 协调 0.191、两个开发各 0.169 美元 | 审阅 18,556 / 481、8,442 / 431 |
+
+成功的四次合计 Claude 约 1.4 美元，加上下面修问题前失败的几次约 2 美元。
+
+### 实测发现并已修的问题（都补了离线测试）
+
+1. **父进程被杀后本地服务和 Claude 成了孤儿进程**：第一次跑完整链路时卡住，杀掉测试进程后服务和 claude.exe 还在。本地服务以 `child_process.fork` 启动时，IPC 断开就正常收尾退出（`apps/local-service/src/main.ts`）。修后强杀场景两次检查都没有残留。
+2. **Claude 每次改文件都来要审批**：Claude 用 `--permission-mode default`，Edit / Write 都经宿主审批，一个小任务十几次；Codex 的 workspace-write 沙箱改 worktree 内的文件不会来问。按 2026-11-25 的决定（Windows 可写角色「不隔离」、不逐条审批），监管器对**路径全在自己 worktree 里的文件改动**直接批准并写一条 `approval.auto` 审计；worktree 外的写入、命令、权限扩展照旧走审批和风险分级；对话 Run（协调助手）不自动批准。修后三个场景代为批准共 2 次，都是 Claude 运行命令。
+3. **设置里填 `codex.cmd` 时 Codex 一律「无法运行 codex --version」**：Node 不经 shell 起不了 `.cmd`。填的是 `.cmd` 时按 npm 布局解析，直接运行包里的原生 `codex.exe`（和 PATH 上找到 `codex.cmd` 时同样处理）。
+4. **Codex 用量没有记到 Run 上**（P3-01 遗留里说的「Codex 侧用量同时补上」当时漏了）：适配器接 `thread/tokenUsage/updated`。`total` 是整个 thread 的累计（续做时含以前的 Run），同一份累计也会重复上报，所以按 thread 记基数取差值，子代理的 thread 一并合计；输入口径与 Claude 对齐（缓存命中单列）。
+5. **实测脚本自己的竞态**：恢复在服务就绪后异步进行，脚本一重启就读恢复报告，读到空的；改为等恢复处理到这个节点、再等任务真正结束。
+
+### 观察
+
+- 协调助手在任务结束时会被唤醒写汇总，脚本在那之前就关了服务，所以每个场景最后都有一条「应用退出」中断的协调 Run，属预期。
+- 审阅（Codex）是链路里最慢的一步，每次 40–60 秒，大部分时间在读代码和重跑测试。
+- 被中断的 Run 不写结束时间（`interrupted` 不是终态，可以续做），与 P1 一致。
+
+### 没跑的
+
+- **Windows 睡眠唤醒**（P2-09 遗留）：自动化做不了，放在 [实测清单](checklist.md) 第 3 节由你手测。
+- Codex 作为开发执行器时 turn 中途被杀：这轮开发都是 Claude；Codex 的 `checkTurn` 续做 P1 已经实测过。
+- 真实飞书 / Telegram：按要求不接，见实测清单第 2 节。
+- macOS。
+
+### 待你决定
+
+- **Claude 运行命令仍逐条审批**：现在只自动批准 worktree 内的文件改动。Claude 开发、测试时跑 `node --test` 这类命令每次都会来问；Codex 在沙箱里跑命令不会问。要不要把「在 worktree 内运行命令」（非安装依赖、非 push / merge、不碰 worktree 外路径）也自动批准，需要你定。

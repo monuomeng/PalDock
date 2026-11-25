@@ -1,5 +1,5 @@
 import { noticeRef, type ConversationDetail, type MainSessionRecord, type WakeRecord, type WorkspaceRecord } from '@paldock/contracts';
-import { call } from '../api.js';
+import { bridge, call } from '../api.js';
 import { h } from '../dom.js';
 import { time } from '../format.js';
 import { liveText } from '../live-output.js';
@@ -23,18 +23,34 @@ export async function chatView(route: { workspaceId: string | undefined; session
   const error = h('p', { class: 'error', role: 'alert' });
   const workspaces = await call('workspace.list', {});
   if (workspaces.length === 0) {
-    return { element: h('article', {}, h('h2', {}, '对话'), h('p', { class: 'empty' }, '还没有项目。先在「新建任务」里选一个项目目录。')), sessionId: null };
+    const pick = async () => {
+      const path = await bridge().pickProject();
+      if (!path) return;
+      try {
+        await call('workspace.add', { rootPath: path });
+      } catch (e) {
+        // 出错时不重绘：重绘会换掉这个提示
+        error.textContent = (e as Error).message;
+        return;
+      }
+      refresh();
+    };
+    return {
+      element: h('article', {}, h('h2', {}, '对话'), h('p', { class: 'empty' }, '还没有项目。先选一个项目目录（git 仓库根目录）。'), error, h('button', { type: 'button', class: 'primary', onclick: () => void pick() }, '选择项目目录…')),
+      sessionId: null,
+    };
   }
   let detail: ConversationDetail;
+  let sessions: MainSessionRecord[];
   if (route.sessionId || route.taskId) {
     detail = await call('chat.get', route.sessionId ? { sessionId: route.sessionId } : { taskId: route.taskId! });
+    sessions = await call('chat.sessions', { workspaceId: detail.session.workspaceId });
   } else {
     const workspace = workspaces.find((w) => w.id === route.workspaceId) ?? workspaces[0]!;
-    const [first] = await call('chat.sessions', { workspaceId: workspace.id });
-    detail = await call('chat.get', { sessionId: first!.sessionId });
+    sessions = await call('chat.sessions', { workspaceId: workspace.id });
+    detail = await call('chat.get', { sessionId: sessions[0]!.sessionId });
   }
   const { session } = detail;
-  const sessions = await call('chat.sessions', { workspaceId: session.workspaceId });
   if (detail.notices.some((n) => n.status === 'open')) void call('notice.ack', { sessionId: session.sessionId }).catch(() => {});
 
   const input = h('textarea', { id: 'chat-input', rows: 3, 'data-keep': `chat-${session.sessionId}`, placeholder: '告诉协调助手你想做什么，例如：给登录页加「记住我」并补测试' }) as HTMLTextAreaElement;
@@ -47,6 +63,7 @@ export async function chatView(route: { workspaceId: string | undefined; session
       input.value = '';
     } catch (e) {
       error.textContent = (e as Error).message;
+      return;
     }
     refresh();
   };

@@ -309,12 +309,12 @@ export class RunRepository implements RunStorePort {
   }
 
   /** 子任务的全部 Run 及其证据，按 attempt 升序；共 5 条查询，与 Run 的数量无关。 */
-  runDetails(subtaskId: string): RunDetail[] {
+  runDetails(subtaskId: string, options: { messages?: boolean } = {}): RunDetail[] {
     const runs = this.db.all<RunRecord>(SQL.selectRunsOfSubtask, subtaskId);
     const results = new Map(this.db.all<ResultRow>(SQL.resultsOfSubtask, subtaskId).map((r) => [r.runId, toResult(r)]));
     const reviews = groupByRun(this.db.all<RunReviewRecord>(SQL.reviewsOfSubtask, subtaskId));
     const approvals = groupByRun(this.db.all<ApprovalRecord>(SQL.approvalsOfSubtask, subtaskId));
-    const messages = groupByRun(this.db.all<MessageRecord>(SQL.messagesOfSubtask, subtaskId));
+    const messages = options.messages === false ? new Map<string, MessageRecord[]>() : groupByRun(this.db.all<MessageRecord>(SQL.messagesOfSubtask, subtaskId));
     return runs.map((run) => ({
       run,
       result: results.get(run.id) ?? null,

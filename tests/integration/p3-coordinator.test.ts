@@ -223,7 +223,13 @@ describe('协调助手主会话', () => {
     await new Promise((r) => setTimeout(r, 100));
     expect(runtime.runs).toHaveLength(2);
     expect(wakes().at(-1)).toMatchObject({ trigger: 'task_event', status: 'pending' });
-    const third = await nthRun(3);
+    // 你的消息不被它挡住：先处理
+    say('先回答我一下');
+    const answered = await nthRun(3);
+    expect(answered.request.prompt).toContain('用户说：\n先回答我一下');
+    answered.reply('好');
+    await waitIdle();
+    const third = await nthRun(4);
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(350);
     expect(third.request.prompt).toContain('计划第 2 版被用户退回');
     third.reply('好');
@@ -232,14 +238,14 @@ describe('协调助手主会话', () => {
     // 今天已经 2 次：第三个事件跳过，并通知你一次
     reject(repropose(), '第三次');
     await until(() => wakes().at(-1)?.status, (s) => s === 'dropped', '跳过');
-    expect(runtime.runs).toHaveLength(3);
+    expect(runtime.runs).toHaveLength(4);
     const notices = store.coordinator.notices(session.sessionId, 10);
     expect(notices).toEqual([expect.objectContaining({ kind: 'info', body: expect.stringContaining('达到上限') })]);
     // 跳过记进自动处理记录单
     expect(store.autoDecisions.list(session.workspaceId, 10)).toEqual([expect.objectContaining({ kind: 'wake_dropped', taskId: session.taskId })]);
     // 你发的消息不受限制
     say('那就先这样');
-    (await nthRun(4)).reply('好的');
+    (await nthRun(5)).reply('好的');
     await waitIdle();
   });
 

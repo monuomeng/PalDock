@@ -1,4 +1,4 @@
-import type { RuntimeApprovalDecision, RuntimeApprovalRequest, RuntimeEvent, TurnCheck } from '@paldock/contracts';
+import type { RuntimeApprovalDecision, RuntimeApprovalRequest, RuntimeEvent, RuntimeUsage, TurnCheck } from '@paldock/contracts';
 
 /**
  * Codex app-server 协议 → PalDock 运行时契约的纯函数映射（codex-cli 0.166 的 v2 协议，
@@ -102,13 +102,14 @@ const agentText = (turn: CodexTurn) =>
   turn.items?.filter((i) => i.type === 'agentMessage' && typeof i.text === 'string').at(-1)?.text ?? null;
 
 /** turn/completed → 终态事件；与核对共用一套状态映射，流式期间记下的最后一条回复优先。 */
-export function finalTurnEvent(turn: CodexTurn, lastAgentMessage: string | null): RuntimeEvent {
+export function finalTurnEvent(turn: CodexTurn, lastAgentMessage: string | null, usage?: RuntimeUsage): RuntimeEvent {
   const check = toTurnCheck(turn);
+  const withUsage = usage ? { usage } : {};
   switch (check.status) {
     case 'completed':
-      return { type: 'completed', finalMessage: lastAgentMessage ?? check.finalMessage };
+      return { type: 'completed', finalMessage: lastAgentMessage ?? check.finalMessage, ...withUsage };
     case 'failed':
-      return { type: 'failed', message: check.message };
+      return { type: 'failed', message: check.message, ...withUsage };
     case 'interrupted':
       return { type: 'interrupted' };
     default:
@@ -129,4 +130,53 @@ export function toTurnCheck(turn: CodexTurn | undefined): TurnCheck {
     default:
       return { status: 'in_progress' };
   }
+}
+
+/** `thread/tokenUsage/updated` 里的一组计数（app-server v2 的 TokenUsageBreakdown）。 */
+export interface CodexTokenBreakdown {
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens?: number;
+  outputTokens: number;
+}
+
+/**
+ * 一次 Run 的 Codex 用量。`total` 是整个 thread 的累计（续做的 thread 含以前各次 Run），
+ * 同一份累计也可能重复上报，所以按 thread 记「本次第一次见到之前的基数」和最新累计，取差值；
+ * 同一连接上的子代理 thread 一并合计（P0 已确认按 thread 分开上报）。
+ * 口径与 Claude 对齐：`inputTokens` 不含缓存命中部分，缓存命中记到 `cacheReadTokens`。
+ */
+export class CodexUsageMeter {
+  private readonly threads = new Map<string, { base: CodexTokenBreakdown; latest: CodexTokenBreakdown }>();
+
+  update(threadId: string, tokenUsage: { total?: CodexTokenBreakdown; last?: CodexTokenBreakdown } | undefined): void {
+    const total = tokenUsage?.total;
+    if (!total) return;
+    const known = this.threads.get(threadId);
+    if (known) known.latest = total;
+    else this.threads.set(threadId, { base: minus(total, tokenUsage.last), latest: total });
+  }
+
+  usage(): RuntimeUsage | undefined {
+    if (this.threads.size === 0) return undefined;
+    const sum = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    for (const { base, latest } of this.threads.values()) {
+      const d = minus(latest, base);
+      sum.inputTokens += Math.max(0, d.inputTokens - d.cachedInputTokens);
+      sum.cacheReadTokens += d.cachedInputTokens;
+      sum.cacheWriteTokens += d.cacheWriteInputTokens ?? 0;
+      sum.outputTokens += d.outputTokens;
+    }
+    return sum;
+  }
+}
+
+function minus(a: CodexTokenBreakdown, b: CodexTokenBreakdown | undefined): CodexTokenBreakdown {
+  const n = (x: number | undefined) => (Number.isFinite(x) ? (x as number) : 0);
+  return {
+    inputTokens: Math.max(0, n(a.inputTokens) - n(b?.inputTokens)),
+    cachedInputTokens: Math.max(0, n(a.cachedInputTokens) - n(b?.cachedInputTokens)),
+    cacheWriteInputTokens: Math.max(0, n(a.cacheWriteInputTokens) - n(b?.cacheWriteInputTokens)),
+    outputTokens: Math.max(0, n(a.outputTokens) - n(b?.outputTokens)),
+  };
 }

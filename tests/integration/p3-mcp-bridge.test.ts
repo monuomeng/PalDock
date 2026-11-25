@@ -72,9 +72,14 @@ describe('MCP 网关', () => {
 
   it('协调助手只看到协调工具；交接记录每次 Run 只收一份', async () => {
     const { run, gateway } = await seedRun();
-    const coordinator = gateway.authenticate(gateway.issue('run_main', 'coordinator', 60_000))!;
+    const coordinator = gateway.authenticate(gateway.issue(run.id, 'coordinator', 60_000))!;
     expect(gateway.list(coordinator).map((t) => t.name)).toEqual(['notify_user', 'write_summary', 'get_status', 'propose_plan']);
     expect(gateway.call(coordinator, 'get_status', {})).toEqual([expect.objectContaining({ title: '加记住我' })]);
+    // 只看调用方所在的项目：别的项目的任务不给
+    const other = store.tasks.ensureWorkspace('other', 'D:/other');
+    store.tasks.createTask({ workspaceId: other.id, title: '别的项目', goal: 'x', role: 'developer', checkCommand: null, checkConfirmed: false, idempotencyKey: 'k2' });
+    expect((gateway.call(coordinator, 'get_status', {}) as { title: string }[]).map((t) => t.title)).toEqual(['加记住我']);
+    expect(gateway.call(gateway.authenticate(gateway.issue('run_missing', 'coordinator', 60_000))!, 'get_status', {})).toEqual([]);
 
     const dev = gateway.authenticate(gateway.issue(run.id, 'developer', 60_000))!;
     expect(gateway.call(dev, 'submit_result', { summary: '改好了', notes: '跑过测试' })).toMatchObject({ handoffId: run.id });

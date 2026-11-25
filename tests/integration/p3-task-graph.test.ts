@@ -19,6 +19,8 @@ interface FakeRun {
   ended: boolean;
   succeed(message?: string): void;
   fail(message: string): void;
+  /** 像 Claude 的 Edit 一样请求改文件，返回宿主的决定。 */
+  askFileChange(path: string): Promise<string>;
 }
 
 class FakeRuntime implements RuntimeAdapter {
@@ -31,11 +33,18 @@ class FakeRuntime implements RuntimeAdapter {
   }
 
   async start(request: RunStartRequest, onEvent: (event: RuntimeEvent) => void) {
+    const decisions = new Map<string, (decision: string) => void>();
     const title = /你负责的子任务：(.+)/.exec(request.prompt)?.[1] ?? '?';
     const run: FakeRun = {
       request,
       title,
       ended: false,
+      askFileChange: (path) =>
+        new Promise((resolve) => {
+          const id = `perm_${Math.random()}`;
+          decisions.set(id, resolve);
+          onEvent({ type: 'approval_request', request: { nativeRequestId: id, kind: 'file_change', summary: `Edit：${path}`, paths: [path] } });
+        }),
       succeed: (message = `${title} 完成`) => {
         if (run.ended) return;
         run.ended = true;
@@ -55,12 +64,12 @@ class FakeRuntime implements RuntimeAdapter {
       onEvent({ type: 'turn', turnId: `turn_${request.runId}` });
     });
     return {
+      respondApproval: (id: string, decision: string) => decisions.get(id)?.(decision),
       cancel: async () => {
         if (run.ended) return;
         run.ended = true;
         onEvent({ type: 'interrupted' });
       },
-      respondApproval: () => {},
       dispose: async () => {},
     };
   }
@@ -174,6 +183,20 @@ async function finishNode(taskId: string, key: string, title: string) {
 }
 
 describe('P3 任务图调度', () => {
+  it('写自己 worktree 里的文件由宿主直接批准并记审计；worktree 外的照旧要审批', async () => {
+    await setup();
+    const { planId } = propose();
+    await confirm(planId);
+    await until(() => runtime.active(), (x) => x.length === 1, 'A 开始');
+    const a = runtime.latest('加记住我-a');
+    expect(await a.askFileChange(join(a.request.cwd, 'src', 'a.ts'))).toBe('allow_once');
+    expect(store.db.all<{ action: string; result: string }>(`SELECT action, result FROM audit_log WHERE action = 'approval.auto'`)).toEqual([
+      { action: 'approval.auto', result: 'allow:write_in_worktree' },
+    ]);
+    void a.askFileChange(join(root, 'outside.txt'));
+    await until(() => store.db.all(`SELECT id FROM approvals WHERE status = 'pending'`).length, (n) => n === 1, '越界写入要审批');
+  });
+
   beforeEach(() => {
     logs.length = 0;
   });

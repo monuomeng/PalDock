@@ -70,8 +70,21 @@ describe('Codex 适配器（模拟 app-server）', () => {
     expect(events[0]).toMatchObject({ type: 'thread' });
     expect(events[1]).toMatchObject({ type: 'turn' });
     expect(ofType(events, 'output_delta').map((e) => e.text).join('')).toBe('正在处理。完成。');
-    expect(events.at(-1)).toEqual({ type: 'completed', finalMessage: '模拟执行完成：已写入 mock-change.txt。' });
+    expect(events.at(-1)).toEqual({
+      type: 'completed',
+      finalMessage: '模拟执行完成：已写入 mock-change.txt。',
+      usage: { inputTokens: 80, cacheReadTokens: 20, cacheWriteTokens: 0, outputTokens: 10 },
+    });
     expect(existsSync(join(cwd, 'mock-change.txt'))).toBe(true);
+  });
+
+  it('用量只算这一次 Run：续做的 thread 累计里扣掉以前的 turn，重复上报不重复计', async () => {
+    const first = await runToEnd('第一轮');
+    await first.finished;
+    const threadId = ofType(first.events, 'thread')[0]!.threadId;
+    const second = await runToEnd('第二轮', { resumeThreadId: threadId });
+    await second.finished;
+    expect(second.events.at(-1)).toMatchObject({ type: 'completed', usage: { inputTokens: 80, cacheReadTokens: 20, outputTokens: 10 } });
   });
 
   it('文件改动审批：路径来自 item/started；拒绝后不写入', async () => {
@@ -136,7 +149,7 @@ describe('Codex 适配器（模拟 app-server）', () => {
   it('turn 失败映射为 failed', async () => {
     const { events, finished } = await runToEnd('[mock:fail]');
     await finished;
-    expect(events.at(-1)).toEqual({ type: 'failed', message: '模拟失败' });
+    expect(events.at(-1)).toMatchObject({ type: 'failed', message: '模拟失败', usage: { inputTokens: 80 } });
   });
 
   it('进程崩溃上报 disconnected；核对只认这次的 turn', async () => {

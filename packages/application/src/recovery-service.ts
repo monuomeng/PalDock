@@ -6,11 +6,16 @@ import type { ReviewGate } from './review-gate.js';
 import type { RunPlan } from './run-supervisor.js';
 import type { TaskGraphScheduler } from './task-graph-scheduler.js';
 import { settleTask } from './transitions.js';
+import { errorText } from './util.js';
 
 export interface RecoveryDeps {
   store: StorePort;
-  runtimes: Readonly<Record<string, RuntimeAdapter>>;
-  supervisor: { enqueue(subtaskId: string, plan: RunPlan): void; adoptCompleted(runId: string, finalMessage: string | null): void };
+  supervisor: {
+    enqueue(subtaskId: string, plan: RunPlan): void;
+    adoptCompleted(runId: string, finalMessage: string | null): void;
+    /** 跑这次 Run 的执行器（与监管器选执行器的规则一致）。 */
+    adapter(name: string): RuntimeAdapter | undefined;
+  };
   scheduler: TaskGraphScheduler;
   gate: ReviewGate;
   integration?: IntegrationService;
@@ -20,7 +25,6 @@ export interface RecoveryDeps {
   now?: () => Date;
 }
 
-const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 300);
 
 /**
  * 服务启动时收拾 P3 的中间状态（存储层的 interruptActiveWork 已先跑过）：计划节点被中断的 Run 按原生会话查实后
@@ -52,6 +56,9 @@ export class RecoveryService {
     for (const item of (await this.deps.integration?.recover().catch((error) => (this.deps.log(`recover merges failed: ${errorText(error)}`), []))) ?? []) {
       this.record('merge', item.targetId, item.outcome, item.detail);
     }
+    // 唤醒先放回队列：后面哪一项出错都不影响主会话继续处理
+    const wakes = this.attempt('wakes', () => this.deps.coordinator?.start() ?? []) ?? [];
+    for (const wake of wakes) this.record('wake', wake.sessionId, '唤醒放回队列', wake.summary.slice(0, 200));
     const handled = new Set<string>();
     for (const interrupted of report.interruptedRuns) {
       const run = store.runs.getRun(interrupted.id);
@@ -63,23 +70,30 @@ export class RecoveryService {
     for (const { id, from } of report.blockedSubtasks) {
       const subtask = store.tasks.getSubtask(id);
       if (from !== 'queued' || handled.has(id) || !subtask?.planId || subtask.status !== 'blocked') continue;
-      this.requeue(subtask, '排队中被重启打断，重新排队');
+      this.attempt(`requeue ${id}`, () => this.requeue(subtask, '排队中被重启打断，重新排队'));
     }
-    this.restartReviews();
-    const wakes = this.deps.coordinator?.start() ?? [];
-    for (const wake of wakes) this.record('wake', wake.sessionId, '唤醒放回队列', wake.summary.slice(0, 200));
+    this.attempt('reviews', () => this.restartReviews());
     const notices = store.coordinator.unescalatedNotices().length;
     if (notices > 0) this.record('notice', 'notices', '通知继续按升级规则外发', `${notices} 条还没在桌面看过`);
-    this.reschedule();
+    this.attempt('reschedule', () => this.reschedule());
     return this.report();
+  }
+
+  /** 每一项单独兜底：一项出错只记日志，不打断其余的恢复。 */
+  private attempt<T>(what: string, fn: () => T): T | undefined {
+    try {
+      return fn();
+    } catch (error) {
+      this.deps.log(`recover ${what} failed: ${errorText(error)}`);
+      return undefined;
+    }
   }
 
   /** 计划节点被中断的工作 Run：按原生 thread + turn 查实。 */
   private async recoverRun(runId: string, subtask: SubtaskRecord): Promise<void> {
     const { store } = this.deps;
     const run = store.runs.getRun(runId)!;
-    const adapters = Object.values(this.deps.runtimes);
-    const adapter = adapters.length === 1 ? adapters[0] : this.deps.runtimes[run.runtime];
+    const adapter = this.deps.supervisor.adapter(run.runtime);
     const check: TurnCheck =
       adapter && run.nativeThreadId && run.nativeTurnId
         ? await adapter.checkTurn(run.nativeThreadId, run.nativeTurnId).catch((): TurnCheck => ({ status: 'not_found' }))
@@ -113,23 +127,16 @@ export class RecoveryService {
 
   /** 审阅中的节点（审阅 Run 已被中断）：新的独立会话重新审。 */
   private restartReviews(): void {
-    const { store } = this.deps;
-    for (const summary of store.tasks.listTasks(500)) {
-      for (const subtask of store.tasks.listSubtasks(summary.task.id)) {
-        if (subtask.status === 'review' && subtask.gateStage === 'review' && this.deps.gate.restartReview(subtask.id)) {
-          this.record('review', subtask.id, '用新会话重新审阅');
-        }
-      }
+    for (const subtask of this.deps.store.tasks.subtasksInReview()) {
+      if (this.attempt(`review ${subtask.id}`, () => this.deps.gate.restartReview(subtask.id))) this.record('review', subtask.id, '用新会话重新审阅');
     }
   }
 
   /** 每个没结束的计划任务重新推进一次，把就绪的节点交给监管器。 */
   private reschedule(): void {
-    const { store } = this.deps;
-    for (const { task } of store.tasks.listTasks(500)) {
-      if (!store.plans.confirmedPlan(task.id) || ['succeeded', 'failed', 'cancelled'].includes(task.status)) continue;
-      const released = this.deps.scheduler.advance(task.id);
-      if (released.length > 0) this.record('schedule', task.id, '重新推进任务图', `放行 ${released.length} 个节点`);
+    for (const taskId of this.deps.store.plans.openPlanTasks()) {
+      const released = this.deps.scheduler.advance(taskId);
+      if (released.length > 0) this.record('schedule', taskId, '重新推进任务图', `放行 ${released.length} 个节点`);
     }
   }
 }

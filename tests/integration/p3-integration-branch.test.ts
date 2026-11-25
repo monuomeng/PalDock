@@ -264,6 +264,18 @@ describe('P3 任务集成分支', () => {
     expect(store.merges.latestOf(node(taskId, 'b').id)).toMatchObject({ phase: 'done' });
   });
 
+  it('合并时出了不是冲突的 git 错误（快进被挡住）：操作记失败、节点交给人，不卡住', async () => {
+    await setup();
+    const taskId = await confirmPlan([{ key: 'a' }]);
+    // 集成 worktree 里有一个没提交的同名文件：快进会被 git 拒绝（会覆盖未跟踪文件）
+    writeFileSync(join(store.tasks.getTask(taskId)!.integrationWorktree!, 'a.txt'), '挡路\n');
+    (await started('做 a')).succeed({ 'a.txt': 'a\n' });
+    await until(() => node(taskId, 'a').gateStage, (s) => s === 'human', '交给人');
+    expect(node(taskId, 'a').statusReason).toMatch(/^合并到集成分支时出错：/);
+    expect(store.merges.latestOf(node(taskId, 'a').id)).toMatchObject({ phase: 'check_failed' });
+    logs.length = 0; // 这次出错是故意的
+  });
+
   it('集成检查在候选提交上跑：失败时集成分支不动、交给人', async () => {
     await setup();
     // 检查要求 src/a.ts 和 src/b.ts 不能同时存在：各自单独都通过，合到一起才失败

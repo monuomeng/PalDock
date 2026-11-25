@@ -14,7 +14,7 @@
 | [P0 方案与技术验证](phases/p0-technical-validation/README.md) | 验证 Windows、Codex 会话、审批、存储及飞书可行性 | ✅ 完成 | 7 项：6 完成，1 部分完成（桌宠素材转 P4） |
 | [P1 本地最小产品](phases/p1-local-mvp/README.md) | 桌面 + 本地任务 + Codex | ✅ 完成 | 4 项全部完成 |
 | [P2 外部渠道](phases/p2-external-channels/README.md) | 飞书、Telegram 单聊与授权群聊 | 🟡 已合入，部分待实机 | 10 项：6 完成，3 待实机，1 部分完成 |
-| [P3 多助手协作](phases/p3-multi-assistant/README.md) | Codex + Claude 开发/测试/文档分工 | 🔄 进行中 | 12 项（P3-00…P3-11），计划 2026-11-25 已批准 |
+| [P3 多助手协作](phases/p3-multi-assistant/README.md) | Codex + Claude 开发/测试/文档分工 | 🧪 待实机 | 12 项（P3-00…P3-11）2026-11-25 开发完成，待 Willem 实测与合并 |
 | [P4 桌宠体验](phases/p4-desktop-pet/README.md) | 桌宠动画、对话气泡、托盘、可访问性 | ⬜ 未开始 | |
 | [P5 稳定与生态](phases/p5-stability-ecosystem/README.md) | 更多渠道、模型、任务模板与扩展 | ⬜ 未开始 | |
 

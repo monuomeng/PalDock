@@ -1,7 +1,6 @@
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import {
-  AgentRole,
   CodedError,
   type AutoPolicy,
   type ApprovalChannel,
@@ -26,6 +25,7 @@ import { isInside, isSystemDirectory, samePath } from '@paldock/platform';
 import { commitStaged, headCommit, repositoryRoot } from './git.js';
 import { continuationPrompt, firstRunPrompt, nextStepPrompt, resumePrompt, titleOf } from './prompts.js';
 import type { RunSupervisor } from './run-supervisor.js';
+import { executorOfRole } from './agent-service.js';
 import type { IntegrationService } from './integration.js';
 import type { TaskGraphScheduler } from './task-graph-scheduler.js';
 import { requireSubtask, settleTask } from './transitions.js';
@@ -144,6 +144,12 @@ export class TaskService {
     return { task: record.task, workspace, subtask: record.subtask, runs: [], actions: actionsOf(record.subtask, undefined), plan: null };
   }
 
+  /** 登记项目（不建任务）：和建任务同一套校验。 */
+  async addWorkspace(rootPath: string): Promise<WorkspaceRecord> {
+    const root = await this.validateProject(rootPath);
+    return this.store.tasks.ensureWorkspace(basename(root), root);
+  }
+
   /** 新任务：校验并登记项目。 */
   private async freshStart(rootPath: string | undefined, goal: string): Promise<{ workspace: WorkspaceRecord; prompt: string }> {
     if (!rootPath) throw new CodedError('bad_request', '请选择项目目录');
@@ -226,25 +232,19 @@ export class TaskService {
     return {
       plan,
       nodes: this.store.plans.nodes(plan.id).map((node) => {
-        const executor = node.executor ?? this.executorOf(task.workspaceId, node.role);
+        const executor = node.executor ?? executorOfRole(this.store, task.workspaceId, node.role);
         const subtask = subtasks.get(node.key) ?? null;
         if (!subtask) return { node, subtask, actions: null, gate: null, merge: null, executor, runs: [] };
-        const latest = this.store.runs.latestRun(subtask.id);
-        const gate = latest ? { result: this.store.runs.getResult(latest.id) ?? null, reviews: this.store.runs.reviewsOfRun(latest.id) } : null;
+        // 各次 Run 不带输出正文（详情页每次事件都会重读）；闸门取最近一次工作 Run 的证据和结论
+        const runs = this.store.runs.runDetails(subtask.id, { messages: false });
+        const latest = runs.findLast((r) => r.run.purpose === 'work');
+        const gate = latest ? { result: latest.result, reviews: latest.reviews } : null;
         const merge = this.store.merges.latestOf(subtask.id) ?? null;
-        const runs = this.store.runs.runDetails(subtask.id).map((r) => ({ ...r, messages: [] }));
-        return { node, subtask, actions: actionsOf(subtask, latest, this.deps.supervisor.isActive(subtask.id)), gate, merge, executor, runs };
+        return { node, subtask, actions: actionsOf(subtask, latest?.run, this.deps.supervisor.isActive(subtask.id)), gate, merge, executor, runs };
       }),
       actions: { confirm: pending, reject: pending, edit: pending },
       confirmedRevision: this.store.plans.confirmedPlan(task.id)?.revision ?? null,
     };
-  }
-
-  /** 角色在项目里实际用的执行器（项目覆盖优先，否则角色默认）。 */
-  private executorOf(workspaceId: string, role: string): string {
-    const parsed = AgentRole.safeParse(role);
-    if (!parsed.success) return role;
-    return this.store.agents.resolveExecutor(workspaceId, parsed.data) ?? this.store.agents.getProfile(parsed.data)?.executor ?? role;
   }
 
   /** 自动处理设置（只能在桌面改）。 */

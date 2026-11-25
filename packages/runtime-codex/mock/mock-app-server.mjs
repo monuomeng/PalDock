@@ -6,7 +6,8 @@
 // thread 状态存放在 MOCK_CODEX_HOME（缺省为 CODEX_HOME）下，跨进程可 resume / read。
 //
 // 行为由提示词里的指令决定（可组合）：
-//   [mock:file-approval]   先请求文件改动审批，批准才写 approved.txt
+//   [mock:file-approval]   先请求文件改动审批（worktree 内的 approved.txt），批准才写
+//   [mock:file-outside]    请求改 worktree 外的文件（会走审批），批准才写
 //   [mock:command]         请求命令审批（pnpm install），批准才写 installed.txt
 //   [mock:permissions]     请求权限扩展（联网）
 //   [mock:unknown-request] 发一个未定义的服务端请求
@@ -73,9 +74,9 @@ async function runTurn(thread, turn, text) {
     serverRequest('item/tool/requestUserInput', { ...base, itemId: 'q', questions: [] });
     await sleep(20);
   }
-  if (text.includes('[mock:file-approval]')) {
+  if (text.includes('[mock:file-approval]') || text.includes('[mock:file-outside]')) {
     const itemId = `fc_${randomUUID()}`;
-    const path = join(thread.cwd, 'approved.txt');
+    const path = text.includes('[mock:file-outside]') ? join(thread.cwd, '..', `outside-${itemId}.txt`) : join(thread.cwd, 'approved.txt');
     notify('item/started', { ...base, item: { type: 'fileChange', id: itemId, changes: [{ path, kind: 'add', diff: '+ok' }], status: 'inProgress' } });
     const { response } = serverRequest('item/fileChange/requestApproval', { ...base, itemId, startedAtMs: Date.now(), reason: null });
     const { result } = await response;
@@ -156,6 +157,14 @@ function persistTurn(thread, turn, status, finalMessage, error = null) {
 function finish(thread, turn, status, finalMessage = null, error = null) {
   active.delete(turn.id);
   const done = persistTurn(thread, turn, status, finalMessage, error);
+  if (status !== 'interrupted') {
+    // 每个 turn 固定用量；total 是整个 thread 的累计（续做时含以前的 turn），同一份累计故意报两次
+    const n = (loadThread(thread.id) ?? thread).turns.length;
+    const per = { totalTokens: 110, inputTokens: 100, cachedInputTokens: 20, cacheWriteInputTokens: 0, outputTokens: 10, reasoningOutputTokens: 0 };
+    const total = Object.fromEntries(Object.entries(per).map(([k, v]) => [k, v * n]));
+    const tokenUsage = { total, last: per, modelContextWindow: null };
+    for (let i = 0; i < 2; i++) notify('thread/tokenUsage/updated', { threadId: thread.id, turnId: turn.id, tokenUsage });
+  }
   notify('turn/completed', { threadId: thread.id, turn: done });
 }
 

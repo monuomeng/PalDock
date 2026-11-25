@@ -1,4 +1,4 @@
-import { CodedError, type Change, type PersistentEvent, type StorePort, type SubtaskRecord, type SubtaskStatus } from '@paldock/contracts';
+import { CodedError, type Change, type GateDecision, type PersistentEvent, type StorePort, type SubtaskRecord, type SubtaskStatus } from '@paldock/contracts';
 import { taskMachine, taskPath, taskStatusOf } from '@paldock/domain';
 
 /**
@@ -23,6 +23,11 @@ export function settleTask(store: StorePort, taskId: string, reason?: string): P
     events.push(...change.events);
   });
   return events;
+}
+
+/** 计划节点过关：记闸门结论、子任务成功（调度器据此放行下游），任务状态重新推导。在调用方的事务里用。 */
+export function succeedSubtask(store: StorePort, subtask: SubtaskRecord, decision: GateDecision): PersistentEvent[] {
+  return [store.tasks.gateDecided(subtask.id, decision), ...store.tasks.transitionSubtask(subtask.id, subtask.version, 'succeeded').events, ...settleTask(store, subtask.taskId)];
 }
 
 export function moveSubtask(store: StorePort, subtaskId: string, to: SubtaskStatus, reason?: string): Change<SubtaskRecord> {

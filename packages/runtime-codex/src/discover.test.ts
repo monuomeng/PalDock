@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { meetsMinimum, npmNativeBinary } from './discover.js';
+import { meetsMinimum, npmNativeBinary, resolveCodexCommand } from './discover.js';
 
 describe('Codex 最低版本', () => {
   it('按 major.minor.patch 比较，忽略后缀；解析不了的视为不满足', () => {
@@ -50,6 +50,22 @@ describe('npm 安装的原生 Codex', () => {
     try {
       expect(npmNativeBinary(pkg, 'win32', 'x64')).toBeUndefined();
       expect(npmNativeBinary(pkg, 'sunos' as NodeJS.Platform, 'x64')).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('设置里填的是 codex.cmd 时也按 npm 布局解析，不直接起 .cmd（Node 不经 shell 起不了）', () => {
+    const { pkg, cleanup } = layout('none');
+    try {
+      const root = join(pkg, '..', '..', '..');
+      const shim = join(root, 'codex.cmd');
+      writeFileSync(shim, '');
+      mkdirSync(join(pkg, 'bin'), { recursive: true });
+      writeFileSync(join(pkg, 'bin', 'codex.js'), '');
+      expect(resolveCodexCommand(shim, 'node')).toMatchObject({ command: 'node', prefixArgs: [join(pkg, 'bin', 'codex.js')], source: 'npm-shim' });
+      rmSync(join(pkg, 'bin'), { recursive: true });
+      expect(resolveCodexCommand(shim, 'node')).toBeUndefined();
     } finally {
       cleanup();
     }

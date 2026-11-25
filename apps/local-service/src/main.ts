@@ -29,6 +29,16 @@ let service: LocalService | undefined;
 // 服务启动完成前收到的桌面状态先记下，启动后补上
 let presence: { locked: boolean; idle: boolean } | undefined;
 
+// 以 child_process.fork 启动时，父进程没了（被强杀、崩溃）IPC 通道会断开：这时正常收尾并退出，
+// 不留下没人管的服务和执行器子进程（P3-11 实测发现）。utilityProcess 随宿主一起结束，不走这里。
+process.on('disconnect', () => {
+  void (async () => {
+    log('parent disconnected, shutting down');
+    await service?.stop().catch(() => {});
+    process.exit(ServiceExitCode.ok);
+  })();
+});
+
 onParentMessage(async (raw) => {
   const parsed = ParentToService.safeParse(raw);
   if (!parsed.success) return log('ignored invalid parent message');

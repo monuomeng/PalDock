@@ -12,12 +12,13 @@ import {
   type SummaryRecord,
   type WakeRecord,
   type WakeStatus,
+  type WakeTrigger,
 } from '@paldock/contracts';
 import type { Clock } from './clock.js';
 import { COLUMNS } from './columns.js';
 import type { Database } from './database.js';
 import type { EventLog } from './event-log.js';
-import { newId } from './writes.js';
+import { insertWithEvent, newId } from './writes.js';
 
 const MAIN_SESSION = `ss.id AS sessionId, t.id AS taskId, s.id AS subtaskId, t.workspace_id AS workspaceId, t.title, ss.created_at AS createdAt`;
 
@@ -48,6 +49,7 @@ const SQL = {
     RETURNING ${COLUMNS.wake()}`,
   // 部分索引 wakes_pending / wakes_running，条件逐字一致
   nextPending: `SELECT ${COLUMNS.wake()} FROM wakes WHERE session_id = ? AND status = 'pending' ORDER BY id LIMIT 1`,
+  nextPendingOf: `SELECT ${COLUMNS.wake()} FROM wakes WHERE session_id = ? AND status = 'pending' AND trigger = ? ORDER BY id LIMIT 1`,
   running: `SELECT ${COLUMNS.wake()} FROM wakes WHERE session_id = ? AND status = 'running'`,
   sessionsPending: `SELECT DISTINCT session_id AS sessionId FROM wakes WHERE status = 'pending'`,
   setWake: `
@@ -138,8 +140,8 @@ export class CoordinatorRepository implements CoordinatorStorePort {
     return this.events.append(wake.sessionId, { type: 'wake.changed', payload: { wakeId: wake.id, status: wake.status, trigger: wake.trigger } });
   }
 
-  nextPendingWake(sessionId: string): WakeRecord | undefined {
-    return this.db.get<WakeRecord>(SQL.nextPending, sessionId);
+  nextPendingWake(sessionId: string, trigger?: WakeTrigger): WakeRecord | undefined {
+    return trigger ? this.db.get<WakeRecord>(SQL.nextPendingOf, sessionId, trigger) : this.db.get<WakeRecord>(SQL.nextPending, sessionId);
   }
 
   runningWake(sessionId: string): WakeRecord | undefined {
@@ -186,10 +188,8 @@ export class CoordinatorRepository implements CoordinatorStorePort {
   }
 
   addNotice(input: { sessionId: string; runId: string | null; kind: NoticeKind; body: string }): Change<NoticeRecord> {
-    return this.db.transaction(() => {
-      const record = this.db.get<NoticeRecord>(SQL.insertNotice, input.sessionId, input.runId, input.kind, input.body, this.clock.iso())!;
-      return { record, events: [this.events.append(input.sessionId, { type: 'notice.created', payload: { noticeId: record.id, kind: record.kind } })] };
-    });
+    const params = [input.sessionId, input.runId, input.kind, input.body, this.clock.iso()];
+    return insertWithEvent<NoticeRecord>(this.db, this.events, SQL.insertNotice, params, (r) => ({ type: 'notice.created', payload: { noticeId: r.id, kind: r.kind } }), (r) => r.sessionId);
   }
 
   notices(sessionId: string, limit: number): NoticeRecord[] {
@@ -228,10 +228,8 @@ export class CoordinatorRepository implements CoordinatorStorePort {
   }
 
   writeSummary(input: { sessionId: string; body: string; runId: string | null; wakesDone: number }): Change<SummaryRecord> {
-    return this.db.transaction(() => {
-      const record = this.db.get<SummaryRecord>(SQL.insertSummary, input.sessionId, input.body, input.runId, input.wakesDone, this.clock.iso())!;
-      return { record, events: [this.events.append(input.sessionId, { type: 'summary.written', payload: { version: record.version } })] };
-    });
+    const params = [input.sessionId, input.body, input.runId, input.wakesDone, this.clock.iso()];
+    return insertWithEvent<SummaryRecord>(this.db, this.events, SQL.insertSummary, params, (r) => ({ type: 'summary.written', payload: { version: r.version } }), (r) => r.sessionId);
   }
 
   latestSummary(sessionId: string): SummaryRecord | undefined {

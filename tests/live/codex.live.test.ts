@@ -55,7 +55,7 @@ async function until(taskId: string, predicate: (d: TaskDetail) => boolean, time
 const create = async (goal: string) =>
   ((await call('task.create', { rootPath: repo, goal, idempotencyKey: `live-${Date.now()}` })) as TaskDetail).task.id;
 
-describe('真实 Codex', () => {
+describe.skipIf(process.env.PALDOCK_LIVE_CODEX !== '1')('真实 Codex', () => {
   it.skipIf(process.env.LIVE_ONLY === 'approval')('建任务 → 执行 → 回显 → 证据 → 验收', async () => {
     const id = await create('在当前目录创建文件 hello.txt，内容只有一行 hi。不要做其他事。');
     const d = await until(id, (x) => ['review', 'blocked'].includes(x.subtask.status));

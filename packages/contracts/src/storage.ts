@@ -140,6 +140,8 @@ export interface TaskStorePort {
   getSubtaskOfTask(taskId: string): SubtaskRecord | undefined;
   getSessionOfSubtask(subtaskId: string): SessionRecord | undefined;
   listTasks(limit: number): TaskSummary[];
+  /** 某个项目最近的任务（不含对话任务）。 */
+  listTasksOfWorkspace(workspaceId: string, limit: number): TaskSummary[];
   /** 按最近活动（子任务最后变化）倒序。 */
   recentTasks(limit: number): TaskSummary[];
   /** ID 以 prefix 开头的任务（主键范围查询），最多 limit 个。 */
@@ -157,6 +159,8 @@ export interface TaskStorePort {
   rebaseSubtask(subtaskId: string, expectedVersion: number, baseCommit: string): SubtaskRecord;
   transitionTask(id: string, expectedVersion: number, to: TaskStatus, reason?: string): Change<TaskRecord>;
   transitionSubtask(id: string, expectedVersion: number, to: SubtaskStatus, reason?: string): Change<SubtaskRecord>;
+  /** 审阅中的计划节点（重启恢复重新发起审阅用）。 */
+  subtasksInReview(): SubtaskRecord[];
   /** 任务的全部子任务（单子任务的任务只有一个），按创建顺序。 */
   listSubtasks(taskId: string): SubtaskRecord[];
 }
@@ -211,7 +215,8 @@ export interface CoordinatorStorePort {
   getMainSession(sessionId: string): MainSessionRecord | undefined;
   /** 同一去重键只记一次；已有时返回 undefined。 */
   addWake(input: NewWake): Change<WakeRecord> | undefined;
-  nextPendingWake(sessionId: string): WakeRecord | undefined;
+  /** 下一条待处理唤醒；给了 trigger 时只看这一类。 */
+  nextPendingWake(sessionId: string, trigger?: WakeTrigger): WakeRecord | undefined;
   runningWake(sessionId: string): WakeRecord | undefined;
   /** 有待处理唤醒的会话。 */
   sessionsWithPendingWakes(): string[];
@@ -250,6 +255,8 @@ export interface PlanStorePort {
   getPlan(id: string): PlanRecord | undefined;
   latestPlan(taskId: string): PlanRecord | undefined;
   nodes(planId: string): PlanNodeRecord[];
+  /** 计划里的一个节点（走 UNIQUE (plan_id, node_key)）。 */
+  node(planId: string, key: string): PlanNodeRecord | undefined;
   /**
    * 确认，同一事务：计划 confirmed，按节点建子任务与会话和依赖；草稿任务 draft → queued。
    * 运行中确认新一版时：上一版 superseded，没变的节点沿用原子任务，改了的和新增的建新子任务，没了的和被替换的取消。
@@ -258,6 +265,8 @@ export interface PlanStorePort {
   confirm(id: string, expectedVersion: number, note?: string | null, via?: 'desktop' | 'feishu' | 'telegram'): Change<{ created: SubtaskRecord[]; cancelled: string[] }>;
   /** 确认前改一个节点（调用方先校验）；带计划版本，先到者为准。 */
   editNode(id: string, expectedVersion: number, edit: PlanNodeEdit): Change<PlanRecord>;
+  /** 有确认过的计划、还没结束的任务（重启后重新推进用）。 */
+  openPlanTasks(): string[];
   /** 任务当前在执行的那一版。 */
   confirmedPlan(taskId: string): PlanRecord | undefined;
   reject(id: string, expectedVersion: number, note: string | null, via?: 'desktop' | 'feishu' | 'telegram'): Change<PlanRecord>;
@@ -288,7 +297,8 @@ export interface RunStorePort {
   reviewOf(reviewerRunId: string): RunReviewRecord | undefined;
   /** 子任务被审阅助手退回过几次（自动返工的轮数）。 */
   autoReworkCount(subtaskId: string): number;
-  runDetails(subtaskId: string): RunDetail[];
+  /** messages: false 时不读输出正文（列表、计划详情用）。 */
+  runDetails(subtaskId: string, options?: { messages?: boolean }): RunDetail[];
   /** 不改变状态、只需让用户知道的情况（未识别的请求、恢复失败、输出截断）。 */
   addNotice(runId: string, code: RunNoticeCode, detail: string): PersistentEvent;
   /** Run 结束时记下用量（只写一次）；执行器不报告时不调用。 */

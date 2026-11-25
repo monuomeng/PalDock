@@ -28,10 +28,11 @@ import { checkCapability, outOfScope, P1_DEFAULTS, taskKey } from '@paldock/doma
 import { runCheck } from './check-runner.js';
 import { addWorktree, branchCommit, changedFiles, commitStaged, headCommit, stageAndDiffStat } from './git.js';
 import { redact } from './redact.js';
-import { riskOf } from './risk.js';
+import { operationOf, riskOf } from './risk.js';
 import type { McpGateway } from './mcp-gateway.js';
 import { nodeOf } from './task-graph-scheduler.js';
 import { moveSubtask, settleTask } from './transitions.js';
+import { errorText as sharedErrorText } from './util.js';
 
 export type Limits = typeof P1_DEFAULTS;
 
@@ -93,7 +94,7 @@ interface LiveRun {
 const TERMINAL_EVENTS = new Set<RuntimeEvent['type']>(['completed', 'failed', 'interrupted', 'disconnected']);
 const CANCELLED = '用户取消';
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 500);
+const errorText = (error: unknown) => sharedErrorText(error, 500);
 
 /**
  * 执行器监管：启动 Run、把执行器事件写成状态与事件、处理审批与取消、断线后按 turn 核对、
@@ -236,7 +237,7 @@ export class RunSupervisor {
   }
 
   /** 按名字取适配器；记录里的执行器已不在（例如改了配置）时返回 undefined。 */
-  private adapter(name: string): RuntimeAdapter | undefined {
+  adapter(name: string): RuntimeAdapter | undefined {
     const adapters = Object.values(this.deps.runtimes);
     return adapters.length === 1 ? adapters[0] : this.deps.runtimes[name];
   }
@@ -356,7 +357,10 @@ export class RunSupervisor {
     // 协调助手只读：在项目根目录里看代码和文档，不建 worktree
     if (live.mode === 'conversation') return workspace.rootPath;
     const key = taskKey(live.task.id).slice(0, 12);
-    const slug = live.subtask.nodeKey ? `${key}-${live.subtask.nodeKey}` : key;
+    // 运行中改计划时被替换的节点会建同名的新子任务：第 2 版起建的子任务带上版本号，不落进旧子任务的 worktree 和分支
+    const revision = live.subtask.planId ? (this.deps.store.plans.getPlan(live.subtask.planId)?.revision ?? 1) : 1;
+    const node = live.subtask.nodeKey ? `-${live.subtask.nodeKey}${revision > 1 ? `-r${revision}` : ''}` : '';
+    const slug = `${key}${node}`;
     const path = join(this.deps.dataRoot, 'worktrees', slug);
     const branch = `${this.limits.branchPrefix}${slug}`;
     const base = await this.worktreeBase(live.task, workspace.rootPath);
@@ -438,6 +442,13 @@ export class RunSupervisor {
   }
 
   private onApprovalRequest(live: LiveRun, request: RuntimeApprovalRequest): void {
+    // 写自己 worktree 里的文件由宿主直接批准（2026-11-25 已定：Windows 上可写角色「不隔离」，不逐条审批；
+    // Codex 的 workspace-write 沙箱本来就不会为这类写入来要审批，Claude 的 Edit / Write 会经宿主审批，两边在这里拉平）。
+    // 只认路径全在 worktree 内的文件改动；worktree 外、命令、权限扩展照旧走审批与风险分级。每次记一条审计。
+    if (live.worktree && live.mode !== 'conversation' && operationOf(request, live.worktree) === 'write_in_worktree') {
+      this.deps.store.audit.append(`run:${live.run.id}`, 'approval.auto', request.summary.slice(0, 200), 'allow:write_in_worktree');
+      return this.reply(live, request.nativeRequestId, 'allow_once');
+    }
     const change = this.deps.store.runs.requestApproval({
       runId: live.run.id,
       kind: request.kind,

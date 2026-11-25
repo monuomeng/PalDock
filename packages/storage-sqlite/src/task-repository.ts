@@ -69,6 +69,8 @@ const SQL = {
     SELECT ${COLUMNS.subtask()} FROM subtasks
      WHERE task_id = ?1 AND (plan_id IS NULL OR plan_id = (SELECT id FROM plans WHERE task_id = ?1 AND status = 'confirmed'))
      ORDER BY created_at`,
+  // 审阅中的节点：status = 'review' 的行很少，走 subtasks_needing_attention（WHERE 含 review）后再按阶段过滤
+  subtasksInReview: `SELECT ${COLUMNS.subtask()} FROM subtasks WHERE status IN ('blocked', 'review') AND status = 'review' AND gate_stage = 'review'`,
   setAutoPolicy: `
     UPDATE workspaces SET auto_policy = ?, version = version + 1 WHERE id = ? AND version = ?
     RETURNING ${COLUMNS.workspace()}`,
@@ -103,6 +105,14 @@ const SQL = {
       FROM tasks t
       LEFT JOIN subtasks s ON s.task_id = t.id AND s.plan_id IS NULL
      WHERE t.kind = 'work'
+     ORDER BY t.created_at DESC
+     LIMIT ?`,
+  // 某个项目：走 tasks_by_workspace 取本项目的，再按创建时间排（每个项目的任务数有限）
+  listTasksOfWorkspace: `
+    SELECT ${SUMMARY_COLUMNS}
+      FROM tasks t
+      LEFT JOIN subtasks s ON s.task_id = t.id AND s.plan_id IS NULL
+     WHERE t.workspace_id = ? AND t.kind = 'work'
      ORDER BY t.created_at DESC
      LIMIT ?`,
   // 外部渠道的 /continue 列表只列单子任务的任务（任务图在渠道里的入口随 P3-10）
@@ -247,6 +257,10 @@ export class TaskRepository implements TaskStorePort {
     return this.db.get<SubtaskRecord>(SQL.selectSubtaskByTask, taskId);
   }
 
+  subtasksInReview(): SubtaskRecord[] {
+    return this.db.all<SubtaskRecord>(SQL.subtasksInReview);
+  }
+
   listSubtasks(taskId: string): SubtaskRecord[] {
     return this.db.all<SubtaskRecord>(SQL.selectSubtasksOfTask, taskId);
   }
@@ -257,6 +271,12 @@ export class TaskRepository implements TaskStorePort {
 
   listTasks(limit: number): TaskSummary[] {
     return this.summaries(SQL.listTasks, limit);
+  }
+
+  listTasksOfWorkspace(workspaceId: string, limit: number): TaskSummary[] {
+    return this.db
+      .all<TaskRow & Omit<TaskSummary, 'task'>>(SQL.listTasksOfWorkspace, workspaceId, limit)
+      .map(({ subtaskStatus, latestRunStatus, lastActivityAt, ...task }) => ({ task: toTask(task), subtaskStatus, latestRunStatus, lastActivityAt }));
   }
 
   findTasksByIdPrefix(prefix: string, limit: number): TaskRecord[] {

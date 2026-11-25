@@ -21,7 +21,7 @@ import { openStore, type Store } from '@paldock/storage-sqlite';
 import { createAdapter, systemCredentials } from './channels.js';
 import { createHandlers, type Handlers } from './commands.js';
 
-export const SERVICE_VERSION = '0.2.0-p2';
+export const SERVICE_VERSION = '0.3.0-p3';
 const HELLO_TIMEOUT_MS = 5_000;
 const REPLAY_BATCH = 500;
 
@@ -159,7 +159,6 @@ export class LocalService {
       // P3 的中间状态由恢复程序收拾（P1 / P2 的单子任务仍由用户手动恢复）；它也负责把唤醒放回队列
       const recovery = new RecoveryService({
         store,
-        runtimes,
         supervisor: service.supervisor,
         scheduler: service.scheduler,
         gate: service.gate,
