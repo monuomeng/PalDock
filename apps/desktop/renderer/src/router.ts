@@ -4,6 +4,7 @@
  */
 export type Route =
   | { view: 'attention' }
+  | { view: 'auto'; workspaceId: string | undefined }
   | { view: 'chat'; workspaceId: string | undefined; sessionId: string | undefined; taskId: string | undefined }
   | { view: 'tasks' }
   | { view: 'new'; fromTaskId: string | undefined }
@@ -16,6 +17,7 @@ export function currentRoute(): Route {
   if (parts[0] === 'task' && parts[1]) {
     return { view: 'task', taskId: decodeURIComponent(parts[1]), runId: new URLSearchParams(query).get('run') ?? undefined };
   }
+  if (parts[0] === 'auto') return { view: 'auto', workspaceId: new URLSearchParams(query).get('ws') ?? undefined };
   if (parts[0] === 'chat') {
     const q = new URLSearchParams(query);
     return { view: 'chat', workspaceId: q.get('ws') ?? undefined, sessionId: q.get('session') ?? undefined, taskId: q.get('task') ?? undefined };
@@ -38,6 +40,9 @@ export function chatLink(target: { workspaceId?: string; sessionId?: string; tas
   const s = q.toString();
   return `#/chat${s ? `?${s}` : ''}`;
 }
+
+/** 自动处理记录，可按项目筛选。 */
+export const autoLink = (workspaceId?: string) => `#/auto${workspaceId ? `?ws=${encodeURIComponent(workspaceId)}` : ''}`;
 
 /** 基于一个已结束的任务新建任务。 */
 export const continueLink = (taskId: string) => `#/new?from=${encodeURIComponent(taskId)}`;

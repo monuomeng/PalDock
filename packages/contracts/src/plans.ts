@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import type { AgentRole, SubtaskStatus } from './states.js';
-import { CheckCommand, type RunResultRecord, type RunReviewRecord, type SubtaskRecord, type TaskActions } from './records.js';
+import type { AgentRole, Executor, SubtaskStatus } from './states.js';
+import { CheckCommand, type RunDetail, type RunResultRecord, type RunReviewRecord, type SubtaskRecord, type TaskActions } from './records.js';
 
 /** 一份计划最多几个节点（02「上限与护栏」：每任务最多 8 个子任务）；domain 校验与 MCP 参数共用。 */
 export const MAX_PLAN_NODES = 8;
@@ -51,6 +51,43 @@ export interface PlanNodeRecord {
   paths: string[];
   dependsOn: string[];
   checkCommand: CheckCommand | null;
+  /** 确认前可改；null 表示按角色在项目里的执行器。 */
+  executor: Executor | null;
+}
+
+/** 确认前对计划节点的一处修改。 */
+export type PlanNodeEdit =
+  | { kind: 'executor'; nodeKey: string; executor: Executor | null }
+  | { kind: 'check'; nodeKey: string; check: CheckCommand | null }
+  | { kind: 'remove'; nodeKey: string };
+
+/**
+ * 项目的自动处理设置（默认全关，只在桌面改）。没有「跳过计划确认」：P3 的每个计划都要用户确认
+ * （2026-11-25 用户确定，替代 11-20「简单任务可跳过确认」的说法）。
+ */
+export interface AutoPolicy {
+  /** 这些角色的节点交付在范围内且检查通过后不送审阅，直接合并。 */
+  skipReviewRoles: AgentRole[];
+}
+
+/**
+ * 没经过用户的决定：跳过审阅、审阅助手放行 / 退回、任务事件唤醒被跳过、唤醒因请求上限被中断；
+ * auto_approve（按远程审批等级自动批准）P3 还没有，先留着。
+ */
+export const AUTO_DECISION_KINDS = ['skip_review', 'review_passed', 'review_rework', 'wake_dropped', 'wake_aborted', 'auto_approve'] as const;
+export const AutoDecisionKind = z.enum(AUTO_DECISION_KINDS);
+export type AutoDecisionKind = z.infer<typeof AutoDecisionKind>;
+
+/** 没经过用户的一个决定（自动处理记录单的一行）。 */
+export interface AutoDecisionRecord {
+  id: number;
+  workspaceId: string;
+  taskId: string;
+  planId: string | null;
+  subtaskId: string | null;
+  kind: AutoDecisionKind;
+  reason: string;
+  createdAt: string;
 }
 
 /** 子任务在 review 内的闸门阶段：审阅中、交给人；null 表示刚交付或不在 review。 */
@@ -91,12 +128,19 @@ export interface PlanNodeView {
   gate: NodeGateView | null;
   /** 最近一次合并进集成分支的操作；冲突时桌面据此给出「交回重做」和「重试合并」。 */
   merge: MergeOpRecord | null;
+  /** 这个节点实际会用的执行器（节点上指定的，否则按角色设置）。 */
+  executor: string;
+  /** 这个节点的各次 Run（工作与审阅），按 attempt 升序；不含输出正文。 */
+  runs: RunDetail[];
 }
 
 export interface PlanDetail {
   plan: PlanRecord;
   nodes: PlanNodeView[];
-  actions: { confirm: boolean; reject: boolean };
+  /** edit：计划还在等确认时可以改执行器、检查命令或删节点。 */
+  actions: { confirm: boolean; reject: boolean; edit: boolean };
+  /** 当前在执行的那一版（这一版是运行中提出的新一版时才和 plan 不同）。 */
+  confirmedRevision: number | null;
 }
 
 /** 调度器读的任务图：子任务及其依赖（子任务 ID）。 */

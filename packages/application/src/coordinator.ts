@@ -193,8 +193,11 @@ export class CoordinatorService {
       }
       case 'plan.status_changed': {
         const plan = store.plans.getPlan(event.aggregateId);
-        if (event.payload.to !== 'rejected' || !plan) return undefined;
-        return at(plan.taskId, `计划第 ${plan.revision} 版被用户退回${event.payload.reason ? `，意见：${event.payload.reason}` : ''}`);
+        if (!plan) return undefined;
+        if (event.payload.to === 'rejected') return at(plan.taskId, `计划第 ${plan.revision} 版被用户退回${event.payload.reason ? `，意见：${event.payload.reason}` : ''}`);
+        // 确认时带了意见才唤醒：把意见交给协调助手
+        if (event.payload.to === 'confirmed' && event.payload.reason) return at(plan.taskId, `计划第 ${plan.revision} 版已确认，用户的意见：${event.payload.reason}`);
+        return undefined;
       }
       case 'approval.decided': {
         if (event.payload.status !== 'denied' && event.payload.status !== 'expired') return undefined;
@@ -238,7 +241,9 @@ export class CoordinatorService {
       if (wake.trigger === 'task_event') {
         const gate = this.eventGate(session);
         if (gate === 'drop') {
-          this.deps.publish(coordinator.setWake(wake.id, 'dropped', { note: `今天的自动唤醒已达 ${this.limits.eventWakesPerDay} 次` }).events);
+          const note = `今天的自动唤醒已达 ${this.limits.eventWakesPerDay} 次`;
+          this.deps.publish(coordinator.setWake(wake.id, 'dropped', { note }).events);
+          this.recordDecision(session, 'wake_dropped', `${note}，跳过：${wake.summary}`);
           continue;
         }
         if (typeof gate === 'number') return this.retryAt(sessionId, gate);
@@ -346,11 +351,19 @@ export class CoordinatorService {
     if (count > this.limits.wakeHardRequests) {
       if (count === this.limits.wakeHardRequests + 1) {
         this.deps.supervisor.cancel(found.session.subtaskId);
+        this.recordDecision(found.session, 'wake_aborted', `这次唤醒的请求超过 ${this.limits.wakeHardRequests} 次上限，已中断：${found.wake.summary}`);
         this.notifyUser(found.session.sessionId, runId, `这次唤醒的请求超过 ${this.limits.wakeHardRequests} 次上限，已强制停止。需要的话请在对话里告诉它接着做什么。`, false);
       }
       throw new CodedError('bad_request', `这次唤醒的请求已超过 ${this.limits.wakeHardRequests} 次上限，已停止`);
     }
     return count >= this.limits.wakeSoftRequests ? `这次唤醒已用 ${count} 次请求（上限 ${this.limits.wakeHardRequests}），请尽快收尾` : undefined;
+  }
+
+  /** 没经过用户的决定记进自动处理记录单（挂在会话的对话任务上）。 */
+  private recordDecision(session: MainSessionRecord, kind: 'wake_dropped' | 'wake_aborted', reason: string): void {
+    this.deps.publish(
+      this.store.autoDecisions.record({ workspaceId: session.workspaceId, taskId: session.taskId, planId: null, subtaskId: null, kind, reason }).events,
+    );
   }
 
   /** notify_user：先在桌面，没人看时由渠道按审批升级规则外发。返回编号。 */

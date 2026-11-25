@@ -1,5 +1,6 @@
 import {
   CodedError,
+  type AutoPolicy,
   type Change,
   type CheckCommand,
   type CreatedTask,
@@ -63,7 +64,14 @@ const SQL = {
   selectSubtask: `SELECT ${COLUMNS.subtask()} FROM subtasks WHERE id = ?`,
   // 单子任务（P1 / P2）：不属于任何计划的那个
   selectSubtaskByTask: `SELECT ${COLUMNS.subtask()} FROM subtasks WHERE task_id = ? AND plan_id IS NULL ORDER BY created_at LIMIT 1`,
-  selectSubtasksOfTask: `SELECT ${COLUMNS.subtask()} FROM subtasks WHERE task_id = ? ORDER BY created_at`,
+  // 单子任务，或当前确认版本的计划节点（运行中改计划后，旧版本的子任务不再算进任务）
+  selectSubtasksOfTask: `
+    SELECT ${COLUMNS.subtask()} FROM subtasks
+     WHERE task_id = ?1 AND (plan_id IS NULL OR plan_id = (SELECT id FROM plans WHERE task_id = ?1 AND status = 'confirmed'))
+     ORDER BY created_at`,
+  setAutoPolicy: `
+    UPDATE workspaces SET auto_policy = ?, version = version + 1 WHERE id = ? AND version = ?
+    RETURNING ${COLUMNS.workspace()}`,
   setWorktree: `
     UPDATE subtasks SET worktree_path = ?, branch = ?, base_commit = ?, version = version + 1
      WHERE id = ? AND worktree_path IS NULL
@@ -171,6 +179,17 @@ export class TaskRepository implements TaskStorePort {
       return {
         record: toWorkspace(row),
         events: [this.events.append(id, { type: 'workspace.prepare_command_changed', payload: { configured: command !== null } })],
+      };
+    });
+  }
+
+  setAutoPolicy(id: string, expectedVersion: number, policy: AutoPolicy): Change<WorkspaceRecord> {
+    return this.db.transaction(() => {
+      const row = this.db.get<WorkspaceRow>(SQL.setAutoPolicy, JSON.stringify(policy), id, expectedVersion);
+      if (!row) throw new CodedError(this.getWorkspace(id) ? 'conflict' : 'not_found', '项目不存在或已被修改');
+      return {
+        record: toWorkspace(row),
+        events: [this.events.append(id, { type: 'workspace.auto_policy_changed', payload: { skipReviewRoles: policy.skipReviewRoles } })],
       };
     });
   }

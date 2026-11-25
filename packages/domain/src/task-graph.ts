@@ -132,3 +132,46 @@ export function taskPath(from: TaskStatus, to: TaskStatus): TaskStatus[] | undef
   }
   return undefined;
 }
+
+/** 两版计划里同一节点键的节点有没有实质变化（标题不算：只是名字）。 */
+function sameNode(a: PlanNodeInput & { executor?: string | null; checkCommand?: unknown }, b: typeof a): boolean {
+  const pick = (n: typeof a) => JSON.stringify([n.role, n.goal, [...n.paths].sort(), [...n.dependsOn].sort(), n.checkCommand ?? n.check ?? null, n.executor ?? null]);
+  return pick(a) === pick(b);
+}
+
+export interface PlanDiff {
+  /** 沿用原子任务和结论。 */
+  keep: string[];
+  /** 改了（或上游被重新执行）：原子任务作废，按新节点重新执行。 */
+  replace: string[];
+  /** 新版本里新增的。 */
+  add: string[];
+  /** 新版本里没有了：原子任务作废。 */
+  drop: string[];
+}
+
+/**
+ * 运行中改计划：按节点键对照两版。角色、目标、路径、依赖、检查命令、执行器都没变的沿用；
+ * 改了的重新执行，并且它下游（直接或间接依赖它）的节点也要重新执行，不能沿用基于旧上游的结论。
+ */
+export function planDiff<N extends PlanNodeInput & { executor?: string | null; checkCommand?: unknown }>(previous: readonly N[], next: readonly N[]): PlanDiff {
+  const old = new Map(previous.map((n) => [n.key, n]));
+  const redo = new Set<string>();
+  const add: string[] = [];
+  for (const node of next) {
+    const before = old.get(node.key);
+    if (!before) add.push(node.key);
+    else if (!sameNode(before, node)) redo.add(node.key);
+  }
+  // 上游重新执行或新增的，下游跟着重新执行；按拓扑顺序一遍传完
+  for (const node of topoOrder(next, (n) => n.key, (n) => n.dependsOn).order) {
+    if (old.has(node.key) && node.dependsOn.some((d) => redo.has(d) || add.includes(d))) redo.add(node.key);
+  }
+  const keys = new Set(next.map((n) => n.key));
+  return {
+    keep: next.filter((n) => old.has(n.key) && !redo.has(n.key)).map((n) => n.key),
+    replace: next.filter((n) => redo.has(n.key)).map((n) => n.key),
+    add,
+    drop: previous.filter((n) => !keys.has(n.key)).map((n) => n.key),
+  };
+}

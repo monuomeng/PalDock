@@ -72,6 +72,7 @@ export async function settingsView(rerender: () => void): Promise<HTMLElement> {
     groupSection(groups, act),
     workspaceSection(workspaces, act),
     prepareSection(workspaces, act),
+    autoSection(workspaces, agents.agents.map((a) => a.profile), act),
   );
 }
 
@@ -332,6 +333,44 @@ function groupSection(groups: ConversationRecord[], act: Act): HTMLElement {
                 }),
                 ` ${PROVIDER_LABEL[g.provider]} · ${g.title || g.chatId}`,
               ),
+            ),
+          ),
+        ),
+  );
+}
+
+/**
+ * 自动处理：按项目勾选哪些角色的节点可以跳过审阅（默认都不勾）。没有「跳过计划确认」：每个计划都要你确认。
+ */
+function autoSection(workspaces: WorkspaceRecord[], profiles: AgentSettings['agents'][number]['profile'][], act: Act): HTMLElement {
+  const roles = profiles.filter((p) => p.role !== 'coordinator' && p.role !== 'reviewer');
+  return h(
+    'div',
+    {},
+    h('h3', {}, '自动处理'),
+    h(
+      'p',
+      { class: 'hint' },
+      '勾选的角色交付后，只要改动在交付范围内、检查命令通过，就不送审阅助手、直接合进任务集成分支；每次都记进「自动处理记录」。计划始终要你确认，没有跳过确认的选项。',
+    ),
+    workspaces.length === 0
+      ? h('p', { class: 'empty' }, '还没有项目。')
+      : h(
+          'div',
+          {},
+          ...workspaces.map((w) =>
+            h(
+              'fieldset',
+              {},
+              h('legend', { title: w.rootPath }, `${w.name}：这些角色跳过审阅`),
+              ...roles.map((p) => {
+                const box = h('input', { type: 'checkbox', checked: w.autoPolicy.skipReviewRoles.includes(p.role), 'aria-label': `${w.name} 跳过${p.displayName}的审阅` }) as HTMLInputElement;
+                box.addEventListener('change', () => {
+                  const next = box.checked ? [...w.autoPolicy.skipReviewRoles, p.role] : w.autoPolicy.skipReviewRoles.filter((r) => r !== p.role);
+                  void act(() => call('workspace.setAutoPolicy', { workspaceId: w.id, expectedVersion: w.version, policy: { skipReviewRoles: next } }))();
+                });
+                return h('label', { class: 'inline' }, box, ` ${p.displayName}`);
+              }),
             ),
           ),
         ),

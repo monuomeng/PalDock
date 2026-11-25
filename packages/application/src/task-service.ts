@@ -1,7 +1,9 @@
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import {
+  AgentRole,
   CodedError,
+  type AutoPolicy,
   type ApprovalChannel,
   type ApprovalDecision,
   type CheckCommand,
@@ -214,21 +216,40 @@ export class TaskService {
   }
 
   /** 最新一版计划的节点；确认后带上物化出的子任务和各自允许的操作（逐个验收、恢复）。 */
+  /**
+   * 最新一版计划的节点。确认后带上当前在执行的子任务（按节点键；运行中提出的新一版还没确认时，显示同名节点现在的状态）、
+   * 允许的操作、实际会用的执行器和各次 Run（不含输出正文）。
+   */
   private planDetail(task: TaskRecord, plan: PlanRecord): PlanDetail {
-    const subtasks = new Map(this.store.tasks.listSubtasks(task.id).filter((s) => s.planId === plan.id).map((s) => [s.nodeKey, s]));
-    const pending = plan.status === 'proposed' && task.status === 'draft';
+    const subtasks = new Map(this.store.tasks.listSubtasks(task.id).map((s) => [s.nodeKey, s]));
+    const pending = plan.status === 'proposed' && !taskMachine.isTerminal(task.status);
     return {
       plan,
       nodes: this.store.plans.nodes(plan.id).map((node) => {
+        const executor = node.executor ?? this.executorOf(task.workspaceId, node.role);
         const subtask = subtasks.get(node.key) ?? null;
-        if (!subtask) return { node, subtask, actions: null, gate: null, merge: null };
+        if (!subtask) return { node, subtask, actions: null, gate: null, merge: null, executor, runs: [] };
         const latest = this.store.runs.latestRun(subtask.id);
         const gate = latest ? { result: this.store.runs.getResult(latest.id) ?? null, reviews: this.store.runs.reviewsOfRun(latest.id) } : null;
         const merge = this.store.merges.latestOf(subtask.id) ?? null;
-        return { node, subtask, actions: actionsOf(subtask, latest, this.deps.supervisor.isActive(subtask.id)), gate, merge };
+        const runs = this.store.runs.runDetails(subtask.id).map((r) => ({ ...r, messages: [] }));
+        return { node, subtask, actions: actionsOf(subtask, latest, this.deps.supervisor.isActive(subtask.id)), gate, merge, executor, runs };
       }),
-      actions: { confirm: pending, reject: pending },
+      actions: { confirm: pending, reject: pending, edit: pending },
+      confirmedRevision: this.store.plans.confirmedPlan(task.id)?.revision ?? null,
     };
+  }
+
+  /** 角色在项目里实际用的执行器（项目覆盖优先，否则角色默认）。 */
+  private executorOf(workspaceId: string, role: string): string {
+    const parsed = AgentRole.safeParse(role);
+    if (!parsed.success) return role;
+    return this.store.agents.resolveExecutor(workspaceId, parsed.data) ?? this.store.agents.getProfile(parsed.data)?.executor ?? role;
+  }
+
+  /** 自动处理设置（只能在桌面改）。 */
+  setAutoPolicy(workspaceId: string, expectedVersion: number, policy: AutoPolicy): void {
+    this.publish(this.store.tasks.setAutoPolicy(workspaceId, expectedVersion, policy).events);
   }
 
   /** 执行中的 Run 由监管器中断，收尾时置为 cancelled；其余状态直接取消。 */

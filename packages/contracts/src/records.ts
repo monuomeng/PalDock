@@ -19,7 +19,7 @@ import type {
   WorkspaceAccess,
 } from './states.js';
 import type { RuntimeDiscovery } from './runtime.js';
-import type { GateStage, PlanDetail } from './plans.js';
+import type { AutoPolicy, GateStage, PlanDetail } from './plans.js';
 import type { TaskKind } from './conversations.js';
 
 /**
@@ -41,6 +41,8 @@ export interface WorkspaceRecord {
   remoteApprovalLevel: RemoteApprovalLevel;
   /** worktree 准备命令（例如安装依赖）：新建的 worktree 在跑检查命令前先执行一次；没有设置为 null。 */
   prepareCommand: CheckCommand | null;
+  /** 自动处理设置（默认全关）。 */
+  autoPolicy: AutoPolicy;
   version: number;
 }
 

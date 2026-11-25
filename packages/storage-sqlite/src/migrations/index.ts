@@ -13,6 +13,7 @@ import { reviewGateSchema } from './008-review-gate.js';
 import { integrationBranchSchema } from './009-integration-branch.js';
 import { prepareCommandSchema } from './010-prepare-command.js';
 import { coordinatorSchema } from './011-coordinator.js';
+import { planEditAutoSchema } from './012-plan-edit-auto.js';
 
 export interface Migration {
   version: number;
@@ -33,6 +34,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 9, name: 'integration-branch', sql: integrationBranchSchema },
   { version: 10, name: 'prepare-command', sql: prepareCommandSchema },
   { version: 11, name: 'coordinator', sql: coordinatorSchema },
+  { version: 12, name: 'plan-edit-auto', sql: planEditAutoSchema },
 ];
 
 export interface MigrateResult {

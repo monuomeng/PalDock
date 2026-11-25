@@ -28,7 +28,7 @@ function seed() {
     nodes: [{ key: 'dev', role: 'developer', title: '开发', goal: '做', paths: ['src'], dependsOn: [], check }],
     proposedByRunId: proposer.id,
   }).record;
-  const [subtask] = store.plans.confirm(plan.id, 0).record;
+  const [subtask] = store.plans.confirm(plan.id, 0).record.created;
   const session = store.tasks.getSessionOfSubtask(subtask!.id)!;
   const work = store.runs.createRun({ subtaskId: subtask!.id, sessionId: session.id, runtime: 'claude' }).record;
   return { plan, subtask: subtask!, session, work, check };

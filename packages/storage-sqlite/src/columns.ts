@@ -1,4 +1,4 @@
-import type { CheckCommand, RunResultRecord, TaskRecord, WorkspaceRecord } from '@paldock/contracts';
+import type { AutoPolicy, CheckCommand, RunResultRecord, TaskRecord, WorkspaceRecord } from '@paldock/contracts';
 
 /**
  * 每张表的 RETURNING / SELECT 列只定义一次，插入、更新和查询返回同一形状（contracts 的记录类型）。
@@ -15,7 +15,10 @@ const cols = (list: string) => (alias = '') =>
     .join(', ');
 
 export const COLUMNS = {
-  workspace: cols(`id, name, root_path AS rootPath, remote_approval_level AS remoteApprovalLevel, prepare_command AS prepareCommand, version`),
+  workspace: cols(
+    `id, name, root_path AS rootPath, remote_approval_level AS remoteApprovalLevel, prepare_command AS prepareCommand,
+     auto_policy AS autoPolicy, version`,
+  ),
   task: cols(
     `id, workspace_id AS workspaceId, title, goal, status, check_command AS checkCommand,
      check_confirmed_at AS checkConfirmedAt, origin_conversation_id AS originConversationId,
@@ -70,7 +73,8 @@ export const COLUMNS = {
     `id, task_id AS taskId, revision, status, proposed_by_run_id AS proposedByRunId, decision_note AS decisionNote,
      version, created_at AS createdAt, decided_at AS decidedAt`,
   ),
-  planNode: cols(`plan_id AS planId, position, node_key AS key, role, title, goal, paths, depends_on AS dependsOn, check_command AS checkCommand`),
+  planNode: cols(`plan_id AS planId, position, node_key AS key, role, title, goal, paths, depends_on AS dependsOn, check_command AS checkCommand, executor`),
+  autoDecision: cols(`id, workspace_id AS workspaceId, task_id AS taskId, plan_id AS planId, subtask_id AS subtaskId, kind, reason, created_at AS createdAt`),
   merge: cols(
     `id, task_id AS taskId, subtask_id AS subtaskId, source_sha AS sourceSha, target_old AS targetOld,
      candidate_sha AS candidateSha, phase, conflict_files AS conflictFiles, detail, created_at AS createdAt, updated_at AS updatedAt`,
@@ -89,11 +93,12 @@ export const COLUMNS = {
   outbox: cols(`id, channel AS provider, target AS conversationId, subject, payload, attempts`),
 } as const;
 
-/** prepare_command 以 JSON 文本存储，读出时还原。 */
-export type WorkspaceRow = Omit<WorkspaceRecord, 'prepareCommand'> & { prepareCommand: string | null };
+/** prepare_command、auto_policy 以 JSON 文本存储，读出时还原。 */
+export type WorkspaceRow = Omit<WorkspaceRecord, 'prepareCommand' | 'autoPolicy'> & { prepareCommand: string | null; autoPolicy: string };
 export const toWorkspace = (row: WorkspaceRow): WorkspaceRecord => ({
   ...row,
   prepareCommand: row.prepareCommand === null ? null : (JSON.parse(row.prepareCommand) as CheckCommand),
+  autoPolicy: { skipReviewRoles: [], ...(JSON.parse(row.autoPolicy) as Partial<AutoPolicy>) },
 });
 
 /** out_of_scope 以 JSON 文本存储，读出时还原。 */

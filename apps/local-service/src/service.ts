@@ -140,7 +140,7 @@ export class LocalService {
       service.integration = integration;
       service.coordinator = new CoordinatorService({ store, supervisor: service.supervisor, publish, log, ...(options.coordinatorLimits ? { limits: options.coordinatorLimits } : {}) });
       service.gate = new ReviewGate({ store, supervisor: service.supervisor, publish, log, integration, ...limits });
-      plans = new PlanService({ store, scheduler: service.scheduler, integration, publish });
+      plans = new PlanService({ store, scheduler: service.scheduler, integration, supervisor: service.supervisor, publish });
       const tasks = new TaskService({ store, supervisor: service.supervisor, scheduler: service.scheduler, integration, dataRoot, publish });
       service.channels = new ChannelService({
         store,

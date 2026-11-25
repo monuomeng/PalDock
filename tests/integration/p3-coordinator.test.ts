@@ -235,6 +235,8 @@ describe('协调助手主会话', () => {
     expect(runtime.runs).toHaveLength(3);
     const notices = store.coordinator.notices(session.sessionId, 10);
     expect(notices).toEqual([expect.objectContaining({ kind: 'info', body: expect.stringContaining('达到上限') })]);
+    // 跳过记进自动处理记录单
+    expect(store.autoDecisions.list(session.workspaceId, 10)).toEqual([expect.objectContaining({ kind: 'wake_dropped', taskId: session.taskId })]);
     // 你发的消息不受限制
     say('那就先这样');
     (await nthRun(4)).reply('好的');
@@ -263,6 +265,18 @@ describe('协调助手主会话', () => {
     await waitIdle();
   });
 
+  it('确认计划时带了意见：唤醒协调助手，把意见交给它', async () => {
+    await setup();
+    say('开始');
+    const first = await nthRun(1);
+    const { planId } = first.call('propose_plan', { title: '记住我', goal: '加记住我', nodes: [{ ...node, role: 'reviewer' }] }) as { planId: string };
+    first.reply('计划已提');
+    await waitIdle();
+    await plans.confirm(planId, store.plans.getPlan(planId)!.version, '记得补文档');
+    await until(() => wakes().length, (n) => n === 2, '确认意见唤醒');
+    expect(wakes()[1]).toMatchObject({ trigger: 'task_event', summary: expect.stringContaining('计划第 1 版已确认，用户的意见：记得补文档') });
+  });
+
   it('单次唤醒的请求上限：到软上限提醒收尾，超过硬上限拒绝、中断这次唤醒并通知你', async () => {
     await setup({ wakeSoftRequests: 2, wakeHardRequests: 3 });
     say('看看任务');
@@ -274,6 +288,7 @@ describe('协调助手主会话', () => {
     await until(() => wakes()[0]?.status, (s) => s === 'failed', '唤醒被中断');
     expect(wakes()[0]).toMatchObject({ requests: 4 });
     expect(store.coordinator.notices(session.sessionId, 10)[0]).toMatchObject({ body: expect.stringContaining('已强制停止') });
+    expect(store.autoDecisions.list(session.workspaceId, 10)).toEqual([expect.objectContaining({ kind: 'wake_aborted', reason: expect.stringContaining('看看任务') })]);
   });
 
   it('notify_user：先在桌面；没人看时按审批升级规则发到已绑定的单聊，带编号，只发一次；看过的不外发', async () => {

@@ -13,6 +13,7 @@ import type {
 } from './channels.js';
 import type { PersistentEvent, RunNoticeCode } from './events.js';
 import type { MainSessionRecord, NoticeKind, NoticeRecord, SummaryRecord, WakeRecord, WakeStatus, WakeTrigger } from './conversations.js';
+import type { AutoDecisionRecord, AutoPolicy, PlanNodeEdit } from './plans.js';
 import type { GateStage, GraphNode, MergeOpRecord, MergePhase, PlanNodeInput, PlanNodeRecord, PlanRecord } from './plans.js';
 import type {
   AgentOverrideRecord,
@@ -127,6 +128,7 @@ export interface TaskStorePort {
   setRemoteApprovalLevel(id: string, expectedVersion: number, level: RemoteApprovalLevel): Change<WorkspaceRecord>;
   /** 准备命令只能在桌面设置；null 为取消。 */
   setPrepareCommand(id: string, expectedVersion: number, command: CheckCommand | null): Change<WorkspaceRecord>;
+  setAutoPolicy(id: string, expectedVersion: number, policy: AutoPolicy): Change<WorkspaceRecord>;
   /** 节点 worktree 已跑过准备命令（之后各次 Run 共用）。 */
   markPrepared(subtaskId: string): void;
   createTask(input: NewTask): Change<CreatedTask>;
@@ -228,14 +230,27 @@ export interface CoordinatorStorePort {
   latestSummary(sessionId: string): SummaryRecord | undefined;
 }
 
+export interface AutoDecisionStorePort {
+  record(input: Omit<AutoDecisionRecord, 'id' | 'createdAt'>): Change<AutoDecisionRecord>;
+  list(workspaceId: string | null, limit: number): AutoDecisionRecord[];
+}
+
 export interface PlanStorePort {
   /** 写入新一版计划（同任务里还在等确认的旧版本置为 superseded）。 */
   propose(input: NewPlan): Change<PlanRecord>;
   getPlan(id: string): PlanRecord | undefined;
   latestPlan(taskId: string): PlanRecord | undefined;
   nodes(planId: string): PlanNodeRecord[];
-  /** 确认：计划 confirmed、按节点建子任务与会话和依赖、任务 draft → queued，同一事务；返回建好的子任务。 */
-  confirm(id: string, expectedVersion: number): Change<SubtaskRecord[]>;
+  /**
+   * 确认，同一事务：计划 confirmed，按节点建子任务与会话和依赖；草稿任务 draft → queued。
+   * 运行中确认新一版时：上一版 superseded，没变的节点沿用原子任务，改了的和新增的建新子任务，没了的和被替换的取消。
+   * 返回新建的子任务和被取消的子任务（有 Run 在跑的由调用方中断）。
+   */
+  confirm(id: string, expectedVersion: number, note?: string | null): Change<{ created: SubtaskRecord[]; cancelled: string[] }>;
+  /** 确认前改一个节点（调用方先校验）；带计划版本，先到者为准。 */
+  editNode(id: string, expectedVersion: number, edit: PlanNodeEdit): Change<PlanRecord>;
+  /** 任务当前在执行的那一版。 */
+  confirmedPlan(taskId: string): PlanRecord | undefined;
   reject(id: string, expectedVersion: number, note: string | null): Change<PlanRecord>;
   /** 调度器读的任务图（按计划节点顺序）。 */
   graph(taskId: string): GraphNode[];
@@ -383,6 +398,7 @@ export interface StorePort {
   plans: PlanStorePort;
   merges: MergeStorePort;
   coordinator: CoordinatorStorePort;
+  autoDecisions: AutoDecisionStorePort;
   audit: AuditPort;
   messages: {
     append(sessionId: string, role: MessageRole, body: string, runId?: string | null): Change<MessageRecord>;

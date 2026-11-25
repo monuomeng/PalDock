@@ -57,7 +57,7 @@ describe('计划', () => {
     expect(store.tasks.listTasks(10).filter((t) => t.task.id === plan.taskId)).toEqual([expect.objectContaining({ subtaskStatus: 'draft', latestRunStatus: null })]);
   });
 
-  it('给草稿任务提新一版：旧版本被取代；任务确认后不能再提', () => {
+  it('给草稿任务提新一版：旧版本被取代；任务结束后不能再提', () => {
     const { propose } = seed();
     const first = propose().record;
     const second = propose([node('only')], first.taskId);
@@ -68,7 +68,11 @@ describe('计划', () => {
     // 被取代的旧版本不能再确认
     expect(() => store.plans.confirm(first.id, 1)).toThrow();
     store.plans.confirm(second.record.id, 0);
-    expect(() => propose([node('x')], first.taskId)).toThrow(/不能再提新一版/);
+    // 运行中的任务可以提新一版
+    expect(propose([node('only')], first.taskId).record).toMatchObject({ revision: 3, status: 'proposed' });
+    const task = store.tasks.getTask(first.taskId)!;
+    store.tasks.transitionTask(task.id, task.version, 'cancelled');
+    expect(() => propose([node('x')], first.taskId)).toThrow(/任务已结束/);
     expect(() => propose([node('x')], 'task_missing')).toThrow(/任务不存在/);
   });
 
@@ -76,7 +80,10 @@ describe('计划', () => {
     const { propose } = seed();
     const plan = propose().record;
     expect(() => store.plans.confirm(plan.id, 5)).toThrow(/已被修改/);
-    const { record: subtasks, events } = store.plans.confirm(plan.id, 0);
+    const {
+      record: { created: subtasks },
+      events,
+    } = store.plans.confirm(plan.id, 0);
     expect(subtasks.map((s) => [s.nodeKey, s.status, s.planId])).toEqual([
       ['a', 'queued', plan.id],
       ['b', 'waiting_dependency', plan.id],
@@ -113,7 +120,7 @@ describe('计划', () => {
     const next = propose([node('a')], plan.taskId).record;
     const task = store.tasks.getTask(plan.taskId)!;
     store.tasks.transitionTask(task.id, task.version, 'cancelled');
-    expect(() => store.plans.confirm(next.id, 0)).toThrow(/不在等待确认/);
+    expect(() => store.plans.confirm(next.id, 0)).toThrow(/任务已结束/);
     expect(store.plans.getPlan(next.id)?.status).toBe('proposed');
   });
 

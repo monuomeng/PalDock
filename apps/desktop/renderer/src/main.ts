@@ -4,6 +4,7 @@ import { h } from './dom.js';
 import { appendLive, clearLive } from './live-output.js';
 import { currentRoute, type Route } from './router.js';
 import { attentionView } from './views/attention.js';
+import { autoDecisionsView } from './views/auto-decisions.js';
 import { chatView } from './views/chat.js';
 import { newTaskView } from './views/new-task.js';
 import { settingsView } from './views/settings.js';
@@ -70,6 +71,8 @@ async function buildView(route: Route): Promise<HTMLElement> {
   switch (route.view) {
     case 'attention':
       return attentionView();
+    case 'auto':
+      return autoDecisionsView(route.workspaceId);
     case 'chat': {
       const { element, sessionId } = await chatView(route, scheduleRender);
       chatSession = sessionId;
@@ -134,7 +137,7 @@ const LIST_EVENTS = new Set<PersistentEvent['type']>([
 
 /** 设置页关心的事件：渠道设置、配对、账号、群白名单、项目远程审批等级。 */
 const isSettingsEvent = (event: PersistentEvent) =>
-  (event.type.startsWith('channel.') && event.type !== 'channel.inbound_rejected') || event.type === 'workspace.settings_changed' || event.type === 'workspace.prepare_command_changed';
+  (event.type.startsWith('channel.') && event.type !== 'channel.inbound_rejected') || event.type === 'workspace.settings_changed' || event.type === 'workspace.prepare_command_changed' || event.type === 'workspace.auto_policy_changed';
 
 /** 只在事件涉及当前页面时重绘；流式输出的检查点只清空临时缓冲（文字已在屏幕上）。 */
 function isRelevant(event: PersistentEvent): boolean {
@@ -143,6 +146,7 @@ function isRelevant(event: PersistentEvent): boolean {
   if (route.view === 'chat') return event.aggregateId === chatSession || (event.type === 'message.created' && event.payload.sessionId === chatSession);
   if (event.type === 'message.created') return false;
   if (route.view === 'settings') return isSettingsEvent(event);
+  if (route.view === 'auto') return event.type === 'auto.decided';
   if (route.view !== 'task') return LIST_EVENTS.has(event.type);
   return (
     detailScope.has(event.aggregateId) ||

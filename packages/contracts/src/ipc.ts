@@ -9,6 +9,7 @@ import {
 } from './channels.js';
 import { CheckCommand, type AgentOverrideRecord, type AgentSettings, type AttentionItem, type MessageRecord, type TaskDetail, type TaskSummary, type WorkspaceRecord } from './records.js';
 import type { ConversationDetail, MainSessionRecord } from './conversations.js';
+import type { AutoDecisionRecord } from './plans.js';
 import { AgentRole, ApprovalDecision, AttentionKind, Executor, RemoteApprovalLevel, ReviewDecision, SCHEMA_VERSION } from './states.js';
 
 /** 单帧上限；超长帧直接断开，防止本机客户端撑爆内存。 */
@@ -60,8 +61,26 @@ export const CommandArgs = {
   'chat.send': z.object({ sessionId: Id, text: z.string().trim().min(1).max(8000), idempotencyKey: z.string().min(8).max(100) }),
   /** 会话里的通知在桌面看过了：不再外发。 */
   'notice.ack': z.object({ sessionId: Id }),
-  /** 确认协调助手提出的计划：按节点建子任务并开始派单。 */
-  'plan.confirm': z.object({ planId: Id, expectedVersion: Version }),
+  /** 确认协调助手提出的计划：按节点建子任务并开始派单；带意见时交给协调助手。 */
+  'plan.confirm': z.object({ planId: Id, expectedVersion: Version, note: z.string().trim().max(500).optional() }),
+  /** 确认前改计划节点：执行器（null 为按角色设置）、检查命令（null 为去掉）或删节点。 */
+  'plan.editNode': z.object({
+    planId: Id,
+    expectedVersion: Version,
+    edit: z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('executor'), nodeKey: Id, executor: Executor.nullable() }),
+      z.object({ kind: z.literal('check'), nodeKey: Id, check: CheckCommand.nullable() }),
+      z.object({ kind: z.literal('remove'), nodeKey: Id }),
+    ]),
+  }),
+  /** 自动处理设置：只在桌面有入口。 */
+  'workspace.setAutoPolicy': z.object({
+    workspaceId: Id,
+    expectedVersion: Version,
+    policy: z.object({ skipReviewRoles: z.array(AgentRole).max(6) }).strict(),
+  }),
+  /** 自动处理记录单，按项目筛选（不填为全部），新的在前。 */
+  'auto.list': z.object({ workspaceId: Id.optional(), limit: z.number().int().positive().max(500).default(100) }),
   /** 退回计划，任务留在草稿，协调助手可以再提一版。 */
   'plan.reject': z.object({ planId: Id, expectedVersion: Version, note: z.string().trim().max(500).optional() }),
   'events.since': z.object({
@@ -136,6 +155,9 @@ export interface CommandResults {
   'chat.send': void;
   'notice.ack': void;
   'plan.confirm': void;
+  'plan.editNode': void;
+  'workspace.setAutoPolicy': void;
+  'auto.list': AutoDecisionRecord[];
   'plan.reject': void;
   'events.since': PersistentEvent[];
   'attention.list': AttentionItem[];

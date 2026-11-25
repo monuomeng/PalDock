@@ -226,13 +226,14 @@ export class RunSupervisor {
    * 子任务用哪个执行器：角色在项目里的执行器（项目覆盖优先）。只有一个适配器时直接用它。
    * 角色不在设置里（旧数据）时退回开发助手的设置。
    */
-  private executorOf(roleName: string, task: TaskRecord): { name: string; access?: WorkspaceAccess; label: string } {
+  private executorOf(roleName: string, task: TaskRecord, override?: Executor | null): { name: string; access?: WorkspaceAccess; label: string } {
     const adapters = Object.values(this.deps.runtimes);
     if (adapters.length === 1) return { name: adapters[0]!.name, label: roleName };
     const parsed = AgentRole.safeParse(roleName);
     const role = parsed.success ? parsed.data : 'developer';
     const profile = this.deps.store.agents.getProfile(role)!;
-    const name = this.deps.store.agents.resolveExecutor(task.workspaceId, role) ?? profile.executor;
+    // 计划节点上指定的执行器（确认前可改）优先，其次项目覆盖，最后角色默认；能力检查照旧
+    const name = override ?? this.deps.store.agents.resolveExecutor(task.workspaceId, role) ?? profile.executor;
     return { name, access: profile.workspaceAccess, label: profile.displayName };
   }
 
@@ -267,7 +268,7 @@ export class RunSupervisor {
       const taskEvents = detached ? [] : settleTask(store, moved.record.taskId);
       const task = store.tasks.getTask(moved.record.taskId)!;
       const role = plan.review?.role ?? moved.record.role;
-      executor = this.executorOf(role, task);
+      executor = this.executorOf(role, task, plan.review ? null : nodeOf(store, moved.record)?.executor);
       const run = store.runs.createRun({
         subtaskId,
         sessionId,

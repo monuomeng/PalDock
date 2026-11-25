@@ -1,4 +1,4 @@
-import type { PersistentEvent, RunRecord, StorePort, SubtaskRecord } from '@paldock/contracts';
+import type { AutoDecisionKind, PersistentEvent, RunRecord, StorePort, SubtaskRecord, TaskRecord } from '@paldock/contracts';
 import { AgentRole } from '@paldock/contracts';
 import { gateAfterReview, gateAfterWork, P1_DEFAULTS, runMachine } from '@paldock/domain';
 import { reviewPrompt, reviewReworkPrompt } from './prompts.js';
@@ -76,12 +76,19 @@ export class ReviewGate {
     const role = AgentRole.safeParse(subtask.role);
     const writable = role.success && store.agents.getProfile(role.data)?.workspaceAccess === 'worktree_write';
     const decision = gateAfterWork({ outOfScope: result.outOfScope ?? [], checkStatus: result.checkStatus, prepareStatus: result.prepareStatus, writable });
+    const task = store.tasks.getTask(subtask.taskId)!;
     switch (decision.outcome) {
       case 'human':
         return this.deps.publish(store.tasks.setGateStage(subtask.id, subtask.version, 'human', { stage: 'check', outcome: 'human', runId, reason: decision.reason }).events);
       case 'passed':
+        this.recordDecision(task, subtask, 'skip_review', '只读角色，没有改动要审，直接通过');
         return this.accept(subtask, { stage: 'check', runId, reason: '只读角色，没有改动要审' });
       case 'review': {
+        // 项目设置里勾了这个角色跳过审阅：范围和检查都过了，直接合并，记一条
+        if (role.success && store.tasks.getWorkspace(task.workspaceId)?.autoPolicy.skipReviewRoles.includes(role.data)) {
+          this.recordDecision(task, subtask, 'skip_review', `项目设置跳过「${store.agents.getProfile(role.data)?.displayName ?? role.data}」的审阅；交付在范围内、检查通过`);
+          return this.accept(subtask, { stage: 'check', runId, reason: '按项目设置跳过审阅' });
+        }
         const { record, events } = store.tasks.setGateStage(subtask.id, subtask.version, 'review', { stage: 'check', outcome: 'passed', runId });
         this.deps.publish(events);
         return this.startReview(record, run!, result.commitSha, result.diffStat);
@@ -112,16 +119,26 @@ export class ReviewGate {
       previousReworks: store.runs.autoReworkCount(subtask.id) - (verdict?.decision === 'rework' ? 1 : 0),
       maxAutoReworks: this.maxAutoReworks,
     });
+    const task = store.tasks.getTask(subtask.taskId)!;
     switch (decision.outcome) {
       case 'passed':
+        this.recordDecision(task, subtask, 'review_passed', `审阅助手通过${verdict?.note ? `：${verdict.note}` : ''}`);
         return this.accept(subtask, { stage: 'review', runId: review.id });
       case 'human':
         return this.deps.publish(
           store.tasks.setGateStage(subtask.id, subtask.version, 'human', { stage: 'review', outcome: 'human', runId: review.id, reason: decision.reason }).events,
         );
       case 'rework':
+        this.recordDecision(task, subtask, 'review_rework', `审阅助手自动退回：${decision.reason}`);
         return this.rework(subtask, review.id, decision.reason);
     }
+  }
+
+  /** 没经过用户的决定记进自动处理记录单。 */
+  private recordDecision(task: TaskRecord, subtask: SubtaskRecord, kind: AutoDecisionKind, reason: string): void {
+    this.deps.publish(
+      this.deps.store.autoDecisions.record({ workspaceId: task.workspaceId, taskId: task.id, planId: subtask.planId, subtaskId: subtask.id, kind, reason }).events,
+    );
   }
 
   /** 通过：合进任务集成分支，合并成功子任务才成功（放行下游由调度器按事件做）；没接集成分支时直接成功。 */

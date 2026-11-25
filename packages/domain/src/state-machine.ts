@@ -73,10 +73,11 @@ export const runMachine = defineMachine<RunStatus>('run', {
   cancelled: [],
 });
 
-/** 每版计划只决定一次：确认、退回，或被同一任务的新一版取代。确认后不可修改。 */
+/** 每版计划只决定一次：确认、退回，或被同一任务的新一版取代（确认后的也可以被运行中确认的新一版取代）。确认后内容不可修改。 */
 export const planMachine = defineMachine<PlanStatus>('plan', {
   proposed: ['confirmed', 'rejected', 'superseded'],
-  confirmed: [],
+  // 运行中确认了新一版：旧的确认版本被取代
+  confirmed: ['superseded'],
   rejected: [],
   superseded: [],
 });

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PlanStatus } from './plans.js';
+import { AutoDecisionKind, PlanStatus } from './plans.js';
 import { NoticeKind, WakeStatus, WakeTrigger } from './conversations.js';
 import { ChannelAccountStatus, ChannelProvider, ChannelState, InboundRejection } from './channels.js';
 import {
@@ -47,6 +47,12 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
     type: z.literal('plan.proposed'),
     payload: z.object({ taskId: Id, revision: z.number().int().positive(), nodes: z.number().int().positive() }),
   }),
+  /** 确认前改了计划节点；聚合 ID 为 planId。 */
+  z.object({ type: z.literal('plan.edited'), payload: z.object({ nodeKey: z.string().min(1), kind: z.enum(['executor', 'check', 'remove']) }) }),
+  /** 一个没经过用户的决定（跳过审阅、审阅助手放行……）；聚合 ID 为任务 ID。 */
+  z.object({ type: z.literal('auto.decided'), payload: z.object({ decisionId: z.number().int().positive(), kind: AutoDecisionKind }) }),
+  /** 项目的自动处理设置变更；聚合 ID 为 workspaceId。 */
+  z.object({ type: z.literal('workspace.auto_policy_changed'), payload: z.object({ skipReviewRoles: z.array(AgentRole) }) }),
   /** 计划被确认、退回或被新一版取代；聚合 ID 为 planId。 */
   z.object({ type: z.literal('plan.status_changed'), payload: transition(PlanStatus) }),
   z.object({

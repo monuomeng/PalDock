@@ -1,7 +1,7 @@
 import { SUBTASK_STATUSES, TASK_STATUSES, type GraphNode, type PlanNodeInput, type SubtaskStatus } from '@paldock/contracts';
 import { describe, expect, it } from 'vitest';
 import { subtaskMachine, taskMachine } from './state-machine.js';
-import { graphStep, pathProblem, taskPath, taskStatusOf, upstreamBlockReason, validatePlan } from './task-graph.js';
+import { graphStep, pathProblem, planDiff, taskPath, taskStatusOf, upstreamBlockReason, validatePlan } from './task-graph.js';
 
 const ROLES = new Set(['developer', 'tester', 'docs']);
 const node = (key: string, dependsOn: string[] = [], extra: Partial<PlanNodeInput> = {}): PlanNodeInput => ({
@@ -149,5 +149,22 @@ describe('taskStatusOf', () => {
         }
       }
     }
+  });
+});
+
+describe('planDiff', () => {
+  it('没变的沿用；改了的连同下游重新执行；新增与删掉分开列；标题改了不算变', () => {
+    const before = [node('a'), node('b', ['a']), node('c'), node('d', ['c']), node('x')];
+    const after = [node('a', [], { goal: '换个做法' }), node('b', ['a']), node('c', [], { title: '新标题' }), node('d', ['c']), node('e', ['c'])];
+    expect(planDiff(before, after)).toEqual({ keep: ['c', 'd'], replace: ['a', 'b'], add: ['e'], drop: ['x'] });
+  });
+
+  it('检查命令、执行器、路径、依赖的变化都算变化', () => {
+    const base = [node('a'), node('b')];
+    expect(planDiff(base, [node('a', [], { check: { executable: 'pnpm', args: ['test'] } }), node('b')]).replace).toEqual(['a']);
+    expect(planDiff(base, [{ ...node('a'), executor: 'codex' }, node('b')]).replace).toEqual(['a']);
+    expect(planDiff(base, [node('a', [], { paths: ['src'] }), node('b')]).replace).toEqual(['a']);
+    expect(planDiff(base, [node('a'), node('b', ['a'])]).replace).toEqual(['b']);
+    expect(planDiff(base, base)).toEqual({ keep: ['a', 'b'], replace: [], add: [], drop: [] });
   });
 });
