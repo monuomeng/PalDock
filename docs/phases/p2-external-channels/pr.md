@@ -1,6 +1,6 @@
 # P2 外部渠道（飞书、Telegram）：变更说明
 
-分支 `claude/p2-external-channels`，基于 master `ea2ee8f`（P1 已合入）。尚未推送，也未开 PR。计划见 [P2 开发计划](../plan/p2-external-channels.md)（用户 2026-11-24 批准），实测结果见 [P2 实测记录](../p2/findings.md)，运维说明见 [配置飞书自建应用](../ops/feishu-app.md)、[申请 Telegram 测试 bot](../ops/telegram-bot.md)。
+分支 `claude/p2-external-channels`，基于 master `ea2ee8f`（P1 已合入）。尚未推送，也未开 PR。计划见 [P2 开发计划](plan.md)（用户 2026-11-24 批准），实测结果见 [P2 实测记录](findings.md)，运维说明见 [配置飞书自建应用](../../ops/feishu-app.md)、[申请 Telegram 测试 bot](../../ops/telegram-bot.md)。
 
 ## 前因
 
@@ -25,7 +25,7 @@ P1 让用户能在电脑上建任务、看执行、审批和验收。P2 的目�
 | `9db135a` | Telegram：409 后至少等 30 秒再试，状态显示重试等待（实机排查：直连靠 AdGuard VPN，超时来自 VPN 不稳） |
 | `d2f361f` | 安装版启动任务失败：`codex --version` 在 Electron 里要带 `ELECTRON_RUN_AS_NODE` |
 | `32dc2e8` | 安装版执行任务弹命令行窗口：npm 安装的 Codex 直接以隐藏窗口启动原生 `codex.exe` |
-| `a9b79d6`、`edd07d0`、`8744fb2`、`401dead` | P2-10 任务续做（计划、实现、`/simplify`、`/code-review`），见 [计划](../plan/p2-task-continuation.md) |
+| `a9b79d6`、`edd07d0`、`8744fb2`、`401dead` | P2-10 任务续做（计划、实现、`/simplify`、`/code-review`），见 [计划](plan-p2-10-task-continuation.md) |
 
 ## 实现方案
 
@@ -80,7 +80,7 @@ apps/desktop ──► domain（空闲阈值）
 - 设置页：假数据下在 Chromium 渲染检查。
 - `/simplify`（复用、简化、效率、层次四路）与 `/code-review` 已跑，修改见 `a812efd`、`e2a3c89`。
 
-**未验证**：真实飞书租户、真实 Telegram bot、真实 Electron 窗口与 `scripts/p1/e2e-check.mjs`（容器里没有桌面环境）、macOS、GitHub Actions。清单见 [P2 实测记录](../p2/findings.md)「待实机」。
+**未验证**：真实飞书租户、真实 Telegram bot、真实 Electron 窗口与 `scripts/p1/e2e-check.mjs`（容器里没有桌面环境）、macOS、GitHub Actions。清单见 [P2 实测记录](findings.md)「待实机」。
 
 ## 需要注意的点
 
@@ -115,6 +115,6 @@ git push -u origin claude/p2-external-channels
 
 ## 下一步建议
 
-1. 按 [P2 实测记录](../p2/findings.md)「待实机」用你的飞书租户和 Telegram bot 走一遍（飞书先按 [配置说明](../ops/feishu-app.md) 补权限和卡片回调）。
+1. 按 [P2 实测记录](findings.md)「待实机」用你的飞书租户和 Telegram bot 走一遍（飞书先按 [配置说明](../../ops/feishu-app.md) 补权限和卡片回调）。
 2. 推送后看 GitHub Actions（Windows、macOS）。
 3. 把新的 Mac 测试包发出去，收回后补 findings。

@@ -1,6 +1,6 @@
 # P1 实测记录
 
-记录时间 2026-11-23，Windows 11（10.0.26200，x64），Node 26.7.0（开发与测试），Electron 45.2.3，Codex 0.166.0，git 2.42。只记录实际跑过的结果。计划见 [P1 开发计划](../plan/p1-local-mvp.md)，变更说明见 [docs/pr/p1-local-mvp.md](../pr/p1-local-mvp.md)。
+记录时间 2026-11-23，Windows 11（10.0.26200，x64），Node 26.7.0（开发与测试），Electron 45.2.3，Codex 0.166.0，git 2.42。只记录实际跑过的结果。计划见 [P1 开发计划](plan.md)，变更说明见 [P1 变更说明](pr.md)。
 
 ## 结论一览
 

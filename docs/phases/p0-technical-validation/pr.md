@@ -1,10 +1,10 @@
 # P0 技术验证：变更说明
 
-分支 `claude/project-thread-ta1qy4`，基于初始设计文档提交 `f23b928`。尚未推送，也未开 PR。计划见 [P0 开发计划](../plan/p0-technical-validation.md)，逐项实测结果见 [P0 实测记录](../p0/findings.md)。
+分支 `claude/project-thread-ta1qy4`，基于初始设计文档提交 `f23b928`。尚未推送，也未开 PR。计划见 [P0 开发计划](plan.md)，逐项实测结果见 [P0 实测记录](findings.md)。
 
 ## 前因
 
-设计稿（[架构](../02-architecture.md)、[ADR 0002](../adr/0002-process-topology-and-task-board.md)、[路线图](../03-roadmap.md)、[积压](../07-backlog.md)）已获批准，按路线图从 P0 开始实现。P0 的目标不是做产品功能，而是用最小的可运行代码确认几项关键假设能否成立：
+设计稿（[架构](../../design/02-architecture.md)、[ADR 0002](../../adr/0002-process-topology-and-task-board.md)、[路线图](../../roadmap.md)、[积压](../../roadmap.md)）已获批准，按路线图从 P0 开始实现。P0 的目标不是做产品功能，而是用最小的可运行代码确认几项关键假设能否成立：
 
 - Electron 外壳 + 本地服务子进程，经命名管道和一次性令牌通信，能否做到崩溃重启、防止双开、断线不丢事件；
 - SQLite 能否同时满足「状态表为准、事件同事务」、乐观并发、入站去重、中文全文检索和「待我处理」派生视图；

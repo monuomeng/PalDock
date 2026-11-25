@@ -1,6 +1,6 @@
 # 申请 Telegram 测试 bot
 
-P2 的 Telegram 单聊（积压 P2-07）需要一个你自己的 bot 和一个能访问 Telegram 的代理。下面的步骤只需要做一次，大约 5 分钟。**bot token 相当于密码，不要发到聊天、文档或仓库里**，只填进 PalDock 的设置页（或按第 3 步存进系统凭据库）。
+P2 的 Telegram 单聊（工作项 P2-07）需要一个你自己的 bot 和一个能访问 Telegram 的代理。下面的步骤只需要做一次，大约 5 分钟。**bot token 相当于密码，不要发到聊天、文档或仓库里**，只填进 PalDock 的设置页（或按第 3 步存进系统凭据库）。
 
 ## 1. 用 BotFather 创建 bot
 

@@ -2,23 +2,18 @@
 
 本地优先的 AI 桌面助手与多会话协作平台。用户可以通过桌面界面或授权的外部聊天渠道发起任务，由协调助手分派给拥有独立会话的专业助手；执行器可接入本地 Codex、Claude Code 或其他兼容能力。
 
-> 当前阶段：P1 本地最小产品（开发预览，待评审）。桌面管理窗口 + 本地任务 + Codex 已能在本机跑通；外部渠道、多助手协作、桌宠尚未实现。
+> 当前阶段：P2 外部渠道已合入（飞书、Telegram 部分项待实机），P3 多助手协作计划中。桌面管理窗口 + 本地任务 + Codex + 外部渠道已能跑通；多助手协作、桌宠尚未实现。进度见 [项目演进总表](docs/roadmap.md)。
 
 本地验证：`pnpm install` 后运行 `pnpm build` 和 `pnpm test`（需 Node 24+）；桌面端到端检查 `node scripts/p1/e2e-check.mjs`（离线模拟执行器）；真实 Codex 验收 `PALDOCK_LIVE_CODEX=1 pnpm exec vitest run tests/live`（消耗少量额度）。
 
 ## 文档入口
 
-- [产品范围与验收](docs/01-product.md)
-- [架构、模块与数据](docs/02-architecture.md)
-- [阶段目标与路线图](docs/03-roadmap.md)
-- [Codex 与 Claude 协作开发规范](docs/04-ai-collaboration.md)
-- [外部项目调研与授权](docs/05-references.md)
-- [安全、隐私与测试](docs/06-security-quality.md)
-- [启动积压与待决事项](docs/07-backlog.md)
-- [桌宠统筹与助手会话设计](docs/08-assistant-orchestration.md)
-- [P0 开发计划](docs/plan/p0-technical-validation.md)、[P0 实测记录](docs/p0/findings.md)、[P0 变更说明](docs/pr/p0-technical-validation.md)、[macOS 测试手册](docs/test-kits/macos/README.md)
-- [P1 开发计划](docs/plan/p1-local-mvp.md)、[P1 实测记录](docs/p1/findings.md)、[P1 变更说明](docs/pr/p1-local-mvp.md)、[数据、备份与卸载](docs/ops/backup-and-uninstall.md)
+- [文档目录](docs/README.md)：目录结构与每轮开发写哪些文档
+- [项目演进总表](docs/roadmap.md)：一期 / 二期、各阶段与工作项状态
+- 各阶段：[P0 技术验证](docs/phases/p0-technical-validation/README.md)、[P1 本地最小产品](docs/phases/p1-local-mvp/README.md)、[P2 外部渠道](docs/phases/p2-external-channels/README.md)、[P3 多助手协作](docs/phases/p3-multi-assistant/README.md)
+- 产品与设计：[产品范围与验收](docs/design/01-product.md)、[架构、模块与数据](docs/design/02-architecture.md)、[桌宠统筹与助手会话设计](docs/design/03-assistant-orchestration.md)、[安全、隐私与测试](docs/design/04-security-quality.md)、[Codex 与 Claude 协作开发规范](docs/design/05-ai-collaboration.md)、[外部项目调研与授权](docs/design/06-references.md)
 - 架构决策记录：[ADR 0001 初始架构](docs/adr/0001-initial-architecture.md)、[ADR 0002 进程拓扑、任务板编排与多平台边界](docs/adr/0002-process-topology-and-task-board.md)
+- 操作指南：[配置飞书自建应用](docs/ops/feishu-app.md)、[申请 Telegram 测试 bot](docs/ops/telegram-bot.md)、[数据、备份与卸载](docs/ops/backup-and-uninstall.md)
 
 ## 现阶段约定
 

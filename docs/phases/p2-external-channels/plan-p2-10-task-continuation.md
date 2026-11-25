@@ -1,6 +1,6 @@
 # P2-10 任务续做：开发计划
 
-状态：**用户已批准（2026-11-24），代码完成**。负责人：Claude；分支 `claude/p2-external-channels`（P2 收尾前一起做，推送仍等 P2 全部完成）。背景与现状见 [P2 变更说明](../pr/p2-external-channels.md)。
+状态：**用户已批准（2026-11-24），代码完成**。负责人：Claude；分支 `claude/p2-external-channels`（P2 收尾前一起做，推送仍等 P2 全部完成）。背景与现状见 [P2 变更说明](pr.md)。
 
 ## 前因
 

@@ -1,6 +1,6 @@
 # P0 开发计划：方案与技术验证
 
-状态：完成（2026-11-23）；飞书（P0-03）、许可证（P0-06）、子代理对比（P0-07）待条件具备。负责人：Claude；分支 `claude/project-thread-ta1qy4`。本文只列本次做什么、按什么顺序、怎样算完成；设计依据见 [架构](../02-architecture.md) 与 [ADR 0002](../adr/0002-process-topology-and-task-board.md)，与旧文档冲突时以这两份为准。完成后的前因后果与注意点写在 [docs/pr/](../pr/)。
+状态：完成（2026-11-23）；飞书（P0-03）、许可证（P0-06）、子代理对比（P0-07）待条件具备。负责人：Claude；分支 `claude/project-thread-ta1qy4`。本文只列本次做什么、按什么顺序、怎样算完成；设计依据见 [架构](../../design/02-architecture.md) 与 [ADR 0002](../../adr/0002-process-topology-and-task-board.md)，与旧文档冲突时以这两份为准。完成后的前因后果与注意点写在 [变更说明](pr.md)。
 
 ## 目标
 

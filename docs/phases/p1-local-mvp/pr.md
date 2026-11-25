@@ -1,6 +1,6 @@
 # P1 本地最小产品：变更说明
 
-分支 `claude/project-thread-8azrof`，基于 master `d0d9cd0`（P0）。尚未推送，也未开 PR。计划见 [P1 开发计划](../plan/p1-local-mvp.md)（第四版，经 Codex 两轮审阅、用户批准），实测结果见 [P1 实测记录](../p1/findings.md)，运维说明见 [数据、备份与卸载](../ops/backup-and-uninstall.md)。
+分支 `claude/project-thread-8azrof`，基于 master `d0d9cd0`（P0）。尚未推送，也未开 PR。计划见 [P1 开发计划](plan.md)（第四版，经 Codex 两轮审阅、用户批准），实测结果见 [P1 实测记录](findings.md)，运维说明见 [数据、备份与卸载](../../ops/backup-and-uninstall.md)。
 
 ## 前因
 
@@ -75,7 +75,7 @@ apps/local-service ──► application ──► domain ──► contracts
 
 ## 安装包
 
-用 electron-builder 26.18.0（MIT，仅开发依赖）打 Windows NSIS 安装包，可选安装目录、按用户安装、卸载不删数据：`pnpm build` 后在 `apps/desktop` 运行 `pnpm dist`，产物在 `release/desktop/`。结果见 [P1 实测记录](../p1/findings.md)「安装包」。
+用 electron-builder 26.18.0（MIT，仅开发依赖）打 Windows NSIS 安装包，可选安装目录、按用户安装、卸载不删数据：`pnpm build` 后在 `apps/desktop` 运行 `pnpm dist`，产物在 `release/desktop/`。结果见 [P1 实测记录](findings.md)「安装包」。
 
 ## 需要注意的点
 

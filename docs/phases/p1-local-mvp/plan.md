@@ -1,6 +1,6 @@
 # P1 开发计划：本地最小产品
 
-状态：**已完成（2026-11-23），待评审**；第四版经用户批准后实施，实际结果与出入见 [P1 变更说明](../pr/p1-local-mvp.md)。原状态：第四版，待用户确认开工（2026-11-23；已按 Codex 的审阅意见修订，见文末「修订记录」）。负责人：Claude；分支 `claude/project-thread-8azrof`，基于已合入 master 的 P0（`d0d9cd0`）。设计依据见 [架构](../02-architecture.md)、[ADR 0002](../adr/0002-process-topology-and-task-board.md)、[路线图](../03-roadmap.md) 和 [P0 实测记录](../p0/findings.md)；完成后的前因后果写在 `docs/pr/p1-local-mvp.md`。
+状态：**已完成（2026-11-23），待评审**；第四版经用户批准后实施，实际结果与出入见 [P1 变更说明](pr.md)。原状态：第四版，待用户确认开工（2026-11-23；已按 Codex 的审阅意见修订，见文末「修订记录」）。负责人：Claude；分支 `claude/project-thread-8azrof`，基于已合入 master 的 P0（`d0d9cd0`）。设计依据见 [架构](../../design/02-architecture.md)、[ADR 0002](../../adr/0002-process-topology-and-task-board.md)、[路线图](../../roadmap.md) 和 [P0 实测记录](../p0-technical-validation/findings.md)；完成后的前因后果写在 `docs/phases/p1-local-mvp/pr.md`。
 
 ## 目标
 
