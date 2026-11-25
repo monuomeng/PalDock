@@ -3,19 +3,20 @@
 记录 PalDock 分期、分阶段的演进。阶段顺序是建议，不代表承诺日期；每阶段完成后由负责人提供验证记录，未通过退出条件不能把阶段标为完成。
 
 - **编号**：阶段为 `P<n>`，工作项为 `P<n>-<两位序号>`（如 P1-03、P2-10），全局唯一。一期是 P0–P5，二期从 P6 接着编，不再从 P1 重新开始。
-- **状态**：完成 / 部分完成 / 待实机（代码完成，等真实环境验收）/ 进行中 / 计划中 / 未开始 / 移出。只有负责人记录证据后才更新。
+- **状态**：✅ 完成　🟡 部分完成　🧪 待实机（代码完成，等真实环境验收）　🔄 进行中　📝 计划中　⬜ 未开始　➖ 移出。只有负责人记录证据后才更新。
+- **优先**：高 / 中 / 低（不用 P0/P1 表示优先级，免得和阶段编号混淆）。
 - **单一来源**：工作项的状态只写在各阶段 `README.md` 的表里；本页只汇总到阶段。
 
 ## 一期：本地桌面助手（P0–P5）
 
 | 阶段 | 目标 | 状态 | 工作项 |
 |---|---|---|---|
-| [P0 方案与技术验证](phases/p0-technical-validation/README.md) | 验证 Windows、Codex 会话、审批、存储及飞书可行性 | 完成 | 7 项：6 完成，1 部分完成（桌宠素材转 P4） |
-| [P1 本地最小产品](phases/p1-local-mvp/README.md) | 桌面 + 本地任务 + Codex | 完成 | 4 项全部完成 |
-| [P2 外部渠道](phases/p2-external-channels/README.md) | 飞书、Telegram 单聊与授权群聊 | 已合入，部分待实机 | 10 项：6 完成，3 待实机，1 部分完成 |
-| [P3 多助手协作](phases/p3-multi-assistant/README.md) | Codex + Claude 开发/测试/文档分工 | 计划中 | 计划草案待审 |
-| [P4 桌宠体验](phases/p4-desktop-pet/README.md) | 桌宠动画、对话气泡、托盘、可访问性 | 未开始 | |
-| [P5 稳定与生态](phases/p5-stability-ecosystem/README.md) | 更多渠道、模型、任务模板与扩展 | 未开始 | |
+| [P0 方案与技术验证](phases/p0-technical-validation/README.md) | 验证 Windows、Codex 会话、审批、存储及飞书可行性 | ✅ 完成 | 7 项：6 完成，1 部分完成（桌宠素材转 P4） |
+| [P1 本地最小产品](phases/p1-local-mvp/README.md) | 桌面 + 本地任务 + Codex | ✅ 完成 | 4 项全部完成 |
+| [P2 外部渠道](phases/p2-external-channels/README.md) | 飞书、Telegram 单聊与授权群聊 | 🟡 已合入，部分待实机 | 10 项：6 完成，3 待实机，1 部分完成 |
+| [P3 多助手协作](phases/p3-multi-assistant/README.md) | Codex + Claude 开发/测试/文档分工 | 📝 计划中 | 计划草案待审 |
+| [P4 桌宠体验](phases/p4-desktop-pet/README.md) | 桌宠动画、对话气泡、托盘、可访问性 | ⬜ 未开始 | |
+| [P5 稳定与生态](phases/p5-stability-ecosystem/README.md) | 更多渠道、模型、任务模板与扩展 | ⬜ 未开始 | |
 
 每个阶段的交付物和可验收退出条件写在该阶段的 `README.md`。
 

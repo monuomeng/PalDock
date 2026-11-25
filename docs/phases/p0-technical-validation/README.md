@@ -14,15 +14,15 @@
 
 ## 工作项
 
-| 编号 | 状态 | 工作 | 验收依据 | 备注 |
-|---|---|---|---|---|
-| P0-01 | 完成 | 确认本机 Codex 版本与 app-server 能力矩阵 | 版本、发现、thread/turn、审批、取消和重启恢复记录 | 流式、中断、审批、跨进程恢复已实测 |
-| P0-02 | 完成 | 评估 Claude Code SDK/CLI 能力与授权 | 版本、安装/认证、流式、恢复和审批结果；不以订阅可用性作假设 | CLI stream-json 的流式、中断、权限请求、恢复已实测 |
-| P0-03 | 完成 | 验证飞书应用和长连接接入 | 测试租户、事件去重、重连、发送和权限记录 | 单聊长连接、回复、断线补投与去重已实测 |
-| P0-04 | 完成 | Electron + SQLite + 受限 IPC 技术样机（Windows 先行，macOS 同步验证平台层） | 项目选择、正常退出、重启恢复、数据目录与安装位置；utilityProcess 看护、锁屏/空闲事件、worktree 长路径与杀毒扫描、macOS 文件夹授权 | Windows 与 macOS 实机已验证；锁屏/空闲事件 2026-11-24 在两个平台验证；睡眠唤醒转 P2-09 |
-| P0-05 | 完成 | 定义版本化事件、领域状态机和兼容测试 | 示例与错误场景通过契约测试；跨适配器数据不丢失 | |
-| P0-06 | 部分完成 | 产品许可证、桌宠素材、参考项目许可决策 | 有用户确认的许可证和素材来源；不复制受限代码 | 2026-11-23 决定暂不开源；桌宠素材到 P4 再定 |
-| P0-07 | 完成 | 对比 Codex / Claude / ACP 的子代理及独立会话能力 | 记录版本和认证；验证创建、恢复、控制、子代理事件可见性与费用 | Codex、Claude 子代理已实测；ACP 只做文档评估 |
+| ID | 优先 | 状态 | 要点 | 落点 | 备注 |
+|---|---|---|---|---|---|
+| P0-01 | 高 | ✅ | **Codex app-server 能力矩阵**：本机版本、发现、thread / turn、审批、取消与重启恢复。验收：每项能力有实测记录，无账号时明确标阻塞 | `packages/runtime-codex` | 流式、中断、审批、跨进程恢复已实测 |
+| P0-02 | 高 | ✅ | **Claude Code SDK / CLI 评估**：版本、安装与认证、流式、恢复、审批；不以订阅可用性作假设 | `packages/runtime-claude` | CLI stream-json 的流式、中断、权限请求、恢复已实测 |
+| P0-03 | 高 | ✅ | **飞书应用与长连接**：测试租户、事件去重、重连、发送和权限记录 | `packages/channel-feishu/src/probe.ts`、`packages/platform/src/credentials.ts` | 单聊长连接、回复、断线补投与去重已实测 |
+| P0-04 | 高 | ✅ | **Electron + SQLite + 受限 IPC 样机**（Windows 先行，macOS 验证平台层）：项目选择、正常退出、重启恢复、数据目录与安装位置；utilityProcess 看护、锁屏 / 空闲事件、worktree 长路径与杀毒扫描、macOS 文件夹授权 | `apps/desktop`、`apps/local-service`、`packages/platform`、`packages/storage-sqlite`、`scripts/p0`、`scripts/macos` | Windows、macOS 实机已验证；锁屏 / 空闲 2026-11-24 两平台验证；睡眠唤醒转 P2-09 |
+| P0-05 | 高 | ✅ | **版本化事件与领域状态机**：示例与错误场景通过契约测试，跨适配器数据不丢失 | `packages/contracts`、`packages/domain` |  |
+| P0-06 | 中 | 🟡 | **许可证与素材决策**：产品许可证、桌宠素材、参考项目许可；不复制受限代码 | `scripts/check-licenses.mjs` | 2026-11-23 定暂不开源；桌宠素材到 P4 再定 |
+| P0-07 | 中 | ✅ | **子代理与独立会话对比**（Codex / Claude / ACP）：创建、恢复、控制、子代理事件可见性与费用 | `packages/runtime-codex`、`packages/runtime-claude/src/subagent-probe.ts` | Codex、Claude 已实测；ACP 只做文档评估 |
 
 ## 文档
 

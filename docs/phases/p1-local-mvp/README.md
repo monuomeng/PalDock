@@ -14,12 +14,12 @@
 
 ## 工作项
 
-| 编号 | 状态 | 工作 | 验收依据 | 备注 |
-|---|---|---|---|---|
-| P1-01 | 完成 | monorepo 工程骨架与 CI | 可重复安装、类型检查、离线测试、Windows CI；锁定版本 | GitHub Actions 2026-11-24 首次运行并修复 |
-| P1-02 | 完成 | 会话/任务持久化与迁移 | 重启恢复、事务/幂等和备份测试 | 迁移 002、恢复、幂等与含产物的备份已测 |
-| P1-03 | 完成 | Codex 运行时适配器 | mock + 本机 opt-in 测试；审批与错误不丢失 | 模拟执行器离线测试与真实 Codex opt-in 已测 |
-| P1-04 | 完成 | 桌面管理界面与任务/审批流，首个原型为「待我处理」 | 任务列表、事件、拒绝/取消与断线提示；「待我处理」按架构文档中的 A/B 验收场景通过 | Electron 实机端到端 30 项与 A/B 场景通过 |
+| ID | 优先 | 状态 | 要点 | 落点 | 备注 |
+|---|---|---|---|---|---|
+| P1-01 | 高 | ✅ | **工程骨架与 CI**：monorepo、锁定版本、类型检查、离线测试、Windows / macOS CI、许可证检查 | `.github/workflows`、`scripts/check-licenses.mjs`、`vitest.config.ts` | GitHub Actions 2026-11-24 首次运行并修复 |
+| P1-02 | 高 | ✅ | **会话 / 任务持久化与迁移**：迁移 002，重启恢复、事务与幂等，含产物的备份 | `packages/storage-sqlite`、`packages/contracts` | 迁移 002、恢复、幂等、备份已测；[备份与卸载](../../ops/backup-and-uninstall.md) |
+| P1-03 | 高 | ✅ | **Codex 运行时适配器**：模拟执行器 + 本机 opt-in；审批与错误不丢失，越界命令按高风险分级 | `packages/runtime-codex`、`packages/application`、`tests/live` | 真实 Codex opt-in 已测（消耗少量额度） |
+| P1-04 | 高 | ✅ | **桌面管理界面**：「待我处理」、任务列表与详情、审批、拒绝 / 取消、断线提示。验收：A/B 场景（已读不改变进度、重启后仍可定位、退回后旧 Run 证据可查、断线显示「执行状态待确认」） | `apps/desktop/renderer`、`apps/desktop/src`、`scripts/p1/e2e-check.mjs` | Electron 实机端到端 30 项与 A/B 场景通过；安装包 2026-11-24 复测 |
 
 ## 文档
 
