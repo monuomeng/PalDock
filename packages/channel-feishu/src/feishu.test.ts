@@ -24,6 +24,11 @@ describe('飞书事件解析', () => {
     });
   });
 
+  it('引用回复带上被引用消息的 ID（P3-10 认出是在回答哪个问题）', () => {
+    expect(parseMessage(message({ parent_id: 'om_42' }), ctx)?.body).toMatchObject({ kind: 'text', replyTo: 'om_42' });
+    expect(parseMessage(message(), ctx)?.body).not.toHaveProperty('replyTo');
+  });
+
   it('群聊里去掉 @ 占位符，并判断是否 @ 了机器人', () => {
     const mentions = [{ key: '@_user_1', id: { open_id: 'ou_bot' }, name: 'PalDock' }];
     const parsed = parseMessage(message({ chat_type: 'group', content: JSON.stringify({ text: '@_user_1  /tasks' }), mentions }), ctx);

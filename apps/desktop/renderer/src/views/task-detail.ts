@@ -143,6 +143,7 @@ function planView({ plan, nodes, actions: allowed, confirmedRevision }: PlanDeta
     { class: 'plan', 'aria-label': '计划' },
     h('h3', {}, `计划第 ${plan.revision} 版 · `, h('span', { class: `status plan-${plan.status}` }, PLAN_LABEL[plan.status])),
     plan.decisionNote ? h('p', { class: 'hint' }, `说明：${plan.decisionNote}`) : null,
+    plan.decidedVia && plan.decidedVia !== 'desktop' ? h('p', { class: 'hint' }, `在${plan.decidedVia === 'feishu' ? '飞书' : 'Telegram'}上${plan.status === 'rejected' ? '退回' : '确认'}`) : null,
     decide,
     h(
       'table',

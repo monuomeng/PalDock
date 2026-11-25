@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import {
   CodedError,
+  noticeRef,
+  type NoticeRecord,
   type Card,
   type ChannelActionRecord,
   type ConversationRecord,
@@ -10,7 +12,9 @@ import {
   type TaskRecord,
   type WorkspaceRecord,
 } from '@paldock/contracts';
-import { canApproveRemotely, taskIdPrefix, type P2Limits } from '@paldock/domain';
+import { canApproveRemotely, canConfirmPlanRemotely, taskIdPrefix, type P2Limits } from '@paldock/domain';
+import type { CoordinatorService } from '../coordinator.js';
+import type { PlanService } from '../plan-service.js';
 import type { CreateTaskInput, TaskService } from '../task-service.js';
 import {
   clip,
@@ -35,6 +39,13 @@ import type { InboundContext, InboundHandler } from './inbound-processor.js';
 export interface RemoteCommandsDeps {
   store: StorePort;
   tasks: TaskService;
+  /**
+   * 协调助手主会话（P3-10）：普通文字和对编号问题的答复交给它。缺省时（P2 的测试与单独使用渠道时）
+   * 普通文字仍按 P2 的规则直接提议新建任务。
+   */
+  coordinator?: CoordinatorService;
+  /** 计划确认卡片上的确认 / 退回。 */
+  plans?: PlanService;
   publish(events: PersistentEvent[]): void;
   /** 回复卡片；subject 非空时更新本会话里同主题的那张卡片。 */
   reply(conversation: ConversationRecord, card: Card, subject?: string): void;
@@ -76,13 +87,53 @@ export class RemoteCommands implements InboundHandler {
     return 'done';
   }
 
-  async text(ctx: InboundContext, text: string): Promise<InboundOutcome> {
+  /**
+   * 普通文字：确定性命令照旧；单聊里用 /continue 选中、正在待命或可接续的当前任务，仍当作它的下一步（你用命令明确选的）；
+   * 其余交给协调助手：先看是不是在回答它的编号问题（引用回复、以 Q 编号开头、本会话只有一个待答问题），
+   * 认不出来又有多个待答问题时附上候选问题让它判断，不猜。
+   */
+  async text(ctx: InboundContext, text: string, replyTo?: string): Promise<InboundOutcome> {
     const trimmed = text.trim();
     if (trimmed.startsWith('/')) return this.command(ctx, trimmed);
     // 图片、文件等非文字消息由适配器转成空文本
     if (trimmed.length === 0) return this.say(ctx, notice('暂时只支持文字消息'));
     const current = ctx.conversation.kind === 'dm' ? this.detailOf(ctx.conversation.currentTaskId) : undefined;
-    return current ? this.instruct(ctx, current, trimmed) : this.proposeTask(ctx, trimmed);
+    if (!this.deps.coordinator) return current ? this.instruct(ctx, current, trimmed) : this.proposeTask(ctx, trimmed);
+    if (current && (current.actions.review || current.actions.continueFrom)) return this.instruct(ctx, current, trimmed);
+    return this.toCoordinator(ctx, this.deps.coordinator, trimmed, replyTo);
+  }
+
+  /** 这句话在回答哪个编号问题：确定的返回问题编号（和去掉编号前缀后的答复），拿不准时返回候选问题。 */
+  private questionOf(ctx: InboundContext, text: string, replyTo: string | undefined): { noticeId: number; text: string } | { candidates: NoticeRecord[] } | undefined {
+    const { coordinator } = this.deps.store;
+    const open = (id: number) => {
+      const n = coordinator.getNotice(id);
+      return n?.kind === 'question' && !n.answeredAt ? n : undefined;
+    };
+    const quoted = replyTo ? /^notice:(\d+)$/.exec(this.channels.subjectOfMessage(ctx.conversation.id, replyTo) ?? '') : null;
+    if (quoted && open(Number(quoted[1]))) return { noticeId: Number(quoted[1]), text };
+    const prefixed = /^Q(\d+)(?:[\s:：,，.。、]+|$)([\s\S]*)$/i.exec(text);
+    if (prefixed && open(Number(prefixed[1]))) return { noticeId: Number(prefixed[1]), text: prefixed[2]!.trim() || text };
+    const pending = coordinator.openQuestionsSentTo(ctx.conversation.id);
+    if (pending.length === 1) return { noticeId: pending[0]!.id, text };
+    return pending.length > 1 ? { candidates: pending } : undefined;
+  }
+
+  private toCoordinator(ctx: InboundContext, coordinator: CoordinatorService, text: string, replyTo: string | undefined): InboundOutcome {
+    const { provider } = ctx.conversation;
+    const question = this.questionOf(ctx, text, replyTo);
+    if (question && 'noticeId' in question && coordinator.answerQuestion(question.noticeId, question.text, provider, ctx.eventId)) {
+      return this.say(ctx, notice(`已把你的回复交给协调助手（${noticeRef(question.noticeId)}）`, '它看完会在这里回复你。'));
+    }
+    const workspace = this.defaultWorkspace(ctx.conversation);
+    if (!workspace) return this.say(ctx, projectsCard(this.deps.store.tasks.listWorkspaces(), null));
+    const sessionId = coordinator.externalSession(ctx.conversation, workspace.id);
+    const summary =
+      question && 'candidates' in question
+        ? `${text}\n\n（这条消息可能是在回答你之前的问题：${question.candidates.map((n) => `${noticeRef(n.id)}「${n.body.slice(0, 80)}」`).join('；')}。请判断是哪一个；拿不准就问用户，不要猜。）`
+        : text;
+    coordinator.receiveExternal(sessionId, text, provider, ctx.eventId, summary);
+    return this.say(ctx, notice('收到，已交给协调助手', `项目：${workspace.name}。它会在这里回复你；直接建任务请发 /new 内容。`));
   }
 
   /** 当前任务的详情；任务已不存在时当作没有当前任务。 */
@@ -323,7 +374,30 @@ export class RemoteCommands implements InboundHandler {
       case 'select_task':
         this.say(ctx, taskHistoryCard(this.select(ctx, action.payload!), this.deps.now()));
         return;
+      case 'confirm_plan':
+      case 'reject_plan':
+        return this.decidePlan(ctx, action);
     }
+  }
+
+  /**
+   * 计划确认卡片：确认受项目的远程审批等级约束（L1 只能确认不带检查命令的计划，L2 都能），在点的时候按当前等级重新判断；
+   * 退回总是允许。先到者为准（计划版本号）；结果由计划状态事件统一更新卡片。
+   */
+  private async decidePlan(ctx: InboundContext, action: ChannelActionRecord): Promise<void> {
+    const { store } = this.deps;
+    const plans = this.deps.plans;
+    const plan = store.plans.getPlan(action.targetId);
+    const task = plan && store.tasks.getTask(plan.taskId);
+    const workspace = task && store.tasks.getWorkspace(task.workspaceId);
+    if (!plans || !plan || !workspace) throw new CodedError('not_found', '计划不存在');
+    if (plan.status !== 'proposed' || plan.version !== action.targetVersion) throw new CodedError('conflict', '这个计划已经处理过了');
+    if (action.kind === 'reject_plan') return plans.reject(plan.id, plan.version, '在手机上退回', ctx.conversation.provider);
+    const hasChecks = store.plans.nodes(plan.id).some((n) => n.checkCommand !== null);
+    if (!canConfirmPlanRemotely(workspace.remoteApprovalLevel, hasChecks)) {
+      throw new CodedError('bad_request', hasChecks ? '这个计划带检查命令，按项目的远程审批等级只能在电脑上确认' : '这个项目的计划只能在电脑上确认');
+    }
+    await plans.confirm(plan.id, plan.version, undefined, ctx.conversation.provider);
   }
 
   /** 远程审批：只在已绑定的单聊里；项目的远程审批等级与审批类别都允许时才能批准，拒绝总是允许。 */

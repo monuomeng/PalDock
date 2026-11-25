@@ -5,6 +5,7 @@ import { time } from '../format.js';
 import { liveText } from '../live-output.js';
 import { chatLink, navigate } from '../router.js';
 
+const CHANNEL_NAME = { feishu: '飞书', telegram: 'Telegram' } as const;
 const WAKE_LABEL: Record<WakeRecord['status'], string> = { pending: '排队', running: '进行中', done: '完成', failed: '失败', dropped: '已跳过' };
 const TRIGGER_LABEL: Record<WakeRecord['trigger'], string> = { user_message: '你的消息', task_event: '任务事件' };
 
@@ -62,7 +63,7 @@ export async function chatView(route: { workspaceId: string | undefined; session
       'section',
       { class: 'messages', 'aria-label': '消息' },
       detail.messages.length === 0 ? h('p', { class: 'empty' }, '还没有消息。') : null,
-      ...detail.messages.map((m) => h('div', { class: `message message-${m.role}` }, h('span', { class: 'hint' }, `${m.role === 'user' ? '你' : '协调助手'} · ${time(m.createdAt)}`), h('pre', {}, m.body))),
+      ...detail.messages.map((m) => h('div', { class: `message message-${m.role}` }, h('span', { class: 'hint' }, `${m.role === 'user' ? '你' : '协调助手'}${m.channel ? `（来自${CHANNEL_NAME[m.channel]}）` : ''} · ${time(m.createdAt)}`), h('pre', {}, m.body))),
       live ? h('div', { class: 'message message-assistant live' }, h('span', { class: 'hint' }, '协调助手 · 正在回复'), h('pre', { 'data-live-run': running!.runId! }, live)) : null,
     ),
     h('label', { for: 'chat-input' }, '你的消息'),
@@ -74,7 +75,7 @@ export async function chatView(route: { workspaceId: string | undefined; session
           { class: 'panel', 'aria-label': '协调助手的通知' },
           h('h3', {}, '通知'),
           ...detail.notices.map((n) =>
-            h('p', {}, h('strong', {}, `${noticeRef(n.id)}${n.kind === 'question' ? ' · 问题' : ''}：`), n.body, h('span', { class: 'hint' }, ` ${time(n.createdAt)}${n.escalatedAt ? ' · 已发到手机' : ''}`)),
+            h('p', {}, h('strong', {}, `${noticeRef(n.id)}${n.kind === 'question' ? ' · 问题' : ''}：`), n.body, h('span', { class: 'hint' }, ` ${time(n.createdAt)}${n.escalatedAt ? ' · 已发到手机' : ''}${n.answeredAt ? ' · 已答' : ''}`)),
           ),
         )
       : null,

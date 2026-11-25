@@ -55,6 +55,9 @@ export interface NoticeRecord {
   body: string;
   status: 'open' | 'read';
   escalatedAt: string | null;
+  /** 问题的答复已交回提问的协调助手（P3-10）。 */
+  answeredAt: string | null;
+  answerMessageId: number | null;
   createdAt: string;
 }
 

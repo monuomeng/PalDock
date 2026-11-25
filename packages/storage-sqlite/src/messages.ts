@@ -1,4 +1,4 @@
-import type { MessageRecord, MessageRole } from '@paldock/contracts';
+import type { ChannelProvider, MessageRecord, MessageRole } from '@paldock/contracts';
 import type { Clock } from './clock.js';
 import { COLUMNS } from './columns.js';
 import type { Database } from './database.js';
@@ -11,8 +11,9 @@ const TRIGRAM_MIN_CHARS = 3;
 
 const SQL = {
   insert: `
-    INSERT INTO messages (session_id, run_id, role, body, created_at) VALUES (?, ?, ?, ?, ?)
+    INSERT INTO messages (session_id, run_id, role, body, channel, created_at) VALUES (?, ?, ?, ?, ?, ?)
     RETURNING ${COLUMNS.message()}`,
+  select: `SELECT ${COLUMNS.message()} FROM messages WHERE id = ?`,
   searchFts: `
     SELECT ${COLUMNS.message('m.')}
       FROM messages_fts AS f
@@ -40,12 +41,16 @@ export class MessageStore {
   ) {}
 
   /** runId 为空表示不属于某次 Run 的消息（例如以后的主会话对话）。 */
-  append(sessionId: string, role: MessageRole, body: string, runId: string | null = null): Change<MessageRecord> {
-    const params = [sessionId, runId, role, body, this.clock.iso()];
+  append(sessionId: string, role: MessageRole, body: string, runId: string | null = null, channel: ChannelProvider | null = null): Change<MessageRecord> {
+    const params = [sessionId, runId, role, body, channel, this.clock.iso()];
     return insertWithEvent<MessageRecord>(this.db, this.events, SQL.insert, params, () => ({
       type: 'message.created',
-      payload: { sessionId, runId, role },
+      payload: channel ? { sessionId, runId, role, channel } : { sessionId, runId, role },
     }));
+  }
+
+  get(id: number): MessageRecord | undefined {
+    return this.db.get<MessageRecord>(SQL.select, id);
   }
 
   search(query: string, limit: number): MessageRecord[] {

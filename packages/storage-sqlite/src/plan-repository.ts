@@ -79,7 +79,7 @@ const TRANSITION = {
   machine: planMachine,
   select: `SELECT status, version FROM plans WHERE id = ?`,
   update: `
-    UPDATE plans SET status = $to, decision_note = $note, decided_at = $at, version = version + 1
+    UPDATE plans SET status = $to, decision_note = $note, decided_at = $at, decided_via = $via, version = version + 1
      WHERE id = $id AND version = $version
     RETURNING ${COLUMNS.plan()}`,
 } satisfies TransitionSpec<PlanStatus>;
@@ -151,7 +151,7 @@ export class PlanRepository implements PlanStorePort {
    * 运行中的任务：上一版 superseded；没变的节点沿用原子任务（换挂到新版本），改了的、新增的建新子任务
    * （新建的一律先 waiting_dependency，由调度器按依赖放行），被替换的和没了的取消。依赖按新版本重建。
    */
-  confirm(id: string, expectedVersion: number, note: string | null = null): Change<{ created: SubtaskRecord[]; cancelled: string[] }> {
+  confirm(id: string, expectedVersion: number, note: string | null = null, via: 'desktop' | 'feishu' | 'telegram' = 'desktop'): Change<{ created: SubtaskRecord[]; cancelled: string[] }> {
     return this.db.transaction(() => {
       const plan0 = this.getPlan(id);
       const task = plan0 && this.tasks.getTask(plan0.taskId);
@@ -162,7 +162,7 @@ export class PlanRepository implements PlanStorePort {
       const previous = task.status === 'draft' ? undefined : this.confirmedPlan(task.id);
       const events: PersistentEvent[] = [];
       if (previous) events.push(...this.transition(previous.id, previous.version, 'superseded', `第 ${plan0.revision} 版已确认`).events);
-      const planChange = this.transition(id, expectedVersion, 'confirmed', note ?? undefined);
+      const planChange = this.transition(id, expectedVersion, 'confirmed', note ?? undefined, via);
       const plan = planChange.record;
       events.push(...planChange.events);
 
@@ -235,8 +235,8 @@ export class PlanRepository implements PlanStorePort {
     });
   }
 
-  reject(id: string, expectedVersion: number, note: string | null): Change<PlanRecord> {
-    return this.transition(id, expectedVersion, 'rejected', note ?? undefined);
+  reject(id: string, expectedVersion: number, note: string | null, via: 'desktop' | 'feishu' | 'telegram' = 'desktop'): Change<PlanRecord> {
+    return this.transition(id, expectedVersion, 'rejected', note ?? undefined, via);
   }
 
   /** 依赖按节点顺序排（子查询按依赖 ID 扫描，顺序随机），阻塞原因因此稳定指向最靠前的上游。 */
@@ -249,9 +249,9 @@ export class PlanRepository implements PlanStorePort {
     }));
   }
 
-  private transition(id: string, expectedVersion: number, to: PlanStatus, note?: string): Change<PlanRecord> {
+  private transition(id: string, expectedVersion: number, to: PlanStatus, note?: string, via: string | null = null): Change<PlanRecord> {
     return applyTransition(this.db, this.events, TRANSITION, id, expectedVersion, to, (from) => ({
-      params: { at: this.clock.iso(), note: note ?? null },
+      params: { at: this.clock.iso(), note: note ?? null, via },
       event: { type: 'plan.status_changed', payload: statusChanged(from, to, note) },
     }));
   }

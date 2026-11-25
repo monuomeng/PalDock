@@ -74,6 +74,18 @@ const SQL = {
   notices: `SELECT ${COLUMNS.notice()} FROM user_notices WHERE session_id = ? ORDER BY id DESC LIMIT ?`,
   getNotice: `SELECT ${COLUMNS.notice()} FROM user_notices WHERE id = ?`,
   ackNotices: `UPDATE user_notices SET status = 'read' WHERE session_id = ? AND status = 'open'`,
+  // 已答的同时记为已读：升级扫描（notices_unescalated）不再选中
+  answerNotice: `
+    UPDATE user_notices SET answered_at = ?, answer_message_id = ?, status = 'read'
+     WHERE id = ? AND answered_at IS NULL
+    RETURNING ${COLUMNS.notice()}`,
+  // 发到过这个外部会话（channel_messages 主题 notice:<编号>）、还没答的问题；主键 (conversation_id, subject) 按会话取
+  openQuestionsSentTo: `
+    SELECT ${COLUMNS.notice('n.')}
+      FROM channel_messages m
+      JOIN user_notices n ON m.subject = 'notice:' || n.id
+     WHERE m.conversation_id = ? AND m.subject LIKE 'notice:%' AND n.kind = 'question' AND n.answered_at IS NULL
+     ORDER BY n.id`,
   // notices_unescalated，条件逐字一致
   unescalated: `SELECT ${COLUMNS.notice()} FROM user_notices WHERE status = 'open' AND escalated_at IS NULL ORDER BY created_at`,
   markEscalated: `
@@ -193,6 +205,17 @@ export class CoordinatorRepository implements CoordinatorStorePort {
       const count = this.db.run(SQL.ackNotices, sessionId);
       return { record: count, events: count > 0 ? [this.events.append(sessionId, { type: 'notice.read', payload: { count } })] : [] };
     });
+  }
+
+  answerNotice(id: number, messageId: number, channel: ChannelProvider): Change<NoticeRecord> | undefined {
+    return this.db.transaction(() => {
+      const record = this.db.get<NoticeRecord>(SQL.answerNotice, this.clock.iso(), messageId, id);
+      return record && { record, events: [this.events.append(record.sessionId, { type: 'notice.answered', payload: { noticeId: id, channel } })] };
+    });
+  }
+
+  openQuestionsSentTo(conversationId: string): NoticeRecord[] {
+    return this.db.all<NoticeRecord>(SQL.openQuestionsSentTo, conversationId);
   }
 
   unescalatedNotices(): NoticeRecord[] {

@@ -21,7 +21,8 @@ export interface InboundContext {
 
 /** 已绑定账号的消息交给它：确定性命令、建任务、卡片动作（RemoteCommands）。 */
 export interface InboundHandler {
-  text(ctx: InboundContext, text: string): Promise<InboundOutcome>;
+  /** replyTo：引用回复时被引用消息的平台 ID。 */
+  text(ctx: InboundContext, text: string, replyTo?: string): Promise<InboundOutcome>;
   action(ctx: InboundContext, token: string): Promise<InboundOutcome>;
 }
 
@@ -65,7 +66,7 @@ export class InboundProcessor {
       if (body.kind === 'text' && !body.mentionsBot) return reject('not_mentioned');
     }
     const ctx = { eventId: envelope.eventId, account, conversation };
-    return body.kind === 'action' ? this.deps.handler.action(ctx, body.token) : this.deps.handler.text(ctx, body.text);
+    return body.kind === 'action' ? this.deps.handler.action(ctx, body.token) : this.deps.handler.text(ctx, body.text, body.replyTo);
   }
 
   private reject(conversation: ConversationRecord, reason: InboundRejection): InboundOutcome {

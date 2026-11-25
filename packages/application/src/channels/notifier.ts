@@ -1,3 +1,4 @@
+import { AgentRole } from '@paldock/contracts';
 import type {
   Card,
   ChannelProvider,
@@ -10,8 +11,8 @@ import type {
   SubtaskStatus,
   TaskRecord,
 } from '@paldock/contracts';
-import { canApproveRemotely, shouldEscalateApproval, subtaskMachine, type DesktopPresence, type P2Limits } from '@paldock/domain';
-import { approvalCard, approvalDecidedCard, noticeCard, taskProgressCard } from './cards.js';
+import { canApproveRemotely, canConfirmPlanRemotely, shouldEscalateApproval, subtaskMachine, type DesktopPresence, type P2Limits } from '@paldock/domain';
+import { approvalCard, approvalDecidedCard, coordinatorReplyCard, noticeCard, planCard, planDecidedCard, taskProgressCard } from './cards.js';
 
 export interface NotifierDeps {
   store: StorePort;
@@ -52,6 +53,8 @@ export class ChannelNotifier {
     for (const event of events) {
       if (event.type === 'subtask.status_changed') this.onSubtask(event.aggregateId, event.payload.from, event.payload.to);
       else if (event.type === 'approval.decided') this.onApprovalDecided(event.aggregateId);
+      else if (event.type === 'message.created' && event.payload.role === 'assistant') this.onAssistantMessage(event.payload.sessionId, Number(event.aggregateId));
+      else if (event.type === 'plan.status_changed') this.onPlanDecided(event.aggregateId);
     }
   }
 
@@ -106,6 +109,68 @@ export class ChannelNotifier {
     return this.channels.createAction({ conversationId: conversation.id, kind, targetId, targetVersion: version, ttlMs }).token;
   }
 
+  /** 外部会话对应的主会话里，协调助手的回复发回那个会话（外部发起的任务做完后的汇总也走这里）。 */
+  private onAssistantMessage(sessionId: string, messageId: number): void {
+    const conversation = this.channels.conversationOfMainSession(sessionId);
+    const message = conversation && this.deps.store.messages.get(messageId);
+    if (!conversation || !message || !this.reachable(conversation)) return;
+    this.deps.send(conversation, coordinatorReplyCard(message.body));
+  }
+
+  /** 计划在任何一端确认或退回后：作废卡片上的按钮，更新收到过卡片的会话。 */
+  private onPlanDecided(planId: string): void {
+    this.channels.voidActions(planId);
+    const plan = this.deps.store.plans.getPlan(planId);
+    if (!plan?.escalatedAt || plan.status === 'proposed') return;
+    const task = this.deps.store.tasks.getTask(plan.taskId);
+    const subject = `plan:${planId}`;
+    for (const conversation of this.channels.activeDirectConversations()) {
+      if (this.deps.store.outbox.hasSubject(conversation.id, subject)) this.deps.send(conversation, planDecidedCard(task?.title ?? '', plan.status, plan.decidedVia), subject);
+    }
+  }
+
+  /** 计划确认卡片：和审批同一套升级规则；L0 不发，L1 遇到带检查命令的计划只提醒、不放确认按钮。 */
+  private escalatePlans(targets: ConversationRecord[], providers: ChannelProvider[], presence: DesktopPresence, nowMs: number): void {
+    const { store } = this.deps;
+    for (const c of this.channels.planEscalationCandidates()) {
+      if (c.remoteApprovalLevel === 'L0') continue;
+      if (!shouldEscalateApproval(Date.parse(c.plan.createdAt), nowMs, presence, this.limits.escalationWaitMs)) continue;
+      const task = store.tasks.getTask(c.plan.taskId)!;
+      const nodes = store.plans.nodes(c.plan.id);
+      const hasChecks = nodes.some((n) => n.checkCommand !== null);
+      const remote = canConfirmPlanRemotely(c.remoteApprovalLevel, hasChecks);
+      const lines = nodes.map((n) => ({
+        title: n.title,
+        role: n.role,
+        executor: n.executor ?? this.executorOf(task.workspaceId, n.role),
+        dependsOn: n.dependsOn.map((k) => nodes.find((x) => x.key === k)?.title ?? k),
+        check: n.checkCommand ? [n.checkCommand.executable, ...n.checkCommand.args].join(' ') : null,
+      }));
+      store.transaction(() => {
+        const event = this.channels.markPlanEscalated(c.plan.id, providers);
+        if (!event) return;
+        for (const conversation of targets) {
+          const ttlMs = this.limits.reviewActionTtlMs;
+          const buttons = remote
+            ? {
+                confirm: this.channels.createAction({ conversationId: conversation.id, kind: 'confirm_plan', targetId: c.plan.id, targetVersion: c.plan.version, ttlMs }).token,
+                reject: this.channels.createAction({ conversationId: conversation.id, kind: 'reject_plan', targetId: c.plan.id, targetVersion: c.plan.version, ttlMs }).token,
+              }
+            : undefined;
+          const why = remote ? null : `这个计划带检查命令，项目「${c.workspaceName}」的远程审批等级是 ${c.remoteApprovalLevel}，请到电脑上确认。`;
+          this.deps.send(conversation, planCard(c.taskTitle, c.plan.revision, lines, buttons, why), `plan:${c.plan.id}`);
+        }
+        this.deps.publish([event]);
+      });
+    }
+  }
+
+  private executorOf(workspaceId: string, role: string): string {
+    const parsed = AgentRole.safeParse(role);
+    if (!parsed.success) return role;
+    return this.deps.store.agents.resolveExecutor(workspaceId, parsed.data) ?? this.deps.store.agents.getProfile(parsed.data)?.executor ?? role;
+  }
+
   /** 已升级的审批被处理（桌面、外部或过期）：作废按钮，并更新每个单聊里的那张卡片。 */
   private onApprovalDecided(approvalId: string): void {
     this.channels.voidActions(approvalId);
@@ -131,6 +196,7 @@ export class ChannelNotifier {
       .filter((c) => shouldEscalateApproval(Date.parse(c.approval.requestedAt), nowMs, presence, this.limits.escalationWaitMs));
     const providers = [...new Set(targets.map((t) => t.provider))] as ChannelProvider[];
     this.escalateNotices(targets, providers, presence, nowMs);
+    this.escalatePlans(targets, providers, presence, nowMs);
     for (const candidate of candidates) {
       this.deps.store.transaction(() => {
         const event = this.channels.markEscalated(candidate.approval.id, providers);

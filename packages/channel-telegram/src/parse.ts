@@ -32,7 +32,7 @@ export interface TgMessage {
   chat: TgChat;
   text?: string;
   entities?: TgEntity[];
-  reply_to_message?: { from?: TgUser };
+  reply_to_message?: { message_id?: number; from?: TgUser };
 }
 
 export interface TgUpdate {
@@ -93,7 +93,11 @@ export function parseUpdate(update: TgUpdate, bot: BotIdentity): Parsed | undefi
       eventId,
       address: address(bot, message.chat, kind),
       sender: { externalId: String(message.from.id), displayName: nameOf(message.from) },
-      body: { kind: 'text', ...textOf(message, bot) },
+      body: {
+        kind: 'text',
+        ...textOf(message, bot),
+        ...(message.reply_to_message?.message_id ? { replyTo: String(message.reply_to_message.message_id) } : {}),
+      },
     };
   }
   if (query?.message && query.data) {

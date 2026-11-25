@@ -16,6 +16,8 @@ import {
   type NewChannelAction,
   type PairingRecord,
   type PersistentEvent,
+  type PlanRecord,
+  type RemoteApprovalLevel,
 } from '@paldock/contracts';
 import type { Clock } from './clock.js';
 import { COLUMNS } from './columns.js';
@@ -36,6 +38,26 @@ const CANDIDATE_SELECT = `
       JOIN subtasks s ON s.id = r.subtask_id
       JOIN tasks t ON t.id = s.task_id
       JOIN workspaces w ON w.id = t.workspace_id`;
+
+/** P3-10：外部会话 ↔ 主会话、引用回复反查、计划确认卡片。 */
+const P310 = {
+  // 只写一次
+  setMainSession: `
+    UPDATE external_conversations SET main_session_id = ?, version = version + 1 WHERE id = ? AND main_session_id IS NULL
+    RETURNING ${COLUMNS.conversation()}`,
+  // 部分唯一索引 conversations_by_main_session
+  byMainSession: `SELECT ${COLUMNS.conversation()} FROM external_conversations WHERE main_session_id = ?`,
+  subjectOfMessage: `SELECT subject FROM channel_messages WHERE conversation_id = ? AND message_ref = ?`,
+  // plans_unescalated，条件逐字一致；任务还没结束才发
+  planCandidates: `
+    SELECT ${COLUMNS.plan('p.')}, w.remote_approval_level AS remoteApprovalLevel, w.name AS workspaceName, t.title AS taskTitle
+      FROM plans p
+      JOIN tasks t ON t.id = p.task_id
+      JOIN workspaces w ON w.id = t.workspace_id
+     WHERE p.status = 'proposed' AND p.escalated_at IS NULL AND t.status NOT IN ('succeeded', 'failed', 'cancelled')
+     ORDER BY p.created_at`,
+  markPlanEscalated: `UPDATE plans SET escalated_at = ? WHERE id = ? AND status = 'proposed' AND escalated_at IS NULL`,
+} as const;
 
 const SQL = {
   // 显示名会变：已存在时只更新显示名，版本不变（版本只随状态变化）
@@ -201,6 +223,31 @@ export class ChannelRepository implements ChannelStorePort {
 
   listGroups(): ConversationRecord[] {
     return this.db.all<ConversationRow>(SQL.selectGroups).map(toConversation);
+  }
+
+  setMainSession(conversationId: string, sessionId: string): ConversationRecord | undefined {
+    const row = this.db.get<ConversationRow>(P310.setMainSession, sessionId, conversationId);
+    return row && toConversation(row);
+  }
+
+  conversationOfMainSession(sessionId: string): ConversationRecord | undefined {
+    const row = this.db.get<ConversationRow>(P310.byMainSession, sessionId);
+    return row && toConversation(row);
+  }
+
+  subjectOfMessage(conversationId: string, messageRef: string): string | undefined {
+    return this.db.get<{ subject: string }>(P310.subjectOfMessage, conversationId, messageRef)?.subject;
+  }
+
+  planEscalationCandidates(): { plan: PlanRecord; remoteApprovalLevel: RemoteApprovalLevel; workspaceName: string; taskTitle: string }[] {
+    return this.db
+      .all<PlanRecord & { remoteApprovalLevel: RemoteApprovalLevel; workspaceName: string; taskTitle: string }>(P310.planCandidates)
+      .map(({ remoteApprovalLevel, workspaceName, taskTitle, ...plan }) => ({ plan, remoteApprovalLevel, workspaceName, taskTitle }));
+  }
+
+  markPlanEscalated(planId: string, channels: ChannelProvider[]): PersistentEvent | undefined {
+    if (this.db.run(P310.markPlanEscalated, this.clock.iso(), planId) === 0) return undefined;
+    return this.events.append(planId, { type: 'plan.escalated', payload: { channels } });
   }
 
   activeDirectConversations(): ConversationRecord[] {

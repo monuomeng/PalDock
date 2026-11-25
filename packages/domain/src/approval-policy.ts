@@ -12,6 +12,15 @@ export function canApproveRemotely(level: RemoteApprovalLevel, approval: { riskL
   return approval.kind !== 'permissions' && REMOTELY_APPROVABLE[level].has(approval.riskLevel);
 }
 
+/**
+ * 计划能不能在外部渠道确认（P3-10，2026-11-25 已定）：L0 不发计划卡片；L1 只能确认不带检查命令的计划
+ * （检查命令以用户权限运行，按高风险对待）；L2 都能确认。退回总是允许（和审批的拒绝一样）。
+ */
+export function canConfirmPlanRemotely(level: RemoteApprovalLevel, hasCheckCommands: boolean): boolean {
+  if (level === 'L0') return false;
+  return level === 'L2' || !hasCheckCommands;
+}
+
 /** 用户 2026-11-24 确认 3 分钟（07 待决事项 5）。 */
 export const DEFAULT_ESCALATION_WAIT_MS = 3 * 60 * 1000;
 

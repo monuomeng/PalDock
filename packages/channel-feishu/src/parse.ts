@@ -12,6 +12,7 @@ export interface MessageEvent {
   sender?: { sender_id?: { open_id?: string }; sender_type?: string };
   message?: {
     message_id: string;
+    parent_id?: string;
     chat_id: string;
     chat_type: string;
     message_type: string;
@@ -65,7 +66,8 @@ export function parseMessage(data: MessageEvent, ctx: ParseContext): Parsed | un
     eventId: data.event_id ?? `message:${message.message_id}`,
     address: address(ctx, data.tenant_key, message.chat_id, kind),
     sender: { externalId: sender },
-    body: { kind: 'text', text: textOf(message), mentionsBot },
+    // 引用回复时 parent_id 是被引用消息的 ID（对得上我们发出的卡片就能认出是在回答哪个问题）
+    body: { kind: 'text', text: textOf(message), mentionsBot, ...(message.parent_id ? { replyTo: message.parent_id } : {}) },
   };
 }
 

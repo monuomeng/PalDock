@@ -19,6 +19,7 @@ import type {
   WorkspaceAccess,
 } from './states.js';
 import type { RuntimeDiscovery } from './runtime.js';
+import type { ChannelProvider } from './channels.js';
 import type { AutoPolicy, GateStage, PlanDetail } from './plans.js';
 import type { TaskKind } from './conversations.js';
 
@@ -173,6 +174,8 @@ export interface MessageRecord {
   runId: string | null;
   role: MessageRole;
   body: string;
+  /** 从哪个外部渠道来（P3-10）；桌面上写的为 null。 */
+  channel: ChannelProvider | null;
   createdAt: string;
 }
 

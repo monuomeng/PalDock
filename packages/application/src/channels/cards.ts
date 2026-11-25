@@ -232,6 +232,35 @@ export function taskProgressCard(
 /**
  * 升级到外部单聊的审批。不允许远程批准（等级或类别不允许）时不放按钮，只提醒到桌面处理。
  */
+/** 协调助手在主会话里的回复，发回这个外部会话。 */
+export function coordinatorReplyCard(body: string): Card {
+  return card('协调助手', 'info', [clip(body, 3000)]);
+}
+
+/**
+ * 计划确认卡片（P3-10）：每个节点一行（角色、执行器、依赖），检查命令原样列出；
+ * buttons 为空时只提醒（L1 遇到带检查命令的计划），why 说明原因。修改只能在电脑上做。
+ */
+export function planCard(
+  title: string,
+  revision: number,
+  nodes: { title: string; role: string; executor: string; dependsOn: string[]; check: string | null }[],
+  buttons: { confirm: string; reject: string } | undefined,
+  why: string | null,
+): Card {
+  const lines = nodes.map((n) => `· ${clip(n.title, 60)}（${n.role} · ${n.executor}${n.dependsOn.length ? ` · 依赖 ${n.dependsOn.join('、')}` : ''}）`);
+  const checks = nodes.filter((n) => n.check);
+  if (checks.length > 0) lines.push('', '检查命令（以你的账户权限运行）：', ...checks.map((n) => `· ${clip(n.title, 40)}：${n.check}`));
+  lines.push('', '改执行器、检查命令或删节点请到电脑上；这里只能确认或退回。');
+  if (why) lines.push(why);
+  return card(`计划待确认 · ${clip(title, 40)}（第 ${revision} 版）`, 'warning', lines, buttons ? [button('确认', buttons.confirm, 'primary'), button('退回', buttons.reject, 'danger')] : []);
+}
+
+export function planDecidedCard(title: string, status: 'confirmed' | 'rejected' | 'superseded', via: string | null): Card {
+  const text = status === 'confirmed' ? '已确认' : status === 'rejected' ? '已退回' : '已被新一版取代';
+  return card(`计划${text} · ${clip(title, 40)}`, 'info', [`${VIA_TEXT[via ?? ''] ?? ''}${text}`]);
+}
+
 /** 协调助手的通知或问题（桌面没人看时升级到单聊）；带编号，回复时带上它。 */
 export function noticeCard(notice: NoticeRecord): Card {
   const ref = noticeRef(notice.id);

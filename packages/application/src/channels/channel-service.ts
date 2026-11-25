@@ -13,6 +13,8 @@ import {
   type StorePort,
 } from '@paldock/contracts';
 import { P2_DEFAULTS, type DesktopPresence, type P2Limits } from '@paldock/domain';
+import type { CoordinatorService } from '../coordinator.js';
+import type { PlanService } from '../plan-service.js';
 import type { TaskService } from '../task-service.js';
 import { pairedCard } from './cards.js';
 import { ChannelHub } from './channel-hub.js';
@@ -52,6 +54,9 @@ export const credentialTarget = (provider: ChannelProvider) => `paldock/${provid
 export interface ChannelServiceDeps {
   store: StorePort;
   tasks: TaskService;
+  /** 外部普通消息进协调助手主会话、计划确认卡片（P3-10）；缺省时按 P2 的规则。 */
+  coordinator?: CoordinatorService;
+  plans?: PlanService;
   credentials: CredentialPort;
   createAdapter: AdapterFactory;
   publish(events: PersistentEvent[]): void;
@@ -93,7 +98,13 @@ export class ChannelService {
     // 限额与时钟在这里定一次，管线各部分共用
     const common = { store: deps.store, publish: deps.publish, limits: this.limits, now: this.now };
     const send = (c: ConversationRecord, card: Card, subject?: string) => this.send(c, card, subject);
-    const commands = new RemoteCommands({ ...common, tasks: deps.tasks, reply: send });
+    const commands = new RemoteCommands({
+      ...common,
+      tasks: deps.tasks,
+      ...(deps.coordinator ? { coordinator: deps.coordinator } : {}),
+      ...(deps.plans ? { plans: deps.plans } : {}),
+      reply: send,
+    });
     const processor = new InboundProcessor({ ...common, handler: commands, reply: send });
     this.hub = new ChannelHub({
       ...common,

@@ -1,6 +1,8 @@
 import {
   CodedError,
   noticeRef,
+  type ChannelProvider,
+  type ConversationRecord,
   type ConversationDetail,
   type MainSessionRecord,
   type PersistentEvent,
@@ -22,6 +24,7 @@ export interface CoordinatorDeps {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const CHANNEL_NAME: Record<ChannelProvider, string> = { feishu: '飞书', telegram: 'Telegram' };
 const RESUME_FAILED = '续做失败';
 const STATUS_TEXT: Record<string, string> = { blocked: '阻塞', failed: '失败', cancelled: '已取消', succeeded: '通过' };
 
@@ -116,6 +119,45 @@ export class CoordinatorService {
     });
     this.deps.publish(events);
     this.schedule(sessionId);
+  }
+
+  /** 外部会话对应的主会话：第一次说话时在它的项目里新建（不和桌面的会话合并），之后沿用。 */
+  externalSession(conversation: ConversationRecord, workspaceId: string): string {
+    if (conversation.mainSessionId) return conversation.mainSessionId;
+    const title = `${CHANNEL_NAME[conversation.provider]} · ${conversation.title || (conversation.kind === 'dm' ? '单聊' : '群聊')}`;
+    const session = this.newSession(workspaceId, title);
+    return this.store.channels.setMainSession(conversation.id, session.sessionId)?.mainSessionId ?? session.sessionId;
+  }
+
+  /**
+   * 外部渠道里的一句话进主会话：存为消息（标明渠道），同一事务记一次唤醒；同一入站事件只算一次。
+   * summary 是交给协调助手的说明（拿不准是在答哪个问题时附上候选问题），缺省就是原话。
+   */
+  receiveExternal(sessionId: string, text: string, channel: ChannelProvider, eventKey: string, summary = text): void {
+    this.session(sessionId);
+    const events = this.store.transaction(() => {
+      const wake = this.store.coordinator.addWake({ sessionId, trigger: 'user_message', dedupeKey: `ext:${eventKey}`, summary });
+      return wake ? [...this.store.messages.append(sessionId, 'user', text, null, channel).events, ...wake.events] : [];
+    });
+    this.deps.publish(events);
+    this.schedule(sessionId);
+  }
+
+  /** 对编号问题的答复：记在提问的那个主会话里，问题标为已答（不再外发），唤醒提问的协调助手。 */
+  answerQuestion(noticeId: number, text: string, channel: ChannelProvider, eventKey: string): boolean {
+    const notice = this.store.coordinator.getNotice(noticeId);
+    if (!notice || notice.kind !== 'question' || notice.answeredAt) return false;
+    const events = this.store.transaction(() => {
+      const summary = `用户在${CHANNEL_NAME[channel]}回复了你的问题 ${noticeRef(notice.id)}（${notice.body.slice(0, 200)}）：\n${text}`;
+      const wake = this.store.coordinator.addWake({ sessionId: notice.sessionId, trigger: 'user_message', dedupeKey: `ext:${eventKey}`, summary });
+      if (!wake) return [];
+      const message = this.store.messages.append(notice.sessionId, 'user', `回复 ${noticeRef(notice.id)}：${text}`, null, channel);
+      const answered = this.store.coordinator.answerNotice(notice.id, message.record.id, channel);
+      return [...message.events, ...(answered?.events ?? []), ...wake.events];
+    });
+    this.deps.publish(events);
+    this.schedule(notice.sessionId);
+    return true;
   }
 
   /** 会话里的通知在桌面看过了：不再外发。 */

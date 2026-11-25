@@ -39,6 +39,10 @@ export interface PlanRecord {
   version: number;
   createdAt: string;
   decidedAt: string | null;
+  /** 计划确认卡片已升级到外部单聊的时间。 */
+  escalatedAt: string | null;
+  /** 在哪一端确认或退回的。 */
+  decidedVia: 'desktop' | 'feishu' | 'telegram' | null;
 }
 
 export interface PlanNodeRecord {

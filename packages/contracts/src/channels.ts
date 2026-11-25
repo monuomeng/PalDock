@@ -31,7 +31,8 @@ export type ChannelAddress = z.infer<typeof ChannelAddress>;
 
 export const InboundBody = z.discriminatedUnion('kind', [
   /** 文本消息；群聊里 @机器人 的部分已由适配器去掉，mentionsBot 记录是否 @ 了它。 */
-  z.object({ kind: z.literal('text'), text: z.string().max(8000), mentionsBot: z.boolean() }),
+  /** replyTo：引用回复时被引用消息的平台 ID（飞书 parent_id、Telegram reply_to_message.message_id）。 */
+  z.object({ kind: z.literal('text'), text: z.string().max(8000), mentionsBot: z.boolean(), replyTo: z.string().min(1).max(200).optional() }),
   /** 卡片按钮（飞书卡片回调、Telegram 内联键盘）：只带 PalDock 下发的一次性动作令牌。 */
   z.object({ kind: z.literal('action'), token: z.string().min(1).max(64) }),
 ]);
@@ -143,6 +144,9 @@ export const CHANNEL_ACTION_KINDS = [
   /** /continue 列表里选一个任务：设为当前任务并显示它做过什么。 */
   'select_task',
   'dismiss',
+  /** 计划确认卡片上的「确认」「退回」（P3-10），受远程审批等级约束。 */
+  'confirm_plan',
+  'reject_plan',
 ] as const;
 export const ChannelActionKind = z.enum(CHANNEL_ACTION_KINDS);
 export type ChannelActionKind = z.infer<typeof ChannelActionKind>;
@@ -189,6 +193,8 @@ export interface ConversationRecord {
   title: string;
   /** 单聊的当前任务：普通文字按它的状态续做、提示或新建（只对单聊有意义）。 */
   currentTaskId: string | null;
+  /** 这个外部会话对应的协调助手主会话（P3-10）。 */
+  mainSessionId: string | null;
   version: number;
   lastSeenAt: string;
 }

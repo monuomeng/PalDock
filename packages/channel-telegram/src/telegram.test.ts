@@ -23,6 +23,11 @@ describe('Telegram 更新解析', () => {
     });
   });
 
+  it('回复某条消息时带上它的 message_id（P3-10 认出是在回答哪个问题）', () => {
+    expect(parseUpdate(text({ reply_to_message: { message_id: 7, from: { id: 42 } } }), bot)?.body).toMatchObject({ kind: 'text', replyTo: '7' });
+    expect(parseUpdate(text(), bot)?.body).not.toHaveProperty('replyTo');
+  });
+
   it('群里识别 @机器人、回复机器人、/命令@机器人，并去掉 @机器人', () => {
     const group = { id: -100, type: 'supergroup' as const };
     const mention = parseUpdate(text({ chat: group, text: '@PalDockBot  /tasks', entities: [{ type: 'mention', offset: 0, length: 11 }] }), bot);

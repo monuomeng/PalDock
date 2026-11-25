@@ -51,7 +51,7 @@ export class PlanService {
    * 按节点建子任务，没有依赖的立即交给监管器。运行中的任务：按新旧两版对照替换节点，被作废的节点中断 Run，
    * 再让调度器按新的依赖推进一次。
    */
-  async confirm(planId: string, expectedVersion: number, note?: string): Promise<void> {
+  async confirm(planId: string, expectedVersion: number, note?: string, via: 'desktop' | 'feishu' | 'telegram' = 'desktop'): Promise<void> {
     const { store } = this.deps;
     const plan = store.plans.getPlan(planId);
     if (!plan) throw new CodedError('not_found', '计划不存在');
@@ -59,7 +59,7 @@ export class PlanService {
     validatePlan(store.plans.nodes(planId), this.specialistRoles());
     const task = store.tasks.getTask(plan.taskId)!;
     if (this.deps.integration && task.status === 'draft') await this.deps.integration.ensureBranch(task);
-    const { record, events } = store.plans.confirm(planId, expectedVersion, note?.trim() || null);
+    const { record, events } = store.plans.confirm(planId, expectedVersion, note?.trim() || null, via);
     this.deps.publish(events);
     for (const id of record.cancelled) this.deps.supervisor?.cancel(id);
     for (const subtask of record.created) if (subtask.status === 'queued') this.deps.scheduler.dispatch(subtask.id);
@@ -85,8 +85,8 @@ export class PlanService {
     this.deps.publish(store.plans.editNode(planId, expectedVersion, edit).events);
   }
 
-  reject(planId: string, expectedVersion: number, note?: string): void {
+  reject(planId: string, expectedVersion: number, note?: string, via: 'desktop' | 'feishu' | 'telegram' = 'desktop'): void {
     if (!this.deps.store.plans.getPlan(planId)) throw new CodedError('not_found', '计划不存在');
-    this.deps.publish(this.deps.store.plans.reject(planId, expectedVersion, note?.trim() || null).events);
+    this.deps.publish(this.deps.store.plans.reject(planId, expectedVersion, note?.trim() || null, via).events);
   }
 }

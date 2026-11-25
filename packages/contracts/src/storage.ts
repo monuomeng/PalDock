@@ -229,6 +229,10 @@ export interface CoordinatorStorePort {
   notices(sessionId: string, limit: number): NoticeRecord[];
   getNotice(id: number): NoticeRecord | undefined;
   ackNotices(sessionId: string): Change<number>;
+  /** 把一条消息记为问题的答复；问题已答过时返回 undefined。 */
+  answerNotice(id: number, messageId: number, channel: ChannelProvider): Change<NoticeRecord> | undefined;
+  /** 发到过这个外部会话、还没答的问题。 */
+  openQuestionsSentTo(conversationId: string): NoticeRecord[];
   unescalatedNotices(): NoticeRecord[];
   markNoticeEscalated(id: number, channels: ChannelProvider[]): PersistentEvent | undefined;
   writeSummary(input: { sessionId: string; body: string; runId: string | null; wakesDone: number }): Change<SummaryRecord>;
@@ -251,12 +255,12 @@ export interface PlanStorePort {
    * 运行中确认新一版时：上一版 superseded，没变的节点沿用原子任务，改了的和新增的建新子任务，没了的和被替换的取消。
    * 返回新建的子任务和被取消的子任务（有 Run 在跑的由调用方中断）。
    */
-  confirm(id: string, expectedVersion: number, note?: string | null): Change<{ created: SubtaskRecord[]; cancelled: string[] }>;
+  confirm(id: string, expectedVersion: number, note?: string | null, via?: 'desktop' | 'feishu' | 'telegram'): Change<{ created: SubtaskRecord[]; cancelled: string[] }>;
   /** 确认前改一个节点（调用方先校验）；带计划版本，先到者为准。 */
   editNode(id: string, expectedVersion: number, edit: PlanNodeEdit): Change<PlanRecord>;
   /** 任务当前在执行的那一版。 */
   confirmedPlan(taskId: string): PlanRecord | undefined;
-  reject(id: string, expectedVersion: number, note: string | null): Change<PlanRecord>;
+  reject(id: string, expectedVersion: number, note: string | null, via?: 'desktop' | 'feishu' | 'telegram'): Change<PlanRecord>;
   /** 调度器读的任务图（按计划节点顺序）。 */
   graph(taskId: string): GraphNode[];
 }
@@ -343,6 +347,15 @@ export interface ChannelStorePort {
   setConversation(id: string, expectedVersion: number, settings: { groupAllowed: boolean; defaultWorkspaceId: string | null }): Change<ConversationRecord>;
   setCurrentTask(conversationId: string, taskId: string | null): void;
   conversationsFocusedOn(taskId: string): ConversationRecord[];
+  /** 外部会话对应的主会话（只写一次）。 */
+  setMainSession(conversationId: string, sessionId: string): ConversationRecord | undefined;
+  /** 主会话对应的外部会话（协调助手的回复要发回去）。 */
+  conversationOfMainSession(sessionId: string): ConversationRecord | undefined;
+  /** 本会话里平台消息 ID 对应的已发卡片主题（引用回复用）。 */
+  subjectOfMessage(conversationId: string, messageRef: string): string | undefined;
+  /** 待升级的计划确认卡片及其项目的远程审批等级。 */
+  planEscalationCandidates(): { plan: PlanRecord; remoteApprovalLevel: RemoteApprovalLevel; workspaceName: string; taskTitle: string }[];
+  markPlanEscalated(planId: string, channels: ChannelProvider[]): PersistentEvent | undefined;
   /** 任务结束时清掉所有以它为当前任务的会话。 */
   clearCurrentTask(taskId: string): void;
   openPairing(
@@ -406,7 +419,8 @@ export interface StorePort {
   autoDecisions: AutoDecisionStorePort;
   audit: AuditPort;
   messages: {
-    append(sessionId: string, role: MessageRole, body: string, runId?: string | null): Change<MessageRecord>;
+    append(sessionId: string, role: MessageRole, body: string, runId?: string | null, channel?: ChannelProvider | null): Change<MessageRecord>;
+    get(id: number): MessageRecord | undefined;
     /** FTS5（trigram）检索，短查询退回 LIKE。 */
     search(query: string, limit: number): MessageRecord[];
   };

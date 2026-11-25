@@ -243,12 +243,12 @@ describe('配对与准入', () => {
 });
 
 describe('外部建任务与结果回发', () => {
-  it('一句话 → 确认卡片 → 建任务执行 → 待命中卡片 → 手机上结束任务', async () => {
+  it('/new 一句话 → 确认卡片 → 建任务执行 → 待命中卡片 → 手机上结束任务', async () => {
     await enableFeishu();
     await pair('wang');
     await registerWorkspace();
 
-    adapter.say('wang', '加一个 hello 文件');
+    adapter.say('wang', '/new 加一个 hello 文件');
     const confirm = await cardTitled('新建任务？');
     expect(confirm.lines).toContain('目标：加一个 hello 文件');
     adapter.click('wang', buttonOf(confirm, '新建并开始'));
@@ -275,11 +275,11 @@ describe('外部建任务与结果回发', () => {
     await cardTitled('这个按钮已失效');
   });
 
-  it('待命中时直接回复就是继续（同一 worktree、同一会话）；/done 结束后下一句话是新任务', async () => {
+  it('待命中时直接回复就是继续（同一 worktree、同一会话）；/done 结束后普通的话交给协调助手，不再直接建任务', async () => {
     await enableFeishu();
     await pair('wang');
     await registerWorkspace();
-    adapter.say('wang', '写个文件');
+    adapter.say('wang', '/new 写个文件');
     adapter.click('wang', buttonOf(await cardTitled('新建任务？'), '新建并开始'));
     const review = await waitFor(() => adapter.cards().find((c) => c.buttons.some((b) => b.label === '继续')), '待命中卡片');
     const ref = /#(\w{6})/.exec(review.title)![1]!;
@@ -301,14 +301,15 @@ describe('外部建任务与结果回发', () => {
     await waitFor(async () => (await call('task.get', { taskId: task!.task.id })).subtask.status === 'succeeded' || undefined, '已结束');
     await waitFor(() => adapter.cards().find((c) => c.lines.some((l) => l.startsWith('任务已结束'))), '已结束卡片');
     adapter.say('wang', '再加一个文件');
-    await waitFor(() => adapter.sent.filter((s) => s.card.title === '新建任务？').length === 2 || undefined, '新任务确认卡片');
+    await cardTitled('收到，已交给协调助手');
+    expect(adapter.sent.filter((s) => s.card.title === '新建任务？')).toHaveLength(1);
   });
 
-  it('当前任务还在执行时，普通消息不建任务也不续做', async () => {
+  it('当前任务还在执行时，普通消息不建任务也不续做，交给协调助手', async () => {
     await enableFeishu();
     await pair('wang');
     await registerWorkspace();
-    adapter.say('wang', '[mock:command] 装依赖');
+    adapter.say('wang', '/new [mock:command] 装依赖');
     adapter.click('wang', buttonOf(await cardTitled('新建任务？'), '新建并开始'));
     const created = await cardTitled(/^已新建任务 #/);
     const ref = /#(\w{6})/.exec(created.title)![1]!;
@@ -317,7 +318,8 @@ describe('外部建任务与结果回发', () => {
       return task?.latestRunStatus === 'waiting_approval' || undefined;
     }, '等待审批');
     adapter.say('wang', '顺便改个名字');
-    await cardTitled(`#${ref} 还在执行`);
+    await cardTitled('收到，已交给协调助手');
+    expect(ref).toMatch(/^\w{6}$/);
     expect(adapter.sent.filter((s) => s.card.title === '新建任务？')).toHaveLength(1);
   });
 
@@ -362,7 +364,7 @@ describe('外部建任务与结果回发', () => {
     await enableFeishu();
     await pair('wang');
     await registerWorkspace();
-    adapter.say('wang', '[mock:command] 装依赖');
+    adapter.say('wang', '/new [mock:command] 装依赖');
     adapter.click('wang', buttonOf(await cardTitled('新建任务？'), '新建并开始'));
     const [task] = await waitFor(async () => {
       const list = (await call('task.list', { limit: 10 })).filter((t) => t.task.originConversationId);
@@ -387,7 +389,7 @@ describe('外部建任务与结果回发', () => {
     await enableFeishu();
     await pair('wang');
     const ws = await registerWorkspace();
-    adapter.say('wang', '算了');
+    adapter.say('wang', '/new 算了');
     adapter.click('wang', buttonOf(await cardTitled('新建任务？'), '不用了'));
     await cardTitled('好的，不新建任务。');
     expect(await call('task.list', { limit: 10 })).toHaveLength(1);

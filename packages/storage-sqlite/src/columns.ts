@@ -47,7 +47,7 @@ export const COLUMNS = {
      commit_sha AS commitSha, out_of_scope AS outOfScope, prepare_status AS prepareStatus, collected_at AS collectedAt`,
   ),
   review: cols(`id, run_id AS runId, decision, note, reviewer_run_id AS reviewerRunId, commit_sha AS commitSha, decided_at AS decidedAt`),
-  message: cols(`id, session_id AS sessionId, run_id AS runId, role, body, created_at AS createdAt`),
+  message: cols(`id, session_id AS sessionId, run_id AS runId, role, body, channel, created_at AS createdAt`),
   account: cols(
     `id, provider, account, external_id AS externalId, display_name AS displayName, status, version,
      created_at AS createdAt, updated_at AS updatedAt`,
@@ -55,7 +55,7 @@ export const COLUMNS = {
   conversation: cols(
     `id, provider, account, tenant_key AS tenant, chat_id AS chatId, thread_key AS threadKey, kind,
      owner_account_id AS ownerAccountId, default_workspace_id AS defaultWorkspaceId, group_allowed AS groupAllowed,
-     title, current_task_id AS currentTaskId, version, last_seen_at AS lastSeenAt`,
+     title, current_task_id AS currentTaskId, main_session_id AS mainSessionId, version, last_seen_at AS lastSeenAt`,
   ),
   pairing: cols(`code, account_id AS accountId, status, created_at AS createdAt, expires_at AS expiresAt`),
   action: cols(
@@ -71,7 +71,7 @@ export const COLUMNS = {
   agentOverride: cols(`workspace_id AS workspaceId, role, executor`),
   plan: cols(
     `id, task_id AS taskId, revision, status, proposed_by_run_id AS proposedByRunId, decision_note AS decisionNote,
-     version, created_at AS createdAt, decided_at AS decidedAt`,
+     version, created_at AS createdAt, decided_at AS decidedAt, escalated_at AS escalatedAt, decided_via AS decidedVia`,
   ),
   planNode: cols(`plan_id AS planId, position, node_key AS key, role, title, goal, paths, depends_on AS dependsOn, check_command AS checkCommand, executor`),
   autoDecision: cols(`id, workspace_id AS workspaceId, task_id AS taskId, plan_id AS planId, subtask_id AS subtaskId, kind, reason, created_at AS createdAt`),
@@ -83,7 +83,10 @@ export const COLUMNS = {
     `id, session_id AS sessionId, trigger, summary, status, run_id AS runId, requests, note, created_at AS createdAt,
      started_at AS startedAt, ended_at AS endedAt`,
   ),
-  notice: cols(`id, session_id AS sessionId, run_id AS runId, kind, body, status, escalated_at AS escalatedAt, created_at AS createdAt`),
+  notice: cols(
+    `id, session_id AS sessionId, run_id AS runId, kind, body, status, escalated_at AS escalatedAt, answered_at AS answeredAt,
+     answer_message_id AS answerMessageId, created_at AS createdAt`,
+  ),
   summary: cols(`session_id AS sessionId, version, body, run_id AS runId, wakes_done AS wakesDone, created_at AS createdAt`),
   handoff: cols(`run_id AS runId, summary, notes, submitted_at AS submittedAt`),
   usage: cols(

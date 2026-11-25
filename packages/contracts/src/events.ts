@@ -70,7 +70,7 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('message.created'),
-    payload: z.object({ sessionId: Id, runId: Id.nullable(), role: MessageRole }),
+    payload: z.object({ sessionId: Id, runId: Id.nullable(), role: MessageRole, channel: ChannelProvider.nullable().optional() }),
   }),
   /** Run 结束后收集到证据；聚合 ID 为 runId。 */
   z.object({ type: z.literal('run.result_collected'), payload: z.object({ checkStatus: CheckStatus }) }),
@@ -101,6 +101,10 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
   z.object({ type: z.literal('wake.changed'), payload: z.object({ wakeId: z.number().int().positive(), status: WakeStatus, trigger: WakeTrigger }) }),
   /** 协调助手发来通知；聚合 ID 为会话 ID。 */
   z.object({ type: z.literal('notice.created'), payload: z.object({ noticeId: z.number().int().positive(), kind: NoticeKind }) }),
+  /** 协调助手的问题收到了答复（交回提问的会话）；聚合 ID 为会话 ID。 */
+  z.object({ type: z.literal('notice.answered'), payload: z.object({ noticeId: z.number().int().positive(), channel: ChannelProvider }) }),
+  /** 计划确认卡片已升级到外部单聊；聚合 ID 为 planId。 */
+  z.object({ type: z.literal('plan.escalated'), payload: z.object({ channels: z.array(ChannelProvider) }) }),
   /** 会话里的通知已在桌面看过；聚合 ID 为会话 ID。 */
   z.object({ type: z.literal('notice.read'), payload: z.object({ count: z.number().int().nonnegative() }) }),
   /** 通知已升级到外部单聊；聚合 ID 为会话 ID。 */

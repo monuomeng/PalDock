@@ -146,6 +146,8 @@ export class LocalService {
       service.channels = new ChannelService({
         store,
         tasks,
+        coordinator: service.coordinator,
+        plans,
         credentials: options.channels?.credentials ?? systemCredentials,
         createAdapter: options.channels?.createAdapter ?? createAdapter,
         publish,
