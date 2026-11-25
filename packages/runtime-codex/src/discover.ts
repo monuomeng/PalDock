@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { childEnv, nodeRuntimeEnv, resolveExecutable } from '@paldock/platform';
+import { childEnv, nodeRuntimeEnv, resolveExecutable, versionAtLeast } from '@paldock/platform';
 
 export interface CodexCommand {
   command: string;
@@ -80,14 +80,7 @@ export async function codexVersion(cmd: CodexCommand, extraEnv: Record<string, s
 /** P2 起锁定的最低版本：更低的版本没有测过 app-server 协议，拒绝启动。 */
 export const MIN_CODEX_VERSION = '0.166.0';
 
-/** 比较 major.minor.patch，忽略预发布后缀；解析不了的版本视为不满足。 */
-export function meetsMinimum(version: string, minimum = MIN_CODEX_VERSION): boolean {
-  const parse = (v: string) => /^(\d+)\.(\d+)\.(\d+)/.exec(v)?.slice(1).map(Number);
-  const [have, need] = [parse(version), parse(minimum)];
-  if (!have || !need) return false;
-  for (let i = 0; i < 3; i++) if (have[i] !== need[i]) return have[i]! > need[i]!;
-  return true;
-}
+export const meetsMinimum = (version: string, minimum = MIN_CODEX_VERSION) => versionAtLeast(version, minimum);
 
 /** 启动 Codex 子进程的环境变量：白名单 + Electron 跑 Node 所需 + 命令自带 + 调用方额外的。 */
 export function commandEnv(cmd: CodexCommand, extraEnv: Record<string, string> = {}): NodeJS.ProcessEnv {

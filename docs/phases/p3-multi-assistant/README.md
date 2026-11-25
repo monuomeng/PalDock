@@ -17,7 +17,7 @@
 | ID | 优先 | 状态 | 要点 | 落点 | 备注 |
 |---|---|---|---|---|---|
 | P3-00 | 高 | ✅ | **前置实验**：执行器能否按会话注入 MCP 服务器（Codex `thread/start`、Claude `--mcp-config --strict-mcp-config`）；用文件工具、Shell、MCP 实测只读与目录限制，只有通过的执行器配置能承接只读角色；Claude 桌面版能否看到 PalDock 建的会话；锁定 Claude CLI 最低版本 | `packages/runtime-codex`、`packages/runtime-claude` | 2026-11-25 Windows 实测（Codex 0.166.0 / Claude 2.1.325），见 [findings.md](findings.md)：两边都能按会话注入 MCP；只读两边都可强制；Windows 上可写角色无法限定目录，用户确认接受并标「不隔离」 |
-| P3-01 | 高 | 📝 | **Claude 运行时适配器**：CLI stream-json 双向流、`--permission-prompt-tool stdio` 走宿主审批、`--resume` 恢复、中断；环境变量白名单；用量记到 Run；离线 mock | `packages/runtime-claude`、`packages/application/src/risk.ts` | 用 CLI 不用 Agent SDK（已定）；最低版本 2.1.325 |
+| P3-01 | 高 | ✅ | **Claude 运行时适配器**：CLI stream-json 双向流、`--permission-prompt-tool stdio` 走宿主审批、`--resume` 恢复、中断；环境变量白名单；用量记到 Run；离线 mock | `packages/runtime-claude`、`packages/application/src/risk.ts` | 用 CLI 不用 Agent SDK（已定）；最低版本 2.1.325；2026-11-25 离线模拟 15 项测试通过、真实 CLI 5 个场景实测通过，见 findings.md；用量落库随 P3-02 |
 | P3-02 | 高 | 📝 | **角色与执行器设置**：`agent_profiles`（迁移 005），六个出厂角色，执行器按角色 / 项目 / 派单选择；能力检查不满足时拒绝启动；设置页「助手」 | `packages/storage-sqlite`、`packages/domain`、`apps/desktop/renderer/src/views/settings.ts` | 审阅与开发同执行器只提醒，审阅必开新会话 |
 | P3-03 | 高 | 📝 | **MCP 桥**：每次 Run 注入 stdio MCP 服务器，身份只认一次性令牌 + Run ID；协调助手与专业助手按角色拿不同工具；服务端逐项校验并审计 | `apps/local-service`、`packages/application`、`packages/contracts` | `propose_plan` 只产生待确认计划 |
 | P3-04 | 高 | 📝 | **任务图调度器**：按依赖派单、无环与上限校验；并发全局 10 / 每任务 4 / 同会话串行；失败阻塞下游并唤醒协调助手；取消联动；事件驱动带 `version` | `packages/application`、`packages/storage-sqlite` | 自动重试仅限无外部副作用的失败，最多 1 次 |

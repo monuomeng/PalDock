@@ -40,3 +40,20 @@
 - 第二轮探测写完结果文件后，node 进程又过了几分钟才退出（当时已没有 codex 子进程），收尾时可能有句柄没关。P3-01 / P3-11 检查进程收尾时一并查。
 - Codex Windows 沙箱两种配置写法为什么不生效，没有再查；以后 Codex 升级后用同一脚本复测。
 - macOS 上的同一组探测还没跑。
+
+## P3-01 Claude 适配器实机验证（2026-11-25，Windows 11 x64，Claude Code 2.1.325）
+
+`node packages/runtime-claude/dist/adapter-probe.js`（`PALDOCK_CLAUDE_PATH` 指向桌面版自带的 2.1.325），4 次短对话，约 0.53 美元（CLI 估算值，订阅登录不按此扣费）。
+
+| 场景 | 结果 |
+|---|---|
+| 发现 | 版本 2.1.325，已登录，可用。这台机器 PATH 上没有 `claude`，只有桌面版自带的那份，所以要在设置里填路径（P3-02 设置页提供） |
+| 普通对话 | 事件顺序 thread → turn → output_delta → completed，约 3.9 秒；用量取 `modelUsage` 合计 |
+| 写文件审批 | 收到 1 次 `file_change`（Write hello.txt），拒绝后文件未写出，turn 正常完成 |
+| 中断 | 首个输出后发中断，以 interrupted 结束；会话记录里写入中断标记，`checkTurn` 也报 interrupted |
+| 恢复 | `--resume` 回到同一个会话 ID，模型记得上一轮 |
+| 恢复不存在的会话 | `start()` 拒绝，错误信息带 CLI 的 stderr（No conversation found…），不发事件 |
+| turn 身份 | 宿主发出的用户消息带 `uuid`，CLI 原样写进会话记录，所以可以用它当 turn ID 核对 |
+| 会话记录结构 | 除 user / assistant 外还有 attachment、queue-operation、api-request 等十余种行，核对时只看 user / assistant；完成的回复 `stop_reason` 为 end_turn，被中断的为 null |
+
+遗留：用量目前只放在 completed / failed 事件里，P3-02 的迁移 005 再落到 Run 上；Codex 侧用量同时补上。

@@ -56,6 +56,16 @@ export interface RuntimeApprovalRequest {
 /** 「本会话允许」P1 不开放；`cancel` 用于审批过期、任务取消或 Run 结束时收尾。 */
 export type RuntimeApprovalDecision = 'allow_once' | 'deny' | 'cancel';
 
+/** 一次 Run 的用量（主会话 + 子代理合计）。执行器不报告时缺省。 */
+export interface RuntimeUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** 执行器自己估算的费用（美元），仅供参考；订阅登录时并不按此扣费。 */
+  costUsd?: number;
+}
+
 export type RuntimeEvent =
   | { type: 'thread'; threadId: string }
   /** turn/start 的响应里就有 turn ID，先于 turn/started 通知送达，便于尽早记录。 */
@@ -66,8 +76,8 @@ export type RuntimeEvent =
   | { type: 'approval_withdrawn'; nativeRequestId: string }
   /** 执行器发来未识别的请求，适配器已回复错误（等同拒绝），只需记录。 */
   | { type: 'notice'; code: 'unknown_request'; detail: string }
-  | { type: 'completed'; finalMessage: string | null }
-  | { type: 'failed'; message: string }
+  | { type: 'completed'; finalMessage: string | null; usage?: RuntimeUsage }
+  | { type: 'failed'; message: string; usage?: RuntimeUsage }
   | { type: 'interrupted' }
   /** 与执行器的连接意外断开：结果未知，交给应用层核对。 */
   | { type: 'disconnected'; message: string };

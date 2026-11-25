@@ -129,6 +129,9 @@ importers:
 
   packages/runtime-claude:
     dependencies:
+      '@paldock/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@paldock/platform':
         specifier: workspace:*
         version: link:../platform
