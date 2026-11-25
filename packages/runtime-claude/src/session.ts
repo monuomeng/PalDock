@@ -33,6 +33,10 @@ export function resolveClaude(): string | undefined {
   return undefined;
 }
 
+/** 宿主审批：返回 true 批准这次工具调用。探测默认一律拒绝。 */
+export type PermissionDecider = (toolName: string, input: Record<string, unknown>) => boolean;
+const denyAll: PermissionDecider = () => false;
+
 export class ClaudeSession {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly listeners = new Set<(m: Message) => void>();
@@ -40,7 +44,7 @@ export class ClaudeSession {
   readonly permissionRequests: string[] = [];
   private nextRequest = 0;
 
-  constructor(exe: string, cwd: string, extraArgs: string[] = []) {
+  constructor(exe: string, cwd: string, extraArgs: string[] = [], private readonly decide: PermissionDecider = denyAll) {
     const args = [
       '-p',
       '--input-format', 'stream-json',
@@ -60,16 +64,19 @@ export class ClaudeSession {
   private onMessage(message: Message): void {
     const key = message.subtype ? `${message.type}/${message.subtype}` : message.type;
     this.seen.set(key, (this.seen.get(key) ?? 0) + 1);
-    const request = message.request as { subtype?: string; tool_name?: string } | undefined;
+    const request = message.request as { subtype?: string; tool_name?: string; input?: Record<string, unknown> } | undefined;
     if (message.type === 'control_request' && request?.subtype === 'can_use_tool') {
-      // 探测一律拒绝，只记录被请求的工具名
-      this.permissionRequests.push(request.tool_name ?? 'unknown');
+      const tool = request.tool_name ?? 'unknown';
+      const input = request.input ?? {};
+      const allowed = this.decide(tool, input);
+      // 只记录工具名和决定，不记录参数
+      this.permissionRequests.push(`${tool}:${allowed ? 'allow' : 'deny'}`);
       writeFrame(this.child.stdin, {
         type: 'control_response',
         response: {
           subtype: 'success',
           request_id: message.request_id,
-          response: { behavior: 'deny', message: 'PalDock 探测不批准任何操作' },
+          response: allowed ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'PalDock 探测拒绝了这次操作' },
         },
       });
     }

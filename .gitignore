@@ -45,4 +45,5 @@ p0-*-check.json
 p1-*.json
 p1-e2e-*.png
 p2-*-check.json
+p3-*-check.json
 tests/live/outside-*.txt
