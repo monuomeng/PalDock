@@ -243,3 +243,10 @@ export interface AgentSettings {
   runtimes: RuntimeDiscovery[];
 }
 
+/** 专业助手经 MCP 桥提交的交接记录（每次 Run 一份）。 */
+export interface RunHandoffRecord {
+  runId: string;
+  summary: string;
+  notes: string | null;
+  submittedAt: string;
+}

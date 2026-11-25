@@ -16,6 +16,7 @@ import type {
   AgentOverrideRecord,
   AgentProfileRecord,
   RunUsageRecord,
+  RunHandoffRecord,
   ApprovalRecord,
   AttentionItem,
   CheckCommand,
@@ -154,6 +155,14 @@ export interface RunStorePort {
   /** Run 结束时记下用量（只写一次）；执行器不报告时不调用。 */
   recordUsage(runId: string, usage: RunUsageRecord): void;
   getUsage(runId: string): RunUsageRecord | undefined;
+  /** 交接记录每次 Run 只收一份；已有时抛 conflict。 */
+  submitHandoff(runId: string, summary: string, notes: string | null): Change<RunHandoffRecord>;
+  getHandoff(runId: string): RunHandoffRecord | undefined;
+}
+
+/** 审计日志：只追加。actor 是调用者（例如 run:<id>），result 是 ok 或拒绝原因。 */
+export interface AuditPort {
+  append(actor: string, action: string, target: string | null, result: string): void;
 }
 
 /** 助手角色设置与按项目的执行器覆盖。 */
@@ -256,6 +265,7 @@ export interface StorePort {
   tasks: TaskStorePort;
   runs: RunStorePort;
   agents: AgentStorePort;
+  audit: AuditPort;
   messages: { append(sessionId: string, role: MessageRole, body: string, runId?: string | null): Change<MessageRecord> };
   attention: { list(): AttentionItem[]; markRead(kind: AttentionKind, itemId: string): void };
   channels: ChannelStorePort;

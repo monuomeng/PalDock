@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import type { RecoveryReport, StorePort } from '@paldock/contracts';
 import { AgentRepository } from './agent-repository.js';
 import { AttentionQueries } from './attention.js';
+import { AuditLog } from './audit-log.js';
 import { backupDataRoot, type BackupResult } from './backup.js';
 import { ChannelRepository } from './channel-repository.js';
 import { Clock } from './clock.js';
@@ -36,6 +37,7 @@ export interface Store extends StorePort {
   tasks: TaskRepository;
   runs: RunRepository;
   agents: AgentRepository;
+  audit: AuditLog;
   inbox: Inbox;
   attention: AttentionQueries;
   messages: MessageStore;
@@ -64,6 +66,7 @@ export async function openStore(dataRoot: string | ':memory:', now: () => Date =
     tasks: new TaskRepository(db, events, clock),
     runs: new RunRepository(db, events, clock),
     agents: new AgentRepository(db, events, clock),
+    audit: new AuditLog(db, clock),
     inbox: new Inbox(db, clock),
     attention: new AttentionQueries(db, clock),
     messages: new MessageStore(db, events, clock),

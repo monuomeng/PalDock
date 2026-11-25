@@ -63,6 +63,7 @@ export const COLUMNS = {
      max_run_minutes AS maxRunMinutes, max_concurrency AS maxConcurrency, version, updated_at AS updatedAt`,
   ),
   agentOverride: cols(`workspace_id AS workspaceId, role, executor`),
+  handoff: cols(`run_id AS runId, summary, notes, submitted_at AS submittedAt`),
   usage: cols(
     `input_tokens AS inputTokens, output_tokens AS outputTokens, cache_read_tokens AS cacheReadTokens,
      cache_write_tokens AS cacheWriteTokens, cost_usd AS costUsd`,

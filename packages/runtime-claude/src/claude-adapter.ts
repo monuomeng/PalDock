@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type {
+  McpServerSpec,
   RunStartRequest,
   RuntimeAdapter,
   RuntimeApprovalDecision,
@@ -125,6 +126,16 @@ export class ClaudeAdapter implements RuntimeAdapter {
 
 type ResolvedOptions = Required<Omit<ClaudeAdapterOptions, 'configuredPath' | 'configDir'>>;
 
+/**
+ * 按会话注入 MCP 服务器（配合 --strict-mcp-config 只加载这一份，P3-00 实测）。这个服务器的工具整体放行，
+ * 不再经 can_use_tool 问宿主：权限由 PalDock 服务端按令牌和角色判定，桥也不提供写文件的工具。
+ */
+function mcpArgs(server: McpServerSpec | undefined): string[] {
+  if (!server) return [];
+  const { name, command, args, env } = server;
+  return ['--mcp-config', JSON.stringify({ mcpServers: { [name]: { command, args, env } } }), '--allowedTools', `mcp__${name}`];
+}
+
 /** 一次 Run 的状态：会话与 turn 身份、挂起的审批、中断请求。 */
 class ClaudeRun implements RuntimeRun {
   private child: ChildProcessWithoutNullStreams | undefined;
@@ -152,7 +163,12 @@ class ClaudeRun implements RuntimeRun {
   async start(request: RunStartRequest): Promise<void> {
     this.cwd = request.cwd;
     this.resumeThreadId = request.resumeThreadId;
-    const args = [...this.cmd.prefixArgs, ...CLI_ARGS, ...(request.resumeThreadId ? ['--resume', request.resumeThreadId] : [])];
+    const args = [
+      ...this.cmd.prefixArgs,
+      ...CLI_ARGS,
+      ...mcpArgs(request.mcpServer),
+      ...(request.resumeThreadId ? ['--resume', request.resumeThreadId] : []),
+    ];
     // posix 下 detached 让子进程成为进程组组长，便于整树结束
     const child = spawn(this.cmd.command, args, {
       cwd: request.cwd,

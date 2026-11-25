@@ -16,7 +16,10 @@
 //   [mock:fail]            以 is_error 结束（模拟 API 报错）
 //   [mock:crash]           收到提示词后进程直接退出（会话记录里只有用户消息）
 //   [mock:crash-after-complete]  回复写进会话记录后、发出 result 之前退出
+//   [mock:mcp]             启动 --mcp-config 给的 MCP 服务器，列出工具、调用 get_task / submit_result，再越权调用 get_status，
+//                          把结果（JSON）作为最后一条回复
 // 默认：写入 mock-change.txt，流式输出几段文字后完成。
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -124,6 +127,8 @@ async function runTurn(text, cwd) {
     pendingControls.delete(id);
     send({ type: 'control_cancel_request', request_id: id });
     final = '审批已收回。';
+  } else if (text.includes('[mock:mcp]')) {
+    final = JSON.stringify(await exerciseMcp());
   } else if (text.includes('[mock:fail]')) {
     return result({ subtype: 'success', is_error: true, result: 'API Error: mock failure' });
   } else {
@@ -134,6 +139,40 @@ async function runTurn(text, cwd) {
   reply(final);
   if (text.includes('[mock:crash-after-complete]')) process.exit(1);
   result({ subtype: 'success', is_error: false, result: final });
+}
+
+/** 像真实 CLI 一样按 --mcp-config 启动 MCP 服务器，走一遍 initialize、tools/list、tools/call。 */
+async function exerciseMcp() {
+  const at = args.indexOf('--mcp-config');
+  if (at < 0) return { error: 'no --mcp-config' };
+  const [name, server] = Object.entries(JSON.parse(args[at + 1]).mcpServers)[0];
+  const child = spawn(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ['pipe', 'pipe', 'inherit'] });
+  const waiting = new Map();
+  let next = 0;
+  createInterface({ input: child.stdout }).on('line', (line) => {
+    const message = JSON.parse(line);
+    waiting.get(message.id)?.(message);
+    waiting.delete(message.id);
+  });
+  const rpc = (method, params) =>
+    new Promise((resolve) => {
+      const id = ++next;
+      waiting.set(id, resolve);
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+    });
+  try {
+    await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'mock-claude', version: '0' } });
+    const tools = (await rpc('tools/list', {})).result.tools.map((t) => t.name);
+    const task = (await rpc('tools/call', { name: 'get_task', arguments: {} })).result.structuredContent;
+    const submit = (await rpc('tools/call', { name: 'submit_result', arguments: { summary: '模拟交接' } })).result;
+    const again = (await rpc('tools/call', { name: 'submit_result', arguments: { summary: '再交一次' } })).result;
+    const denied = (await rpc('tools/call', { name: 'get_status', arguments: {} })).result;
+    const allowed = args[args.indexOf('--allowedTools') + 1];
+    return { server: name, allowed, tools, goal: task.goal, submitted: !submit.isError, resubmitDenied: again.isError === true, statusDenied: denied.isError === true };
+  } finally {
+    child.stdin.end();
+    child.kill();
+  }
 }
 
 createInterface({ input: process.stdin }).on('line', (line) => {

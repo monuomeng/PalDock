@@ -1,3 +1,4 @@
+import { CodedError } from '@paldock/contracts';
 import type {
   ApprovalChannel,
   Change,
@@ -19,6 +20,7 @@ import type {
   RunReviewRecord,
   RunStatus,
   RunUsageRecord,
+  RunHandoffRecord,
 } from '@paldock/contracts';
 import { approvalMachine, runMachine } from '@paldock/domain';
 import type { Clock } from './clock.js';
@@ -80,6 +82,12 @@ const SQL = {
     UPDATE runs SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_write_tokens = ?, cost_usd = ?
      WHERE id = ? AND input_tokens IS NULL`,
   selectUsage: `SELECT ${COLUMNS.usage()} FROM runs WHERE id = ? AND input_tokens IS NOT NULL`,
+  // 每次 Run 一份：主键冲突时不插入，RETURNING 为空
+  insertHandoff: `
+    INSERT INTO run_handoffs (run_id, summary, notes, submitted_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT (run_id) DO NOTHING
+    RETURNING ${COLUMNS.handoff()}`,
+  selectHandoff: `SELECT ${COLUMNS.handoff()} FROM run_handoffs WHERE run_id = ?`,
 } as const;
 
 const TRANSITIONS = {
@@ -255,6 +263,20 @@ export class RunRepository implements RunStorePort {
 
   getUsage(runId: string): RunUsageRecord | undefined {
     return this.db.get<RunUsageRecord>(SQL.selectUsage, runId);
+  }
+
+  submitHandoff(runId: string, summary: string, notes: string | null): Change<RunHandoffRecord> {
+    return this.db.transaction(() => {
+      const run = this.getRun(runId);
+      if (!run) throw new CodedError('not_found', 'Run 不存在');
+      const record = this.db.get<RunHandoffRecord>(SQL.insertHandoff, runId, summary, notes, this.clock.iso());
+      if (!record) throw new CodedError('conflict', '这次 Run 已经提交过交接记录');
+      return { record, events: [this.events.append(runId, { type: 'run.handoff_submitted', payload: { subtaskId: run.subtaskId } })] };
+    });
+  }
+
+  getHandoff(runId: string): RunHandoffRecord | undefined {
+    return this.db.get<RunHandoffRecord>(SQL.selectHandoff, runId);
   }
 
   addNotice(runId: string, code: RunNoticeCode, detail: string): PersistentEvent {

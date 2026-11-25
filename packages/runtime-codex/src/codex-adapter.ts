@@ -1,4 +1,5 @@
 import type {
+  McpServerSpec,
   RunStartRequest,
   RuntimeAdapter,
   RuntimeApprovalDecision,
@@ -116,6 +117,16 @@ export class CodexAdapter implements RuntimeAdapter {
 }
 
 type ResolvedOptions = Required<Omit<CodexAdapterOptions, 'configuredPath'>>;
+
+/**
+ * 按 thread 注入 MCP 服务器（不改用户的 config.toml，P3-00 实测）。approvalPolicy 为 on-request 时每次 MCP 调用都会发审批请求，
+ * 服务器级的 default_tools_approval_mode 让这些调用直接放行：权限由 PalDock 服务端按令牌和角色判定，桥也不提供写文件的工具。
+ */
+function mcpConfig(server: McpServerSpec | undefined) {
+  if (!server) return {};
+  const { name, command, args, env } = server;
+  return { config: { mcp_servers: { [name]: { command, args, env, default_tools_approval_mode: 'approve' } } } };
+}
 type Opener = (handlers: RpcHandlers) => Promise<JsonRpcStdioClient>;
 
 /** 一次 Run 的状态：thread / turn 身份、挂起的审批、取消请求。 */
@@ -149,7 +160,7 @@ class CodexRun implements RuntimeRun {
     });
     const timeout = this.options.requestTimeoutMs;
     try {
-      const threadParams = { cwd: request.cwd, ...THREAD_POLICY };
+      const threadParams = { cwd: request.cwd, ...THREAD_POLICY, ...mcpConfig(request.mcpServer) };
       const { thread } = request.resumeThreadId
         ? await this.rpc.request<{ thread: { id: string } }>('thread/resume', { threadId: request.resumeThreadId, ...threadParams }, timeout)
         : await this.rpc.request<{ thread: { id: string } }>('thread/start', { ...threadParams, ephemeral: false }, timeout);

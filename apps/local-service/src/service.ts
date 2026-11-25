@@ -1,5 +1,6 @@
 import type { Server, Socket } from 'node:net';
-import { AgentService, ChannelService, RunSupervisor, TaskService, type AdapterFactory, type CredentialPort } from '@paldock/application';
+import { fileURLToPath } from 'node:url';
+import { AgentService, ChannelService, McpGateway, RunSupervisor, TaskService, type McpCaller, type AdapterFactory, type CredentialPort } from '@paldock/application';
 import {
   ClientFrame,
   CodedError,
@@ -12,7 +13,7 @@ import {
   type RuntimeAdapter,
   type ServerFrame,
 } from '@paldock/contracts';
-import { acquirePidLock, listenIpc, readFrames, serializeFrame, tokensEqual, writeFrame } from '@paldock/platform';
+import { acquirePidLock, listenIpc, nodeRuntimeEnv, readFrames, serializeFrame, tokensEqual, writeFrame } from '@paldock/platform';
 import { P1_DEFAULTS, type P2Limits } from '@paldock/domain';
 import { ClaudeAdapter } from '@paldock/runtime-claude';
 import { CodexAdapter } from '@paldock/runtime-codex';
@@ -50,6 +51,9 @@ export interface ServiceOptions {
 
 type Outcome = { value: unknown } | { error: { code: ErrorCode; message: string } };
 
+/** MCP 桥脚本（src/ 与 dist/ 下都按包根定位）；执行器用本进程的 Node（Electron 下以 Node 模式）运行它。 */
+const MCP_BRIDGE_PATH = fileURLToPath(new URL('../bridge/mcp-bridge.mjs', import.meta.url));
+
 const eventFrames = (events: PersistentEvent[]) =>
   events.map((event) => serializeFrame({ kind: 'event', event } satisfies ServerFrame)).join('');
 
@@ -64,6 +68,7 @@ export class LocalService {
   private handlers!: Handlers;
   private supervisor!: RunSupervisor;
   private channels!: ChannelService;
+  private mcp!: McpGateway;
 
   private constructor(
     private readonly store: Store,
@@ -97,9 +102,20 @@ export class LocalService {
         service.broadcast(events);
         service.channels.onEvents(events);
       };
+      service.mcp = new McpGateway({ store, publish });
       service.supervisor = new RunSupervisor({
         store,
         runtimes,
+        mcp: {
+          gateway: service.mcp,
+          // 令牌经环境变量交给桥：只对这次 Run、这个角色的工具有效，Run 结束即作废（与服务令牌不同，从不进环境变量）
+          server: (mcpToken) => ({
+            name: 'paldock',
+            command: process.execPath,
+            args: [MCP_BRIDGE_PATH],
+            env: { ...nodeRuntimeEnv(process.execPath), PALDOCK_IPC_PATH: ipcPath, PALDOCK_MCP_TOKEN: mcpToken },
+          }),
+        },
         dataRoot,
         publish,
         publishEphemeral: (event) => service.broadcastEphemeral(event),
@@ -137,6 +153,8 @@ export class LocalService {
 
   private accept(socket: Socket): void {
     let authed = false;
+    /** MCP 桥的连接：只能列出、调用这个 Run 角色的工具，不加入事件广播。 */
+    let mcp: McpCaller | undefined;
     const helloTimer = setTimeout(() => socket.destroy(), HELLO_TIMEOUT_MS);
     const send = (frame: ServerFrame) => writeFrame(socket, frame);
     const drop = (reason: string) => {
@@ -155,6 +173,20 @@ export class LocalService {
       if (!parsed.success) return drop('invalid frame');
       const frame = parsed.data;
 
+      if (!authed && frame.kind === 'mcp_hello') {
+        mcp = this.mcp.authenticate(frame.token);
+        if (!mcp) return drop('mcp unauthorized');
+        authed = true;
+        clearTimeout(helloTimer);
+        send({ kind: 'welcome', schemaVersion: SCHEMA_VERSION, serviceVersion: SERVICE_VERSION, headSeq: 0 });
+        return;
+      }
+      if (mcp) {
+        if (frame.kind !== 'mcp_list' && frame.kind !== 'mcp_call') return drop('mcp client sent a non-mcp frame');
+        const caller = mcp;
+        const outcome = this.mcpCall(() => (frame.kind === 'mcp_list' ? this.mcp.list(caller) : this.mcp.call(caller, frame.tool, frame.args)));
+        return send('error' in outcome ? { kind: 'result', id: frame.id, ok: false, error: outcome.error } : { kind: 'result', id: frame.id, ok: true, value: outcome.value ?? null });
+      }
       if (!authed) {
         if (frame.kind !== 'hello' || !tokensEqual(this.token, frame.token)) return drop('unauthorized');
         authed = true;
@@ -165,7 +197,7 @@ export class LocalService {
         this.clients.add(socket);
         return;
       }
-      if (frame.kind !== 'command') return drop('duplicate hello');
+      if (frame.kind !== 'command') return drop('unexpected frame');
 
       const id = frame.id;
       void this.execute(frame.name, frame.args).then((result) =>
@@ -185,6 +217,17 @@ export class LocalService {
       if (error instanceof CodedError) return { error: { code: error.code, message: error.message } };
       // 不把内部错误细节（可能含路径或 SQL）返回给客户端
       this.log(`command ${name} failed: ${(error as Error).name}`);
+      return { error: { code: 'internal', message: '内部错误' } };
+    }
+  }
+
+  /** MCP 工具调用的结果：业务错误原样返回给助手，内部错误不带细节。 */
+  private mcpCall(run: () => unknown): Outcome {
+    try {
+      return { value: run() };
+    } catch (error) {
+      if (error instanceof CodedError) return { error: { code: error.code, message: error.message } };
+      this.log(`mcp call failed: ${(error as Error).name}`);
       return { error: { code: 'internal', message: '内部错误' } };
     }
   }

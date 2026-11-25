@@ -71,6 +71,8 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
   /** 项目设置（远程审批等级）变更；聚合 ID 为 workspaceId。 */
   z.object({ type: z.literal('workspace.settings_changed'), payload: z.object({ remoteApprovalLevel: RemoteApprovalLevel }) }),
   /** 角色的默认执行器变更；聚合 ID 为角色名。 */
+  /** 专业助手经 MCP 桥提交了交接记录；聚合 ID 为 runId。 */
+  z.object({ type: z.literal('run.handoff_submitted'), payload: z.object({ subtaskId: Id }) }),
   z.object({ type: z.literal('agent.profile_changed'), payload: z.object({ executor: Executor }) }),
   /** 项目对某个角色的执行器覆盖变更（null 为取消覆盖）；聚合 ID 为 workspaceId。 */
   z.object({ type: z.literal('workspace.agent_override_changed'), payload: z.object({ role: AgentRole, executor: Executor.nullable() }) }),

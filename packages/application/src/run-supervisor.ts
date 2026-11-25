@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AgentRole } from '@paldock/contracts';
 import type {
+  McpServerSpec,
   Executor,
   WorkspaceAccess,
   ApprovalDecision,
@@ -27,6 +28,7 @@ import { runCheck } from './check-runner.js';
 import { addWorktree, branchCommit, headCommit, stageAndDiffStat } from './git.js';
 import { redact } from './redact.js';
 import { riskOf } from './risk.js';
+import type { McpGateway } from './mcp-gateway.js';
 import { moveSubtask, moveTask } from './transitions.js';
 
 export type Limits = typeof P1_DEFAULTS;
@@ -38,6 +40,8 @@ export interface SupervisorDeps {
    * 启动前做能力检查；只有一个适配器时（测试、离线模拟）所有角色都用它，不做检查。
    */
   runtimes: Readonly<Record<string, RuntimeAdapter>>;
+  /** MCP 桥：每次 Run 签发一次性令牌并把桥作为这次会话的 MCP 服务器注入；缺省时不注入（测试）。 */
+  mcp?: { gateway: McpGateway; server(token: string): McpServerSpec };
   dataRoot: string;
   publish(events: PersistentEvent[]): void;
   publishEphemeral(event: EphemeralEvent): void;
@@ -198,6 +202,14 @@ export class RunSupervisor {
     return { name, access: profile.workspaceAccess, label: profile.displayName };
   }
 
+  /** 给这次 Run 签发 MCP 令牌（有效期为角色的单次时长上限再加 10 分钟），返回要注入的服务器。 */
+  private mcpServerFor(run: RunRecord, subtask: SubtaskRecord): McpServerSpec | undefined {
+    const parsed = AgentRole.safeParse(subtask.role);
+    if (!this.deps.mcp || !parsed.success) return undefined;
+    const minutes = (this.deps.store.agents.getProfile(parsed.data)?.maxRunMinutes ?? 60) + 10;
+    return this.deps.mcp.server(this.deps.mcp.gateway.issue(run.id, parsed.data, minutes * 60_000));
+  }
+
   /** 启动前的能力检查（只在多执行器时做）；不满足时抛出原因，按启动失败处理。 */
   private async readyRuntime(executor: { name: string; access?: WorkspaceAccess; label: string }): Promise<RuntimeAdapter> {
     const runtime = this.adapter(executor.name);
@@ -232,8 +244,15 @@ export class RunSupervisor {
     try {
       const runtime = await this.readyRuntime(executor);
       live.worktree = await this.ensureWorktree(live);
+      const mcpServer = this.mcpServerFor(live.run, live.subtask);
       live.handle = await runtime.start(
-        { runId: live.run.id, cwd: live.worktree, prompt: plan.prompt, ...(plan.threadId ? { resumeThreadId: plan.threadId } : {}) },
+        {
+          runId: live.run.id,
+          cwd: live.worktree,
+          prompt: plan.prompt,
+          ...(plan.threadId ? { resumeThreadId: plan.threadId } : {}),
+          ...(mcpServer ? { mcpServer } : {}),
+        },
         (event) => this.onEvent(live, event),
       );
     } catch (error) {
@@ -393,6 +412,7 @@ export class RunSupervisor {
 
   /** 让出并发名额（Run 与证据收集都结束后调用一次）。 */
   private release(live: LiveRun): void {
+    this.deps.mcp?.gateway.revoke(live.run.id);
     if (this.live.get(live.subtask.id) === live) this.live.delete(live.subtask.id);
     queueMicrotask(() => this.dequeue());
   }

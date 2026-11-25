@@ -37,6 +37,16 @@ export interface RunStartRequest {
    * （上下文和审批边界会因此改变）。是否改为新建由用户决定，新建时开新的 Run。
    */
   resumeThreadId?: string;
+  /** 只属于这次 Run 的 MCP 服务器（PalDock 的 MCP 桥）；执行器按会话注入，不改用户的全局配置。 */
+  mcpServer?: McpServerSpec;
+}
+
+/** stdio MCP 服务器的启动方式。env 里带这次 Run 的一次性令牌，只能调用这个角色的编排工具。 */
+export interface McpServerSpec {
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
 }
 
 export interface RuntimeApprovalRequest {

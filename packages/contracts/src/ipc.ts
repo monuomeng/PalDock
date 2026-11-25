@@ -144,8 +144,19 @@ export const ClientFrame = z.discriminatedUnion('kind', [
     afterSeq: z.number().int().nonnegative().optional(),
   }),
   z.object({ kind: z.literal('command'), id: Id, name: z.enum(COMMAND_NAMES), args: z.unknown() }),
+  /** MCP 桥的握手：只带这次 Run 的一次性令牌，连接之后只能列出、调用这个角色的工具，收不到事件。 */
+  z.object({ kind: z.literal('mcp_hello'), schemaVersion: z.literal(SCHEMA_VERSION), token: z.string().min(32).max(200) }),
+  z.object({ kind: z.literal('mcp_list'), id: Id }),
+  z.object({ kind: z.literal('mcp_call'), id: Id, tool: z.string().min(1).max(64), args: z.unknown() }),
 ]);
 export type ClientFrame = z.infer<typeof ClientFrame>;
+
+/** MCP 桥暴露给执行器的一个工具（MCP tools/list 的条目）。 */
+export interface McpToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
 
 export const ErrorCode = z.enum([
   'unauthorized',
