@@ -20,7 +20,7 @@ export const COLUMNS = {
     `id, workspace_id AS workspaceId, title, goal, status, check_command AS checkCommand,
      check_confirmed_at AS checkConfirmedAt, origin_conversation_id AS originConversationId,
      continued_from_task_id AS continuedFromTaskId, integration_branch AS integrationBranch,
-     integration_worktree AS integrationWorktree, integration_base AS integrationBase,
+     integration_worktree AS integrationWorktree, integration_base AS integrationBase, kind,
      version, created_at AS createdAt, updated_at AS updatedAt`,
   ),
   subtask: cols(
@@ -75,6 +75,12 @@ export const COLUMNS = {
     `id, task_id AS taskId, subtask_id AS subtaskId, source_sha AS sourceSha, target_old AS targetOld,
      candidate_sha AS candidateSha, phase, conflict_files AS conflictFiles, detail, created_at AS createdAt, updated_at AS updatedAt`,
   ),
+  wake: cols(
+    `id, session_id AS sessionId, trigger, summary, status, run_id AS runId, requests, note, created_at AS createdAt,
+     started_at AS startedAt, ended_at AS endedAt`,
+  ),
+  notice: cols(`id, session_id AS sessionId, run_id AS runId, kind, body, status, escalated_at AS escalatedAt, created_at AS createdAt`),
+  summary: cols(`session_id AS sessionId, version, body, run_id AS runId, wakes_done AS wakesDone, created_at AS createdAt`),
   handoff: cols(`run_id AS runId, summary, notes, submitted_at AS submittedAt`),
   usage: cols(
     `input_tokens AS inputTokens, output_tokens AS outputTokens, cache_read_tokens AS cacheReadTokens,

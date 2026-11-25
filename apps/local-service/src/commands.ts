@@ -1,4 +1,4 @@
-import type { AgentService, ChannelService, IntegrationService, PlanService, TaskService } from '@paldock/application';
+import type { AgentService, ChannelService, CoordinatorService, IntegrationService, PlanService, TaskService } from '@paldock/application';
 import type { CommandArgs, CommandName, CommandResultOf } from '@paldock/contracts';
 import type { Store } from '@paldock/storage-sqlite';
 import type { z } from 'zod';
@@ -16,6 +16,7 @@ export function createHandlers(
   tasks: TaskService,
   plans: PlanService,
   integration: IntegrationService,
+  coordinator: CoordinatorService,
   channels: ChannelService, agents: AgentService, info: ServiceInfo): Handlers {
   return {
     'service.status': () => info,
@@ -28,6 +29,11 @@ export function createHandlers(
     'review.decide': ({ subtaskId, expectedVersion, decision, note }) => tasks.decideReview(subtaskId, expectedVersion, decision, note),
     'run.recover': ({ subtaskId, expectedVersion, action }) => tasks.recover(subtaskId, expectedVersion, action),
     'run.checkOutput': ({ runId }) => tasks.checkOutput(runId),
+    'chat.sessions': ({ workspaceId }) => coordinator.sessions(workspaceId),
+    'chat.newSession': ({ workspaceId, title }) => coordinator.newSession(workspaceId, title),
+    'chat.get': ({ sessionId, taskId, limit }) => coordinator.detail(sessionId ?? coordinator.sessionOfConversation(taskId!), limit),
+    'chat.send': ({ sessionId, text, idempotencyKey }) => coordinator.send(sessionId, text, idempotencyKey),
+    'notice.ack': ({ sessionId }) => coordinator.ack(sessionId),
     'merge.redo': ({ subtaskId, expectedVersion }) => integration.redo(subtaskId, expectedVersion),
     'plan.confirm': ({ planId, expectedVersion }) => plans.confirm(planId, expectedVersion),
     'plan.reject': ({ planId, expectedVersion, note }) => plans.reject(planId, expectedVersion, note),

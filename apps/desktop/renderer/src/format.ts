@@ -44,6 +44,7 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   review: '待命中',
   blocked: '阻塞',
   unconfirmed_run: '执行状态待确认',
+  notice: '协调助手',
 };
 
 export const CHECK_LABEL: Record<CheckStatus, string> = {

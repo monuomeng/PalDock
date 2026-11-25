@@ -20,6 +20,7 @@ import type {
 } from './states.js';
 import type { RuntimeDiscovery } from './runtime.js';
 import type { GateStage, PlanDetail } from './plans.js';
+import type { TaskKind } from './conversations.js';
 
 /**
  * 跨进程传递的记录形状（存储层 RETURNING 的列与这里一一对应，管理窗口直接显示）。
@@ -59,6 +60,8 @@ export interface TaskRecord {
   integrationBranch: string | null;
   integrationWorktree: string | null;
   integrationBase: string | null;
+  /** conversation：协调助手主会话的载体，任务列表不列。 */
+  kind: TaskKind;
   version: number;
   createdAt: string;
   updatedAt: string;

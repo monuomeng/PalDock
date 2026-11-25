@@ -73,7 +73,7 @@ describe('MCP 网关', () => {
   it('协调助手只看到协调工具；交接记录每次 Run 只收一份', async () => {
     const { run, gateway } = await seedRun();
     const coordinator = gateway.authenticate(gateway.issue('run_main', 'coordinator', 60_000))!;
-    expect(gateway.list(coordinator).map((t) => t.name)).toEqual(['get_status', 'propose_plan']);
+    expect(gateway.list(coordinator).map((t) => t.name)).toEqual(['notify_user', 'write_summary', 'get_status', 'propose_plan']);
     expect(gateway.call(coordinator, 'get_status', {})).toEqual([expect.objectContaining({ title: '加记住我' })]);
 
     const dev = gateway.authenticate(gateway.issue(run.id, 'developer', 60_000))!;

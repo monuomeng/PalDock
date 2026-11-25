@@ -61,3 +61,22 @@ export const P2_DEFAULTS = {
 } as const;
 
 export type P2Limits = typeof P2_DEFAULTS;
+
+/**
+ * P3-07 协调助手唤醒循环的占位默认值（ADR 0002「自动推进护栏」与 02「唤醒与触发器」）。
+ */
+export const P3_DEFAULTS = {
+  /** 任务事件触发的唤醒：同一会话两次之间至少隔多久、每天（滚动 24 小时）最多几次。你发的消息不受限。 */
+  eventWakeMinIntervalMs: 2 * 60 * 1000,
+  eventWakesPerDay: 20,
+  /** 单次唤醒的请求上限：到软上限提醒收尾，超过硬上限强制停止。按协调助手的 MCP 工具调用计数（模型请求的近似）。 */
+  wakeSoftRequests: 20,
+  wakeHardRequests: 40,
+  /** 每完成多少次唤醒写一次滚动摘要；新开原生会话时注入最近几条消息。 */
+  summaryEveryWakes: 20,
+  contextMessages: 10,
+  /** 新开原生会话时附上的 FTS5 历史片段条数。 */
+  historySnippets: 5,
+} as const;
+
+export type P3Limits = typeof P3_DEFAULTS;

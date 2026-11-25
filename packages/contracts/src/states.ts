@@ -62,7 +62,7 @@ export const MessageRole = z.enum(['user', 'assistant', 'system']);
 export type MessageRole = z.infer<typeof MessageRole>;
 
 /** 「待我处理」的条目类型，与 attention_items 视图的 kind 列一致。 */
-export const AttentionKind = z.enum(['approval', 'blocked', 'review', 'unconfirmed_run']);
+export const AttentionKind = z.enum(['approval', 'blocked', 'review', 'unconfirmed_run', 'notice']);
 export type AttentionKind = z.infer<typeof AttentionKind>;
 
 /**

@@ -1,6 +1,6 @@
 import type { Server, Socket } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { AgentService, ChannelService, IntegrationService, McpGateway, PlanService, ReviewGate, RunSupervisor, TaskGraphScheduler, TaskService, type McpCaller, type AdapterFactory, type CredentialPort } from '@paldock/application';
+import { AgentService, ChannelService, CoordinatorService, IntegrationService, McpGateway, PlanService, ReviewGate, RunSupervisor, TaskGraphScheduler, TaskService, type McpCaller, type AdapterFactory, type CredentialPort } from '@paldock/application';
 import {
   ClientFrame,
   CodedError,
@@ -45,6 +45,8 @@ export interface ServiceOptions {
   runtimes?: Record<string, RuntimeAdapter>;
   /** 覆盖占位默认值（测试用）。 */
   limits?: ConstructorParameters<typeof RunSupervisor>[0]['limits'];
+  /** 协调助手唤醒循环的限额（测试用）。 */
+  coordinatorLimits?: ConstructorParameters<typeof CoordinatorService>[0]['limits'];
   /** 外部渠道的适配器工厂、凭据库与默认值；缺省为飞书/Telegram 适配器与系统凭据库（测试注入假的）。 */
   channels?: { createAdapter?: AdapterFactory; credentials?: CredentialPort; limits?: Partial<P2Limits> };
 }
@@ -72,6 +74,7 @@ export class LocalService {
   private scheduler!: TaskGraphScheduler;
   private gate!: ReviewGate;
   private integration!: IntegrationService;
+  private coordinator!: CoordinatorService;
 
   private constructor(
     private readonly store: Store,
@@ -107,10 +110,11 @@ export class LocalService {
         service.channels.onEvents(events);
         service.scheduler.onEvents(events);
         service.gate.onEvents(events);
+        service.coordinator.onEvents(events);
       };
       // 计划用例依赖调度器，调度器依赖带这个网关的监管器：propose_plan 的后端延后取
       let plans: PlanService | undefined;
-      service.mcp = new McpGateway({ store, publish, plans: () => plans });
+      service.mcp = new McpGateway({ store, publish, plans: () => plans, coordinator: () => service.coordinator });
       service.supervisor = new RunSupervisor({
         store,
         runtimes,
@@ -134,6 +138,7 @@ export class LocalService {
       const limits = options.limits ? { limits: options.limits } : {};
       const integration = new IntegrationService({ store, supervisor: service.supervisor, dataRoot, publish, log, ...limits });
       service.integration = integration;
+      service.coordinator = new CoordinatorService({ store, supervisor: service.supervisor, publish, log, ...(options.coordinatorLimits ? { limits: options.coordinatorLimits } : {}) });
       service.gate = new ReviewGate({ store, supervisor: service.supervisor, publish, log, integration, ...limits });
       plans = new PlanService({ store, scheduler: service.scheduler, integration, publish });
       const tasks = new TaskService({ store, supervisor: service.supervisor, scheduler: service.scheduler, integration, dataRoot, publish });
@@ -148,13 +153,14 @@ export class LocalService {
         ...(options.channels?.limits ? { limits: options.channels.limits } : {}),
       });
       const agents = new AgentService({ store, runtimes, publish });
-      service.handlers = createHandlers(store, tasks, plans, integration, service.channels, agents, {
+      service.handlers = createHandlers(store, tasks, plans, integration, service.coordinator, service.channels, agents, {
         version: SERVICE_VERSION,
         startedAt: new Date().toISOString(),
         interruptedRuns,
         runtime: Object.keys(runtimes).join(', '),
       });
       service.supervisor.start();
+      service.coordinator.start();
       service.channels.start();
       service.server = await listenIpc(ipcPath, (socket) => service.accept(socket));
       log(`migration v${store.migration.from}→v${store.migration.to}, interrupted runs: ${interruptedRuns}`);
@@ -277,6 +283,7 @@ export class LocalService {
   /** 正常退出：先停渠道（不再接收外部消息），再结束执行器进程树，让未结束的 Run 进入 interrupted 并落库，最后关闭连接、数据库和锁。 */
   async stop(): Promise<void> {
     await this.channels.stop();
+    this.coordinator.stop();
     await this.supervisor.stop();
     await this.integration.idle();
     this.broadcast(this.store.interruptActiveWork('应用退出').events);

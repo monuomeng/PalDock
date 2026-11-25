@@ -39,6 +39,22 @@ export const MCP_TOOLS = {
       .strict()
       .refine((v) => v.decision === 'accept' || (v.reason?.length ?? 0) > 0, { message: '退回时要写明理由' }),
   },
+  notify_user: {
+    roles: COORDINATOR,
+    description:
+      '给用户发一条消息：汇报进展，或问一个需要用户决定的问题。先出现在桌面；用户没在电脑前时会发到已绑定的飞书或 Telegram 单聊。返回编号（例如 Q12），问题请让用户回复时带上编号。',
+    args: z
+      .object({
+        message: z.string().trim().min(1).max(2000).describe('要告诉用户的话，简洁、说清楚需要用户做什么'),
+        question: z.boolean().default(false).describe('需要用户回答时为 true'),
+      })
+      .strict(),
+  },
+  write_summary: {
+    roles: COORDINATOR,
+    description: '写这个会话的滚动摘要：到目前为止的目标、已定的事、进行中的任务、待用户决定的问题。PalDock 提示时调用；新开会话时会把它交给你。',
+    args: z.object({ summary: z.string().trim().min(1).max(8000).describe('摘要正文') }).strict(),
+  },
   get_status: {
     roles: COORDINATOR,
     description: '列出最近的任务及其状态。',

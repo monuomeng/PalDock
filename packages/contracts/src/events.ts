@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { PlanStatus } from './plans.js';
+import { NoticeKind, WakeStatus, WakeTrigger } from './conversations.js';
 import { ChannelAccountStatus, ChannelProvider, ChannelState, InboundRejection } from './channels.js';
 import {
   ApprovalChannel,
@@ -83,6 +84,18 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
   z.object({ type: z.literal('approval.escalated'), payload: z.object({ channels: z.array(ChannelProvider) }) }),
   /** 项目设置（远程审批等级）变更；聚合 ID 为 workspaceId。 */
   z.object({ type: z.literal('workspace.settings_changed'), payload: z.object({ remoteApprovalLevel: RemoteApprovalLevel }) }),
+  /** 新建了协调助手主会话；聚合 ID 为会话 ID。 */
+  z.object({ type: z.literal('main_session.created'), payload: z.object({ workspaceId: Id }) }),
+  /** 一次唤醒进入新状态；聚合 ID 为会话 ID。 */
+  z.object({ type: z.literal('wake.changed'), payload: z.object({ wakeId: z.number().int().positive(), status: WakeStatus, trigger: WakeTrigger }) }),
+  /** 协调助手发来通知；聚合 ID 为会话 ID。 */
+  z.object({ type: z.literal('notice.created'), payload: z.object({ noticeId: z.number().int().positive(), kind: NoticeKind }) }),
+  /** 会话里的通知已在桌面看过；聚合 ID 为会话 ID。 */
+  z.object({ type: z.literal('notice.read'), payload: z.object({ count: z.number().int().nonnegative() }) }),
+  /** 通知已升级到外部单聊；聚合 ID 为会话 ID。 */
+  z.object({ type: z.literal('notice.escalated'), payload: z.object({ noticeId: z.number().int().positive(), channels: z.array(ChannelProvider) }) }),
+  /** 协调助手写了新的滚动摘要；聚合 ID 为会话 ID。 */
+  z.object({ type: z.literal('summary.written'), payload: z.object({ version: z.number().int().positive() }) }),
   /** 项目的 worktree 准备命令设置或取消；聚合 ID 为 workspaceId。 */
   z.object({ type: z.literal('workspace.prepare_command_changed'), payload: z.object({ configured: z.boolean() }) }),
   /** 专业助手经 MCP 桥提交了交接记录；聚合 ID 为 runId。 */

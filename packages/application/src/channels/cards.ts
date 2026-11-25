@@ -10,7 +10,9 @@ import type {
   TaskRecord,
   TaskSummary,
   WorkspaceRecord,
+  NoticeRecord,
 } from '@paldock/contracts';
+import { noticeRef } from '@paldock/contracts';
 import { taskKey } from '@paldock/domain';
 
 /**
@@ -230,6 +232,14 @@ export function taskProgressCard(
 /**
  * 升级到外部单聊的审批。不允许远程批准（等级或类别不允许）时不放按钮，只提醒到桌面处理。
  */
+/** 协调助手的通知或问题（桌面没人看时升级到单聊）；带编号，回复时带上它。 */
+export function noticeCard(notice: NoticeRecord): Card {
+  const ref = noticeRef(notice.id);
+  const lines = [clip(notice.body, 1500)];
+  if (notice.kind === 'question') lines.push('', `回复时请带上编号 ${ref}，或到电脑上的 PalDock 对话里回答。`);
+  return card(notice.kind === 'question' ? `协调助手的问题 · ${ref}` : `协调助手 · ${ref}`, notice.kind === 'question' ? 'warning' : 'info', lines);
+}
+
 export function approvalCard(c: EscalationCandidate, buttons: { approve: string; deny: string } | undefined, why: string | null): Card {
   const { approval } = c;
   const lines = [

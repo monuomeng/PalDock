@@ -14,6 +14,7 @@ import { migrate, type MigrateResult } from './migrations/index.js';
 import { Outbox } from './outbox.js';
 import { PlanRepository } from './plan-repository.js';
 import { MergeRepository } from './merge-repository.js';
+import { CoordinatorRepository } from './coordinator-repository.js';
 import { interruptActiveWork } from './recovery.js';
 import { RunRepository } from './run-repository.js';
 import { TaskRepository } from './task-repository.js';
@@ -30,6 +31,7 @@ export type { MessageStore } from './messages.js';
 export type { Outbox } from './outbox.js';
 export type { PlanRepository } from './plan-repository.js';
 export type { MergeRepository } from './merge-repository.js';
+export type { CoordinatorRepository } from './coordinator-repository.js';
 export { MIGRATIONS, migrate, type MigrateResult, type Migration } from './migrations/index.js';
 export { ACTIVE_RUN_STATUSES, interruptActiveWork } from './recovery.js';
 export type { RunRepository } from './run-repository.js';
@@ -43,6 +45,7 @@ export interface Store extends StorePort {
   agents: AgentRepository;
   plans: PlanRepository;
   merges: MergeRepository;
+  coordinator: CoordinatorRepository;
   audit: AuditLog;
   inbox: Inbox;
   attention: AttentionQueries;
@@ -73,6 +76,7 @@ export async function openStore(dataRoot: string | ':memory:', now: () => Date =
     tasks,
     plans: new PlanRepository(db, events, clock, tasks),
     merges: new MergeRepository(db, clock),
+    coordinator: new CoordinatorRepository(db, events, clock),
     runs: new RunRepository(db, events, clock),
     agents: new AgentRepository(db, events, clock),
     audit: new AuditLog(db, clock),

@@ -11,7 +11,7 @@ import type {
   TaskRecord,
 } from '@paldock/contracts';
 import { canApproveRemotely, shouldEscalateApproval, subtaskMachine, type DesktopPresence, type P2Limits } from '@paldock/domain';
-import { approvalCard, approvalDecidedCard, taskProgressCard } from './cards.js';
+import { approvalCard, approvalDecidedCard, noticeCard, taskProgressCard } from './cards.js';
 
 export interface NotifierDeps {
   store: StorePort;
@@ -130,11 +130,26 @@ export class ChannelNotifier {
       .escalationCandidates()
       .filter((c) => shouldEscalateApproval(Date.parse(c.approval.requestedAt), nowMs, presence, this.limits.escalationWaitMs));
     const providers = [...new Set(targets.map((t) => t.provider))] as ChannelProvider[];
+    this.escalateNotices(targets, providers, presence, nowMs);
     for (const candidate of candidates) {
       this.deps.store.transaction(() => {
         const event = this.channels.markEscalated(candidate.approval.id, providers);
         if (!event) return; // 期间已被处理或已升级
         for (const conversation of targets) this.sendApproval(conversation, candidate, nowMs);
+        this.deps.publish([event]);
+      });
+    }
+  }
+
+  /** 协调助手的通知：和审批同一套升级规则（桌面没人看、锁屏、空闲）；在桌面看过的不再外发。每条只外发一次。 */
+  private escalateNotices(targets: ConversationRecord[], providers: ChannelProvider[], presence: DesktopPresence, nowMs: number): void {
+    const { coordinator } = this.deps.store;
+    for (const notice of coordinator.unescalatedNotices()) {
+      if (!shouldEscalateApproval(Date.parse(notice.createdAt), nowMs, presence, this.limits.escalationWaitMs)) continue;
+      this.deps.store.transaction(() => {
+        const event = coordinator.markNoticeEscalated(notice.id, providers);
+        if (!event) return;
+        for (const conversation of targets) this.deps.send(conversation, noticeCard(notice), `notice:${notice.id}`);
         this.deps.publish([event]);
       });
     }

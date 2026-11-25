@@ -94,6 +94,7 @@ const SQL = {
     SELECT ${SUMMARY_COLUMNS}
       FROM tasks t
       LEFT JOIN subtasks s ON s.task_id = t.id AND s.plan_id IS NULL
+     WHERE t.kind = 'work'
      ORDER BY t.created_at DESC
      LIMIT ?`,
   // 外部渠道的 /continue 列表只列单子任务的任务（任务图在渠道里的入口随 P3-10）
@@ -101,7 +102,7 @@ const SQL = {
     SELECT ${SUMMARY_COLUMNS}
       FROM subtasks s
       JOIN tasks t ON t.id = s.task_id
-     WHERE s.plan_id IS NULL
+     WHERE s.plan_id IS NULL AND t.kind = 'work'
      ORDER BY s.updated_at DESC
      LIMIT ?`,
 } as const;

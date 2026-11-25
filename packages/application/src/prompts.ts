@@ -87,6 +87,45 @@ export function mergeRedoPrompt(goal: string, conflicts: readonly string[], deta
   return `${what}\n\n子任务的目标：\n${goal}\n\n${FRAME}`;
 }
 
+/** 一次唤醒的上下文：按顺序拼，越靠前越重要；超预算时截断后面的层。 */
+export interface WakeContext {
+  project: { name: string; rootPath: string };
+  /** 本次唤醒：你的消息或一行任务事件摘要。 */
+  wake: { trigger: 'user_message' | 'task_event'; summary: string };
+  /** 本项目任务板（每行一个任务）。 */
+  board: string[];
+  /** 新开原生会话时才有：最新滚动摘要、最近的消息、检索到的历史片段。 */
+  fresh?: { summary: string | null; messages: { role: string; body: string }[]; history: string[] };
+  /** 这次结束前要写滚动摘要。 */
+  askSummary: boolean;
+}
+
+const COORDINATOR_RULES = [
+  '你是 PalDock 的协调助手，和用户在这个项目里协作。',
+  '- 你只读：可以看项目里的代码和文档，不修改、不提交任何文件。',
+  '- 要动手的事用 propose_plan 拆成子任务（开发、测试、文档、调研……），用户确认后由专业助手执行；简单的问题直接回答。',
+  '- get_status 看任务板；需要用户决定或要向用户汇报时用 notify_user（会先出现在桌面，用户不在电脑前时发到手机）。',
+  '- 你在这里写的回复就是对话里的消息，简洁、说清楚下一步。',
+].join('\n');
+
+/** 协调助手每次唤醒的提示词。原生会话的压缩只在单次 Run 内使用，事实以这里给的为准。 */
+export function wakePrompt(ctx: WakeContext, budget = 24_000): string {
+  const layers: string[] = [`${COORDINATOR_RULES}\n项目：${ctx.project.name}（${ctx.project.rootPath}）`];
+  layers.push(ctx.wake.trigger === 'user_message' ? `用户说：\n${ctx.wake.summary}` : `任务事件（不是用户的消息）：\n${ctx.wake.summary}\n请决定下一步：需要时提一个新计划（例如解决冲突的子任务），或用 notify_user 向用户汇报。`);
+  if (ctx.askSummary) layers.push('这次结束前请调用 write_summary，写这个会话到目前为止的滚动摘要：目标、已定的事、进行中的任务、待用户决定的问题。');
+  if (ctx.fresh?.summary) layers.push(`这个会话之前的摘要：\n${ctx.fresh.summary}`);
+  if (ctx.fresh?.messages.length) layers.push(`最近的对话：\n${ctx.fresh.messages.map((m) => `${m.role === 'user' ? '用户' : '你'}：${m.body.slice(0, 1000)}`).join('\n')}`);
+  layers.push(`任务板：\n${ctx.board.length > 0 ? ctx.board.join('\n') : '（还没有任务）'}`);
+  if (ctx.fresh?.history.length) layers.push(`可能相关的历史片段：\n${ctx.fresh.history.map((h) => `- ${h.slice(0, 300)}`).join('\n')}`);
+  let out = '';
+  for (const layer of layers) {
+    const next = out ? `${out}\n\n${layer}` : layer;
+    if (next.length > budget) break;
+    out = next;
+  }
+  return out;
+}
+
 export function resumePrompt(goal: string): string {
   return `上一轮执行被中断（PalDock 服务重启或执行器断线）。请先检查工作目录的当前状态，再继续完成目标：\n${goal}\n\n${FRAME}`;
 }

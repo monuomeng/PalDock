@@ -2,7 +2,7 @@ import type { AttentionItem } from '@paldock/contracts';
 import { call } from '../api.js';
 import { h } from '../dom.js';
 import { ATTENTION_LABEL, time } from '../format.js';
-import { navigate, taskLink } from '../router.js';
+import { chatLink, navigate, taskLink } from '../router.js';
 
 /**
  * 首页「待我处理」：审批、待命中、阻塞、执行状态待确认，按时间排序。
@@ -23,7 +23,8 @@ export async function attentionView(): Promise<HTMLElement> {
 function row(item: AttentionItem): HTMLElement {
   const open = async () => {
     if (!item.read) await call('attention.markRead', { itemKind: item.kind, itemId: item.itemId }).catch(() => {});
-    navigate(taskLink(item.taskId, item.runId));
+    // 协调助手的通知在对话页看；其余打开对应任务（和那次 Run）
+    navigate(item.kind === 'notice' ? chatLink({ taskId: item.taskId }) : taskLink(item.taskId, item.runId));
   };
   return h(
     'li',

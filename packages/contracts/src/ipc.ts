@@ -8,6 +8,7 @@ import {
   type PairingRecord,
 } from './channels.js';
 import { CheckCommand, type AgentOverrideRecord, type AgentSettings, type AttentionItem, type MessageRecord, type TaskDetail, type TaskSummary, type WorkspaceRecord } from './records.js';
+import type { ConversationDetail, MainSessionRecord } from './conversations.js';
 import { AgentRole, ApprovalDecision, AttentionKind, Executor, RemoteApprovalLevel, ReviewDecision, SCHEMA_VERSION } from './states.js';
 
 /** 单帧上限；超长帧直接断开，防止本机客户端撑爆内存。 */
@@ -48,6 +49,17 @@ export const CommandArgs = {
   'run.checkOutput': z.object({ runId: Id }),
   /** 合入集成分支冲突的节点交回开发助手：把集成分支最新提交合进节点 worktree（留冲突标记），回原会话处理。 */
   'merge.redo': z.object({ subtaskId: Id, expectedVersion: Version }),
+  /** 项目的协调助手主会话；还没有时建一个默认的。 */
+  'chat.sessions': z.object({ workspaceId: Id }),
+  'chat.newSession': z.object({ workspaceId: Id, title: z.string().trim().min(1).max(60).optional() }),
+  /** 按会话 ID，或按它的对话任务 ID（「待我处理」里的通知条目只带任务 ID）。 */
+  'chat.get': z
+    .object({ sessionId: Id.optional(), taskId: Id.optional(), limit: z.number().int().positive().max(500).default(100) })
+    .refine((v) => (v.sessionId === undefined) !== (v.taskId === undefined), { message: '请给会话 ID 或任务 ID 之一' }),
+  /** 你在对话里说的话：存为消息并唤醒协调助手；重复提交（同一幂等键）只算一次。 */
+  'chat.send': z.object({ sessionId: Id, text: z.string().trim().min(1).max(8000), idempotencyKey: z.string().min(8).max(100) }),
+  /** 会话里的通知在桌面看过了：不再外发。 */
+  'notice.ack': z.object({ sessionId: Id }),
   /** 确认协调助手提出的计划：按节点建子任务并开始派单。 */
   'plan.confirm': z.object({ planId: Id, expectedVersion: Version }),
   /** 退回计划，任务留在草稿，协调助手可以再提一版。 */
@@ -118,6 +130,11 @@ export interface CommandResults {
   'run.recover': void;
   'run.checkOutput': string;
   'merge.redo': void;
+  'chat.sessions': MainSessionRecord[];
+  'chat.newSession': MainSessionRecord;
+  'chat.get': ConversationDetail;
+  'chat.send': void;
+  'notice.ack': void;
   'plan.confirm': void;
   'plan.reject': void;
   'events.since': PersistentEvent[];

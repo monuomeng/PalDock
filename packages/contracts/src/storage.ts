@@ -12,6 +12,7 @@ import type {
   PairingRecord,
 } from './channels.js';
 import type { PersistentEvent, RunNoticeCode } from './events.js';
+import type { MainSessionRecord, NoticeKind, NoticeRecord, SummaryRecord, WakeRecord, WakeStatus, WakeTrigger } from './conversations.js';
 import type { GateStage, GraphNode, MergeOpRecord, MergePhase, PlanNodeInput, PlanNodeRecord, PlanRecord } from './plans.js';
 import type {
   AgentOverrideRecord,
@@ -188,6 +189,45 @@ export interface MergeStorePort {
   latestOf(subtaskId: string): MergeOpRecord | undefined;
 }
 
+export interface NewWake {
+  sessionId: string;
+  trigger: WakeTrigger;
+  dedupeKey: string;
+  summary: string;
+}
+
+/** 协调助手主会话：会话、唤醒、通知、滚动摘要。 */
+export interface CoordinatorStorePort {
+  /** 建对话任务、协调助手子任务和主会话，同一事务。 */
+  createMainSession(workspaceId: string, title: string): Change<MainSessionRecord>;
+  mainSessions(workspaceId: string): MainSessionRecord[];
+  getMainSession(sessionId: string): MainSessionRecord | undefined;
+  /** 同一去重键只记一次；已有时返回 undefined。 */
+  addWake(input: NewWake): Change<WakeRecord> | undefined;
+  nextPendingWake(sessionId: string): WakeRecord | undefined;
+  runningWake(sessionId: string): WakeRecord | undefined;
+  /** 有待处理唤醒的会话。 */
+  sessionsWithPendingWakes(): string[];
+  setWake(id: number, status: WakeStatus, fields?: { runId?: string; note?: string }): Change<WakeRecord>;
+  /** 唤醒里的一次工具调用，返回累计次数。 */
+  countRequest(wakeId: number): number;
+  /** 某时刻之后开始的任务事件唤醒：次数和最近一次的开始时间。 */
+  eventWakesSince(sessionId: string, sinceIso: string): { count: number; lastStartedAt: string | null };
+  doneWakes(sessionId: string): number;
+  listWakes(sessionId: string, limit: number): WakeRecord[];
+  /** 服务重启：正在跑的唤醒一律失败（对应的 Run 已中断）。 */
+  failRunningWakes(note: string): Change<WakeRecord[]>;
+  recentMessages(sessionId: string, limit: number): MessageRecord[];
+  addNotice(input: { sessionId: string; runId: string | null; kind: NoticeKind; body: string }): Change<NoticeRecord>;
+  notices(sessionId: string, limit: number): NoticeRecord[];
+  getNotice(id: number): NoticeRecord | undefined;
+  ackNotices(sessionId: string): Change<number>;
+  unescalatedNotices(): NoticeRecord[];
+  markNoticeEscalated(id: number, channels: ChannelProvider[]): PersistentEvent | undefined;
+  writeSummary(input: { sessionId: string; body: string; runId: string | null; wakesDone: number }): Change<SummaryRecord>;
+  latestSummary(sessionId: string): SummaryRecord | undefined;
+}
+
 export interface PlanStorePort {
   /** 写入新一版计划（同任务里还在等确认的旧版本置为 superseded）。 */
   propose(input: NewPlan): Change<PlanRecord>;
@@ -342,8 +382,13 @@ export interface StorePort {
   agents: AgentStorePort;
   plans: PlanStorePort;
   merges: MergeStorePort;
+  coordinator: CoordinatorStorePort;
   audit: AuditPort;
-  messages: { append(sessionId: string, role: MessageRole, body: string, runId?: string | null): Change<MessageRecord> };
+  messages: {
+    append(sessionId: string, role: MessageRole, body: string, runId?: string | null): Change<MessageRecord>;
+    /** FTS5（trigram）检索，短查询退回 LIKE。 */
+    search(query: string, limit: number): MessageRecord[];
+  };
   attention: { list(): AttentionItem[]; markRead(kind: AttentionKind, itemId: string): void };
   channels: ChannelStorePort;
   outbox: OutboxPort;

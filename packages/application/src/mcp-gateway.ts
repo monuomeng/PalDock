@@ -12,6 +12,7 @@ import {
   type StorePort,
 } from '@paldock/contracts';
 import { createToken } from '@paldock/platform';
+import type { CoordinatorService } from './coordinator.js';
 import type { PlanService } from './plan-service.js';
 import { nodeOf, upstreamOf } from './task-graph-scheduler.js';
 
@@ -26,6 +27,8 @@ export interface McpGatewayDeps {
   publish(events: PersistentEvent[]): void;
   /** propose_plan 的后端；取值延后，因为计划用例依赖的调度器又依赖带这个网关的监管器。缺省时该工具报错。 */
   plans?: () => PlanService | undefined;
+  /** 主会话：请求计数、notify_user、write_summary 的后端；同样延后取。 */
+  coordinator?: () => CoordinatorService | undefined;
   now?: () => number;
 }
 
@@ -99,9 +102,12 @@ export class McpGateway {
     const args = spec.args.safeParse(rawArgs ?? {});
     if (!args.success) return deny('bad_request', 'invalid_args', args.error.issues[0]?.message ?? '参数错误');
     try {
+      // 主会话里协调助手的每次调用都计数：到软上限在结果里提醒收尾，超过硬上限这里就抛错
+      const warning = caller.role === 'coordinator' ? this.deps.coordinator?.()?.onToolCall(caller.runId) : undefined;
       const result = this.run(caller, tool, args.data as never);
       this.deps.store.audit.append(actor, `mcp.${tool}`, caller.runId, 'ok');
-      return result;
+      if (!warning) return result;
+      return result !== null && typeof result === 'object' && !Array.isArray(result) ? { ...result, warning } : { result, warning };
     } catch (error) {
       this.deps.store.audit.append(actor, `mcp.${tool}`, caller.runId, `error:${error instanceof CodedError ? error.code : 'internal'}`);
       throw error;
@@ -127,6 +133,15 @@ export class McpGateway {
         const { decision, reason } = args as McpToolArgs<'submit_review'>;
         return this.submitReview(caller, decision, reason ?? null);
       }
+      case 'notify_user': {
+        const { message, question } = args as McpToolArgs<'notify_user'>;
+        const notice = this.coordinatorService().notify(caller.runId, message, question);
+        return { ...notice, next: '已发给用户；用户回复会作为新消息出现在对话里' };
+      }
+      case 'write_summary': {
+        const { summary } = args as McpToolArgs<'write_summary'>;
+        return this.coordinatorService().writeSummary(caller.runId, summary);
+      }
       case 'propose_plan': {
         const plans = this.deps.plans?.();
         if (!plans) throw new CodedError('unavailable', '计划功能未启用');
@@ -135,6 +150,12 @@ export class McpGateway {
       }
     }
     throw new CodedError('bad_request', `没有工具 ${tool}`);
+  }
+
+  private coordinatorService(): CoordinatorService {
+    const service = this.deps.coordinator?.();
+    if (!service) throw new CodedError('unavailable', '主会话功能未启用');
+    return service;
   }
 
   /** 这次 Run 是审阅 Run 时返回它（submit_review 只对审阅 Run 开放，submit_result 只对工作 Run）。 */

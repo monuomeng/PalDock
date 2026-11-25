@@ -4,6 +4,7 @@ import { h } from './dom.js';
 import { appendLive, clearLive } from './live-output.js';
 import { currentRoute, type Route } from './router.js';
 import { attentionView } from './views/attention.js';
+import { chatView } from './views/chat.js';
 import { newTaskView } from './views/new-task.js';
 import { settingsView } from './views/settings.js';
 import { taskDetailView } from './views/task-detail.js';
@@ -13,6 +14,8 @@ const $ = (id: string) => document.getElementById(id)!;
 let connected = false;
 /** 任务详情页涉及的聚合 ID；为空表示当前页不是详情页。 */
 let detailScope = new Set<string>();
+/** 对话页当前的会话。 */
+let chatSession: string | null = null;
 
 function statusText(status: HostStatus): string {
   switch (status.state) {
@@ -63,9 +66,15 @@ function preserveInputs(target: HTMLElement, next: HTMLElement): void {
 
 async function buildView(route: Route): Promise<HTMLElement> {
   detailScope = new Set();
+  chatSession = null;
   switch (route.view) {
     case 'attention':
       return attentionView();
+    case 'chat': {
+      const { element, sessionId } = await chatView(route, scheduleRender);
+      chatSession = sessionId;
+      return element;
+    }
     case 'tasks':
       return tasksView();
     case 'new':
@@ -119,6 +128,8 @@ const LIST_EVENTS = new Set<PersistentEvent['type']>([
   'approval.requested',
   'approval.decided',
   'review.decided',
+  'notice.created',
+  'notice.read',
 ]);
 
 /** 设置页关心的事件：渠道设置、配对、账号、群白名单、项目远程审批等级。 */
@@ -127,8 +138,10 @@ const isSettingsEvent = (event: PersistentEvent) =>
 
 /** 只在事件涉及当前页面时重绘；流式输出的检查点只清空临时缓冲（文字已在屏幕上）。 */
 function isRelevant(event: PersistentEvent): boolean {
-  if (event.type === 'message.created') return false;
   const route = currentRoute();
+  // 对话页：这个会话的消息、唤醒、通知、摘要
+  if (route.view === 'chat') return event.aggregateId === chatSession || (event.type === 'message.created' && event.payload.sessionId === chatSession);
+  if (event.type === 'message.created') return false;
   if (route.view === 'settings') return isSettingsEvent(event);
   if (route.view !== 'task') return LIST_EVENTS.has(event.type);
   return (

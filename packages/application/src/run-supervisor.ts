@@ -71,7 +71,13 @@ interface LiveRun {
   task: TaskRecord;
   /** 这次 Run 的角色：工作 Run 是子任务的角色，审阅 Run 是审阅助手。 */
   role: string;
-  review: boolean;
+  /**
+   * work：子任务的工作 Run；review：审阅 Run（子任务停在 review）；conversation：协调助手主会话的 Run
+   * （对话任务的子任务一直是草稿，工作目录是项目根目录，不收集证据）。后两种都不改子任务和任务的状态。
+   */
+  mode: 'work' | 'review' | 'conversation';
+  /** 这次 Run 有过流式输出（没有时把最终回复记成一条消息）。 */
+  spoke: boolean;
   worktree: string | undefined;
   handle: RuntimeRun | undefined;
   /** 拿到 handle 之前就要回复的审批（事件可能先于 start() 的返回值送达），拿到后补发。 */
@@ -254,9 +260,11 @@ export class RunSupervisor {
     if (!sessionId) return this.deps.log(`subtask ${subtaskId} 没有会话`);
     let executor!: ReturnType<RunSupervisor['executorOf']>;
     const live = store.transaction(() => {
-      // 审阅 Run 不改子任务和任务的状态：子任务停在 review，闸门阶段已是「审阅中」
-      const moved = plan.review ? { record: store.tasks.getSubtask(subtaskId)!, events: [] } : moveSubtask(store, subtaskId, 'running');
-      const taskEvents = plan.review ? [] : settleTask(store, moved.record.taskId);
+      // 审阅 Run 和主会话 Run 不改子任务和任务的状态（子任务停在 review / 对话任务的子任务一直是草稿）
+      const current = store.tasks.getSubtask(subtaskId)!;
+      const detached = plan.review !== undefined || store.tasks.getTask(current.taskId)?.kind === 'conversation';
+      const moved = detached ? { record: current, events: [] } : moveSubtask(store, subtaskId, 'running');
+      const taskEvents = detached ? [] : settleTask(store, moved.record.taskId);
       const task = store.tasks.getTask(moved.record.taskId)!;
       const role = plan.review?.role ?? moved.record.role;
       executor = this.executorOf(role, task);
@@ -303,7 +311,8 @@ export class RunSupervisor {
       subtask,
       task,
       role,
-      review: run.purpose === 'review',
+      mode: run.purpose === 'review' ? 'review' : task.kind === 'conversation' ? 'conversation' : 'work',
+      spoke: false,
       worktree: subtask.worktreePath ?? undefined,
       handle: undefined,
       pendingReplies: [],
@@ -324,6 +333,8 @@ export class RunSupervisor {
   private async ensureWorktree(live: LiveRun): Promise<string> {
     if (live.subtask.worktreePath) return live.subtask.worktreePath;
     const workspace = this.deps.store.tasks.getWorkspace(live.task.workspaceId)!;
+    // 协调助手只读：在项目根目录里看代码和文档，不建 worktree
+    if (live.mode === 'conversation') return workspace.rootPath;
     const key = taskKey(live.task.id).slice(0, 12);
     const slug = live.subtask.nodeKey ? `${key}-${live.subtask.nodeKey}` : key;
     const path = join(this.deps.dataRoot, 'worktrees', slug);
@@ -382,6 +393,7 @@ export class RunSupervisor {
         // 早到的审批可能已让 Run 进入 waiting_approval，此时不回退
         return this.publish(live.run.status === 'starting' ? this.runTo(live, 'running') : []);
       case 'output_delta':
+        live.spoke = true;
         live.output += event.text;
         this.deps.publishEphemeral({ type: 'run.output_delta', runId: live.run.id, text: event.text });
         live.flushTimer ??= setTimeout(() => this.flushOutput(live), this.limits.outputCheckpointMs);
@@ -481,8 +493,8 @@ export class RunSupervisor {
     if (this.live.get(live.subtask.id) !== live) return;
     const { store } = this.deps;
     this.flushOutput(live);
-    // 审阅 Run 失败或被中断时子任务仍停在 review，由闸门交给人；只有取消任务才连带取消子任务
-    const touchSubtask = !live.review || subtaskStatus === 'cancelled';
+    // 审阅 Run 失败或被中断时子任务仍停在 review，由闸门交给人，只有取消任务才连带取消子任务；主会话的 Run 从不改子任务
+    const touchSubtask = live.mode === 'work' || (live.mode === 'review' && subtaskStatus === 'cancelled');
     this.publish(
       store.transaction(() => [
         ...this.closeApprovals(live, true),
@@ -511,9 +523,17 @@ export class RunSupervisor {
     if (this.live.get(live.subtask.id) !== live || live.run.status === 'succeeded') return;
     const { store } = this.deps;
     this.flushOutput(live);
-    this.publish(store.transaction(() => [...this.closeApprovals(live, false), ...this.runTo(live, 'succeeded')]));
+    // 执行器在 turn 事件之前就报了完成（没收到 turn 时 Run 还在 starting）：先补进 running 再成功
+    this.publish(
+      store.transaction(() => [...this.closeApprovals(live, false), ...(live.run.status === 'starting' ? this.runTo(live, 'running') : []), ...this.runTo(live, 'succeeded')]),
+    );
     // 审阅 Run 没有自己的证据：结论已经由审阅助手经 MCP 交了，闸门按 Run 结束的事件处理
-    if (live.review) return this.release(live);
+    if (live.mode === 'review') return this.release(live);
+    // 主会话：回复就是消息（流式输出已在上面合并；执行器只给了最终回复时补记一条），唤醒循环按 Run 结束的事件收尾
+    if (live.mode === 'conversation') {
+      if (!live.spoke && finalMessage && live.run.sessionId) this.publish(store.messages.append(live.run.sessionId, 'assistant', finalMessage, live.run.id).events);
+      return this.release(live);
+    }
     const result = await this.collectEvidence(live, finalMessage).catch((error) => ({
       ...this.resultBase(live, finalMessage, `收集证据失败：${errorText(error)}`),
       checkStatus: 'error' as const,
