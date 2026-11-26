@@ -176,7 +176,9 @@ describe('协调助手主会话', () => {
     expect(first.request.cwd).toBe(repo); // 只读，在项目根目录
     expect(first.request.resumeThreadId).toBeUndefined();
     expect(first.request.prompt).toContain('用户说：\n给登录页加「记住我」');
-    expect(first.request.prompt).toContain('你只读');
+    // 角色说明只在新开会话时作为 instructions 给一次，不混在每一轮的提示词里
+    expect(first.request.instructions).toContain('你只读');
+    expect(first.request.prompt).not.toContain('你只读');
     const planned = first.call('propose_plan', { title: '记住我', goal: '加记住我', nodes: [node] }) as { taskId: string; planId: string };
     expect(store.plans.getPlan(planned.planId)?.proposedByRunId).toBe(first.request.runId);
     first.reply('已经拆成一个开发子任务，请在任务详情里确认计划。');
@@ -195,8 +197,19 @@ describe('协调助手主会话', () => {
     expect(second.request.resumeThreadId).toBe(`thr_${first.request.runId}`);
     // 沿用原生会话时不再注入历史
     expect(second.request.prompt).not.toContain('最近的对话');
+    // 续用时不重发角色说明；任务板变了（多了草稿任务）才附最新的
+    expect(second.request.instructions).toBeUndefined();
+    expect(second.request.prompt).not.toContain('你只读');
+    expect(second.request.prompt).toContain('任务板（有变化，最新）');
     expect(second.request.prompt).toContain('记住我（draft）');
     second.reply('好');
+    await waitIdle();
+
+    // 任务板没变：这一轮只有你说的话
+    say('再加一句');
+    const third = await nthRun(3);
+    expect(third.request.prompt).toBe('用户说：\n再加一句');
+    third.reply('好');
     await waitIdle();
   });
 

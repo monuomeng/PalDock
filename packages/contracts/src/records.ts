@@ -112,6 +112,8 @@ export interface RunRecord {
   nativeTurnId: string | null;
   /** 续做时指向被中断的那次 Run。 */
   resumesRunId: string | null;
+  /** 计划节点和审阅的 Run 用的角色会话（P1 / P2 的单子任务和协调助手为空）。 */
+  roleSessionId: string | null;
   status: RunStatus;
   failureReason: string | null;
   /** work：助手做子任务；review：审阅助手在独立会话里审这个子任务的交付。 */

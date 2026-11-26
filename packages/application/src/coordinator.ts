@@ -11,7 +11,7 @@ import {
   type WakeRecord,
 } from '@paldock/contracts';
 import { P3_DEFAULTS, runMachine, taskRef, type P3Limits } from '@paldock/domain';
-import { wakePrompt } from './prompts.js';
+import { coordinatorInstructions, wakePrompt } from './prompts.js';
 import { nodeTitle } from './task-graph-scheduler.js';
 import { errorText, MicroBatch } from './util.js';
 import type { RunPlan } from './run-supervisor.js';
@@ -38,6 +38,8 @@ export class CoordinatorService {
   private readonly limits: P3Limits;
   private readonly now: () => number;
   private readonly timers = new Map<string, NodeJS.Timeout>();
+  /** 每个主会话上次发给协调助手的任务板（续用会话时没变就不重发）。 */
+  private readonly lastBoard = new Map<string, string>();
   private readonly batch: MicroBatch<string>;
   /** 当天已就「自动唤醒达到上限」通知过的会话（不重复通知）。 */
   private readonly capNoticeDay = new Map<string, number>();
@@ -324,14 +326,21 @@ export class CoordinatorService {
     const done = store.coordinator.doneWakes(session.sessionId);
     const summary = store.coordinator.latestSummary(session.sessionId);
     const askSummary = (!threadId && done > 0) || done - (summary?.wakesDone ?? 0) >= this.limits.summaryEveryWakes;
+    const project = store.tasks.getWorkspace(session.workspaceId)!;
+    // 续用会话时任务板没变就不重发（同一个服务进程里记着上次发的；重启后第一次照发）
+    const board = this.board(session.workspaceId);
+    const boardText = board.join('\n');
+    const boardChanged = !threadId || this.lastBoard.get(session.sessionId) !== boardText;
+    this.lastBoard.set(session.sessionId, boardText);
     const prompt = wakePrompt({
-      project: store.tasks.getWorkspace(session.workspaceId)!,
+      project,
       wake: { trigger: wake.trigger, summary: wake.summary },
-      board: this.board(session.workspaceId),
+      board: boardChanged ? board : null,
       ...(threadId ? {} : { fresh: this.freshContext(session.sessionId, wake) }),
       askSummary,
     });
-    this.deps.supervisor.enqueue(session.subtaskId, { prompt, ...(threadId ? { threadId } : {}) });
+    // 角色说明只在新开会话时给；续用时会话里已经有了
+    this.deps.supervisor.enqueue(session.subtaskId, threadId ? { prompt, threadId } : { prompt, instructions: coordinatorInstructions(project) });
   }
 
   /** 本项目任务板：本项目最近的 10 个任务（不含对话任务），每行一个。 */

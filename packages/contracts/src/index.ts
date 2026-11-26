@@ -3,6 +3,7 @@ export * from './channels.js';
 export * from './events.js';
 export * from './ipc.js';
 export * from './mcp.js';
+export * from './role-sessions.js';
 export * from './records.js';
 export * from './plans.js';
 export * from './conversations.js';

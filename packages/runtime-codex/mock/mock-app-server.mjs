@@ -183,6 +183,12 @@ const handlers = {
     if (cwd) saveThread({ ...thread, cwd });
     return { thread: { id: thread.id, turns: thread.turns } };
   },
+  'thread/archive': ({ threadId }) => {
+    const thread = loadThread(threadId);
+    if (!thread) throw Object.assign(new Error(`thread not found: ${threadId}`), { code: -32600 });
+    saveThread({ ...thread, archived: true });
+    return {};
+  },
   'thread/read': ({ threadId }) => {
     const thread = loadThread(threadId);
     if (!thread) throw Object.assign(new Error(`thread not found: ${threadId}`), { code: -32600 });

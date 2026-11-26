@@ -144,7 +144,12 @@ export class McpGateway {
       }
       case 'write_summary': {
         const { summary } = args as McpToolArgs<'write_summary'>;
-        return this.coordinatorService().writeSummary(caller.runId, summary);
+        if (caller.role === 'coordinator') return this.coordinatorService().writeSummary(caller.runId, summary);
+        // 专业助手：写在这次 Run 占用的角色会话上，换新会话时注入
+        const roleSessionId = this.deps.store.runs.getRun(caller.runId)?.roleSessionId;
+        if (!roleSessionId) throw new CodedError('bad_request', '这次执行不在角色会话里，不需要写摘要');
+        this.deps.store.roleSessions.setSummary(roleSessionId, summary);
+        return { saved: true, next: '摘要已保存，换新会话时会交给接手的会话' };
       }
       case 'propose_plan': {
         const plans = this.deps.plans?.();

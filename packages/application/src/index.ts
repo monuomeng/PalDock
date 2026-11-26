@@ -14,3 +14,4 @@ export * from './risk.js';
 export * from './run-supervisor.js';
 export * from './task-service.js';
 export * from './channels/index.js';
+export * from './role-sessions.js';

@@ -93,7 +93,7 @@ class FakeRuntime implements RuntimeAdapter {
   }
   async start(request: RunStartRequest, onEvent: (event: RuntimeEvent) => void) {
     const review = /请审阅子任务「(.+?)」/.test(request.prompt);
-    const title = review ? '审阅' : request.prompt.includes('你是 PalDock 的协调助手') ? '协调' : (/你负责的子任务：(.+)/.exec(request.prompt)?.[1] ?? '?');
+    const title = review ? '审阅' : (request.instructions?.includes('协调助手') || /^(用户说：|任务事件)/.test(request.prompt)) ? '协调' : (/你负责的子任务：(.+)/.exec(request.prompt)?.[1] ?? '?');
     let started!: () => void;
     const ready = new Promise<void>((r) => (started = r));
     const run: FakeRun = {

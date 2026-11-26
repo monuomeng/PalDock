@@ -194,7 +194,8 @@ class ClaudeRun implements RuntimeRun {
       uuid: this.turnId,
       session_id: '',
       parent_tool_use_id: null,
-      message: { role: 'user', content: [{ type: 'text', text: request.prompt }] },
+      // 角色说明只在新会话的首条消息里给（续用时会话里已经有了）
+      message: { role: 'user', content: [{ type: 'text', text: request.instructions && !request.resumeThreadId ? `${request.instructions}\n\n${request.prompt}` : request.prompt }] },
     });
     try {
       await initialized;

@@ -47,7 +47,7 @@ class FakeRuntime implements RuntimeAdapter {
     const review = /请审阅子任务「(.+?)」/.exec(request.prompt)?.[1];
     const title = review
       ? `审阅:${review}`
-      : (/你负责的子任务：(.+)/.exec(request.prompt)?.[1] ?? (request.prompt.includes('协调助手') ? '协调' : /继续完成目标：\n(.+)/.exec(request.prompt)?.[1] ?? '?'));
+      : (/你负责的子任务：(.+)/.exec(request.prompt)?.[1] ?? ((request.instructions?.includes('协调助手') || /^(用户说：|任务事件)/.test(request.prompt)) ? '协调' : /继续完成目标：\n(.+)/.exec(request.prompt)?.[1] ?? '?'));
     let started!: () => void;
     const ready = new Promise<void>((r) => (started = r));
     const run: FakeRun = {

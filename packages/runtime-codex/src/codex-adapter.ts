@@ -99,6 +99,16 @@ export class CodexAdapter implements RuntimeAdapter {
     }
   }
 
+  /** 归档 PalDock 换下的角色会话（不删除，Codex 应用里可以在归档里找到）。 */
+  async archiveThread(threadId: string): Promise<void> {
+    const rpc = await this.open({});
+    try {
+      await rpc.request('thread/archive', { threadId }, this.options.requestTimeoutMs);
+    } finally {
+      await rpc.dispose();
+    }
+  }
+
   /** 启动 app-server 并完成 initialize 握手。 */
   private async open(handlers: RpcHandlers): Promise<JsonRpcStdioClient> {
     const cmd = resolveCodexCommand(this.configuredPath);
@@ -164,7 +174,11 @@ class CodexRun implements RuntimeRun {
       const threadParams = { cwd: request.cwd, ...THREAD_POLICY, ...mcpConfig(request.mcpServer) };
       const { thread } = request.resumeThreadId
         ? await this.rpc.request<{ thread: { id: string } }>('thread/resume', { threadId: request.resumeThreadId, ...threadParams }, timeout)
-        : await this.rpc.request<{ thread: { id: string } }>('thread/start', { ...threadParams, ephemeral: false }, timeout);
+        : await this.rpc.request<{ thread: { id: string } }>(
+            'thread/start',
+            { ...threadParams, ephemeral: false, ...(request.instructions ? { developerInstructions: request.instructions } : {}) },
+            timeout,
+          );
       this.threadId = thread.id;
       this.emit({ type: 'thread', threadId: thread.id });
 

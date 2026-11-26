@@ -30,6 +30,8 @@ import { addWorktree, branchCommit, changedFiles, commitStaged, headCommit, stag
 import { redact } from './redact.js';
 import { operationOf, riskOf } from './risk.js';
 import type { McpGateway } from './mcp-gateway.js';
+import { roleInstructions, roleTurnPrompt } from './prompts.js';
+import { RoleSessionPool, type RoleSessionLease } from './role-sessions.js';
 import { nodeOf } from './task-graph-scheduler.js';
 import { moveSubtask, settleTask } from './transitions.js';
 import { errorText as sharedErrorText } from './util.js';
@@ -45,6 +47,8 @@ export interface SupervisorDeps {
   runtimes: Readonly<Record<string, RuntimeAdapter>>;
   /** MCP 桥：每次 Run 签发一次性令牌并把桥作为这次会话的 MCP 服务器注入；缺省时不注入（测试）。 */
   mcp?: { gateway: McpGateway; server(token: string): McpServerSpec };
+  /** 角色会话轮换阈值（测试里调小）；缺省按 P3_DEFAULTS。 */
+  roleSessionLimits?: { roleSessionMaxTurns: number; roleSessionMaxTokens: number };
   dataRoot: string;
   publish(events: PersistentEvent[]): void;
   publishEphemeral(event: EphemeralEvent): void;
@@ -55,6 +59,8 @@ export interface SupervisorDeps {
 /** 一次 Run 的提示词与原生会话：续做或退回重做时沿用 thread，重新开始时不带。 */
 export interface RunPlan {
   prompt: string;
+  /** 角色说明：只在新建原生会话时发（见 RunStartRequest.instructions）。 */
+  instructions?: string;
   threadId?: string;
   resumesRunId?: string;
   /**
@@ -89,6 +95,14 @@ interface LiveRun {
   flushTimer: NodeJS.Timeout | undefined;
   cancelRequested: boolean;
   check: AbortController;
+  /** 计划节点和审阅的 Run 占用的角色会话（P1 / P2 单子任务和协调助手没有）。 */
+  lease: RoleSessionLease | undefined;
+}
+
+/** 角色会话池的键和池大小（角色的 maxConcurrency）。 */
+interface PoolSlot {
+  key: { workspaceId: string; role: string; executor: string };
+  max: number;
 }
 
 const TERMINAL_EVENTS = new Set<RuntimeEvent['type']>(['completed', 'failed', 'interrupted', 'disconnected']);
@@ -110,11 +124,21 @@ export class RunSupervisor {
   /** 进行中的异步收尾（启动、证据收集、断线核对）；退出时等它们结束，避免在数据库关闭后写入。 */
   private readonly inflight = new Set<Promise<void>>();
 
+  /** 角色会话池（2026-11-26 已定）：计划节点和审阅按（项目，角色，执行器）复用原生会话。 */
+  readonly pool: RoleSessionPool;
+
   constructor(private readonly deps: SupervisorDeps) {
     this.limits = { ...P1_DEFAULTS, ...deps.limits };
+    this.pool = new RoleSessionPool({
+      store: deps.store,
+      log: deps.log,
+      archive: (executor, threadId) => this.adapter(executor)?.archiveThread?.(threadId),
+      ...(deps.roleSessionLimits ? { limits: deps.roleSessionLimits } : {}),
+    });
   }
 
   start(): void {
+    this.pool.start();
     this.expiryTimer = setInterval(() => this.expireApprovals(), this.limits.expiryScanMs);
     this.expiryTimer.unref();
   }
@@ -143,15 +167,34 @@ export class RunSupervisor {
     const subtask = this.deps.store.tasks.getSubtask(subtaskId);
     if (!subtask) return this.deps.log(`subtask ${subtaskId} 不存在`);
     if (this.live.has(subtaskId) || this.queue.some((q) => q.subtaskId === subtaskId)) return;
-    if (this.hasRoom(subtask.taskId)) this.background(this.launch(subtaskId, plan));
+    if (this.hasRoom(subtask.taskId, subtaskId, plan)) this.background(this.launch(subtaskId, plan));
     else this.queue.push({ subtaskId, taskId: subtask.taskId, plan });
   }
 
-  private hasRoom(taskId: string): boolean {
+  /** 全局、所在任务的并发，以及（用角色会话的 Run）这个角色的会话池都还有名额。 */
+  private hasRoom(taskId: string, subtaskId: string, plan: RunPlan): boolean {
     if (this.live.size >= this.limits.maxConcurrentRuns) return false;
     let ofTask = 0;
     for (const live of this.live.values()) if (live.subtask.taskId === taskId) ofTask++;
-    return ofTask < this.limits.maxRunsPerTask;
+    if (ofTask >= this.limits.maxRunsPerTask) return false;
+    const slot = this.poolSlot(subtaskId, plan);
+    return !slot || this.pool.hasRoom(slot.key, slot.max);
+  }
+
+  /**
+   * 这次 Run 用不用角色会话：计划节点的工作 Run 和审阅 Run 用；P1 / P2 的单子任务（续做沿用自己的会话）
+   * 和协调助手（有自己的主会话）不用。
+   */
+  private poolSlot(subtaskId: string, plan: RunPlan): PoolSlot | undefined {
+    const { store } = this.deps;
+    const subtask = store.tasks.getSubtask(subtaskId);
+    const task = subtask && store.tasks.getTask(subtask.taskId);
+    if (!subtask || !task || task.kind === 'conversation' || (!plan.review && !subtask.planId)) return undefined;
+    const role = plan.review?.role ?? subtask.role;
+    const executor = this.executorOf(role, task, plan.review ? null : nodeOf(store, subtask)?.executor);
+    const parsed = AgentRole.safeParse(role);
+    const max = (parsed.success && store.agents.getProfile(parsed.data)?.maxConcurrency) || 1;
+    return { key: { workspaceId: task.workspaceId, role, executor: executor.name }, max };
   }
 
   /**
@@ -298,32 +341,83 @@ export class RunSupervisor {
         ...(plan.review ? { purpose: 'review' as const } : {}),
       });
       this.publish([...moved.events, ...taskEvents, ...run.events]);
-      return this.track(run.record, moved.record, task, role);
+      const tracked = this.track(run.record, moved.record, task, role);
+      // 计划节点和审阅：占用一个角色会话（优先上次用过的原生会话），Run 沿用它的原生会话
+      const slot = this.poolSlot(subtaskId, plan);
+      if (slot) {
+        tracked.lease = this.pool.acquire(slot.key, plan.threadId);
+        tracked.run = store.runs.setRoleSession(tracked.run.id, tracked.lease.session.id, tracked.lease.session.nativeThreadId);
+      }
+      return tracked;
     });
 
     try {
       const runtime = await this.readyRuntime(executor);
       live.worktree = await this.ensureWorktree(live);
-      const mcpServer = this.mcpServerFor(live.run, live.role);
-      live.handle = await runtime.start(
-        {
-          runId: live.run.id,
-          cwd: live.worktree,
-          prompt: plan.prompt,
-          ...(plan.threadId ? { resumeThreadId: plan.threadId } : {}),
-          ...(mcpServer ? { mcpServer } : {}),
-        },
-        (event) => this.onEvent(live, event),
-      );
+      live.handle = await this.startRuntime(runtime, live, plan);
     } catch (error) {
       if (this.stopping) return;
-      const reason = plan.threadId ? `续做失败：${errorText(error)}` : `启动失败：${errorText(error)}`;
-      if (plan.threadId) this.publish([store.runs.addNotice(live.run.id, 'resume_failed', reason)]);
+      const resumed = live.lease ? !!live.lease.session.nativeThreadId : !!plan.threadId;
+      const reason = resumed ? `续做失败：${errorText(error)}` : `启动失败：${errorText(error)}`;
+      if (resumed) this.publish([store.runs.addNotice(live.run.id, 'resume_failed', reason)]);
       return this.finishFailed(live, reason);
     }
     for (const [nativeId, decision] of live.pendingReplies.splice(0)) live.handle.respondApproval(nativeId, decision);
     if (this.stopping) return live.handle.dispose();
     if (live.cancelRequested) await live.handle.cancel();
+  }
+
+  /**
+   * 启动执行器。用角色会话时：会话已有原生会话就续用（cwd 切到这一轮的 worktree，只发任务包），
+   * 新会话首轮带角色说明和前一个会话留下的摘要；续用失败时换下这个会话，开新会话重试一次。
+   */
+  private async startRuntime(runtime: RuntimeAdapter, live: LiveRun, plan: RunPlan): Promise<RuntimeRun> {
+    const { store } = this.deps;
+    const mcpServer = this.mcpServerFor(live.run, live.role);
+    const start = (request: { prompt: string; resumeThreadId?: string; instructions?: string }) =>
+      runtime.start(
+        {
+          runId: live.run.id,
+          cwd: live.worktree!,
+          prompt: request.prompt,
+          ...(request.resumeThreadId ? { resumeThreadId: request.resumeThreadId } : {}),
+          ...(mcpServer ? { mcpServer } : {}),
+          ...(request.instructions ? { instructions: request.instructions } : {}),
+        },
+        (event) => this.onEvent(live, event),
+      );
+    const lease = live.lease;
+    if (!lease) {
+      return start({ prompt: plan.prompt, ...(plan.threadId ? { resumeThreadId: plan.threadId } : {}), ...(plan.instructions ? { instructions: plan.instructions } : {}) });
+    }
+    const turn = (fresh: boolean) => {
+      const project = store.tasks.getWorkspace(live.task.workspaceId)!;
+      const profile = AgentRole.safeParse(live.role);
+      const displayName = (profile.success && store.agents.getProfile(profile.data)?.displayName) || live.role;
+      return {
+        prompt: roleTurnPrompt({
+          worktree: live.worktree!,
+          packet: plan.prompt,
+          inheritedSummary: fresh ? this.pool.inheritedSummary(lease.session) : null,
+          writeSummary: lease.summaryTurn,
+        }),
+        ...(fresh ? { instructions: roleInstructions({ name: live.role, displayName }, project) } : { resumeThreadId: lease.session.nativeThreadId! }),
+      };
+    };
+    if (!lease.session.nativeThreadId) return start(turn(true));
+    try {
+      return await start(turn(false));
+    } catch (error) {
+      // 原生会话续不上（被删、执行器换了）：换下它，开新会话重试一次
+      this.deps.log(`role session ${lease.session.id} resume failed, starting a new one: ${errorText(error)}`);
+      this.publish([store.runs.addNotice(live.run.id, 'resume_failed', `角色会话续不上，换新会话：${errorText(error)}`)]);
+      this.pool.abandon(lease);
+      const slot = { workspaceId: lease.session.workspaceId, role: lease.session.role, executor: lease.session.executor };
+      live.lease = this.pool.acquire(slot);
+      live.run = store.runs.setRoleSession(live.run.id, live.lease.session.id, null);
+      const fresh = live.lease;
+      return start({ ...turn(true), ...(fresh.session.nativeThreadId ? { resumeThreadId: fresh.session.nativeThreadId } : {}) });
+    }
   }
 
   private track(run: RunRecord, subtask: SubtaskRecord, task: TaskRecord, role: string): LiveRun {
@@ -342,6 +436,7 @@ export class RunSupervisor {
       flushTimer: undefined,
       cancelRequested: false,
       check: new AbortController(),
+      lease: undefined,
     };
     this.live.set(subtask.id, live);
     return live;
@@ -411,6 +506,7 @@ export class RunSupervisor {
       case 'thread':
         if (store.runs.recordThread(live.run, event.threadId)) live.run = { ...live.run, nativeThreadId: event.threadId };
         else this.deps.log(`run ${live.run.id} 的 thread 与记录不符`);
+        if (live.lease) this.pool.recordThread(live.lease, event.threadId);
         return;
       case 'turn':
         if (store.runs.recordTurn(live.run.id, event.turnId)) live.run = { ...live.run, nativeTurnId: event.turnId };
@@ -505,6 +601,12 @@ export class RunSupervisor {
   /** 让出并发名额（Run 与证据收集都结束后调用一次）。 */
   private release(live: LiveRun): void {
     this.deps.mcp?.gateway.revoke(live.run.id);
+    if (live.lease) {
+      const usage = this.deps.store.runs.getUsage(live.run.id);
+      const tokens = usage ? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0) : 0;
+      this.pool.release(live.lease, tokens);
+      live.lease = undefined;
+    }
     if (this.live.get(live.subtask.id) === live) this.live.delete(live.subtask.id);
     queueMicrotask(() => this.dequeue());
   }
@@ -513,7 +615,7 @@ export class RunSupervisor {
   private dequeue(): void {
     for (let i = 0; !this.stopping && i < this.queue.length && this.live.size < this.limits.maxConcurrentRuns; ) {
       const next = this.queue[i]!;
-      if (!this.hasRoom(next.taskId)) {
+      if (!this.hasRoom(next.taskId, next.subtaskId, next.plan)) {
         i++;
         continue;
       }

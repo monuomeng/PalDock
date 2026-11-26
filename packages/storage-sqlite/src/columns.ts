@@ -34,7 +34,7 @@ export const COLUMNS = {
   session: cols(`id, kind, subtask_id AS subtaskId, role`),
   run: cols(
     `id, subtask_id AS subtaskId, session_id AS sessionId, attempt, runtime, native_thread_id AS nativeThreadId,
-     native_turn_id AS nativeTurnId, resumes_run_id AS resumesRunId, status, failure_reason AS failureReason, purpose,
+     native_turn_id AS nativeTurnId, resumes_run_id AS resumesRunId, role_session_id AS roleSessionId, status, failure_reason AS failureReason, purpose,
      version, started_at AS startedAt, ended_at AS endedAt`,
   ),
   approval: cols(

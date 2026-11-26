@@ -198,6 +198,9 @@ describe('P3 验收闸门与审阅', () => {
     expect(reviewRun).toMatchObject({ purpose: 'review', subtaskId: dev.id });
     expect(reviewRun.sessionId).not.toBe(workRun.sessionId);
     expect(review.request.resumeThreadId).toBeUndefined();
+    // 角色会话：审阅在审阅助手自己的会话池里，始终不接在开发会话上
+    const roleOf = (id: string | null) => store.db.get<{ role: string }>('SELECT role FROM role_sessions WHERE id = ?', id)?.role;
+    expect([roleOf(workRun.roleSessionId), roleOf(reviewRun.roleSessionId)]).toEqual(['developer', 'reviewer']);
     const result = store.runs.getResult(workRun.id)!;
     expect(result).toMatchObject({ checkStatus: 'passed', outOfScope: [] });
     expect(result.commitSha).toBe(git(repo, 'rev-parse', dev.branch!).trim());
@@ -248,8 +251,10 @@ describe('P3 验收闸门与审阅', () => {
     redo.succeed({ 'src/a.ts': 'a\nexpires\n' });
     await waitRun('审阅:实现', 2);
     const review2 = runtime.latest('审阅:实现');
-    // 每轮审阅一个新会话
+    // 每轮审阅一条新的审阅记录；原生会话沿用审阅助手的角色会话（不是开发助手的）
     expect(store.runs.getRun(review2.request.runId)!.sessionId).not.toBe(store.runs.getRun(review1.request.runId)!.sessionId);
+    expect(review2.request.resumeThreadId).toBe(`thr_${review1.request.runId}`);
+    expect(review2.request.resumeThreadId).not.toBe(redo.request.resumeThreadId);
     submitReview(review2, 'accept');
     review2.succeed();
     await until(() => node(taskId, 'dev').status, (s) => s === 'succeeded', 'dev 通过');

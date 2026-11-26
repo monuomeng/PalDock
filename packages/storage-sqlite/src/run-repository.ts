@@ -40,6 +40,7 @@ const SQL = {
   // 审阅 Run 不算：按 attempt 倒序跳过（每轮最多一次审阅，扫描很短）
   selectLatestRun: `SELECT ${COLUMNS.run()} FROM runs WHERE subtask_id = ? AND purpose = 'work' ORDER BY attempt DESC LIMIT 1`,
   // 原生 ID 只写一次：thread 在续做时已预先填好，turn 一旦记录就不再覆盖
+  setRoleSession: `UPDATE runs SET role_session_id = ?2, native_thread_id = ?3 WHERE id = ?1 RETURNING ${COLUMNS.run()}`,
   setThread: `
     UPDATE runs SET native_thread_id = ?2 WHERE id = ?1 AND (native_thread_id IS NULL OR native_thread_id = ?2)
     RETURNING ${COLUMNS.run()}`,
@@ -170,6 +171,12 @@ export class RunRepository implements RunStorePort {
       if (updated && run.sessionId) this.db.run(SQL.insertRuntimeSession, run.runtime, threadId, run.sessionId, this.clock.iso());
       return updated;
     });
+  }
+
+  setRoleSession(runId: string, roleSessionId: string, threadId: string | null): RunRecord {
+    const run = this.db.get<RunRecord>(SQL.setRoleSession, runId, roleSessionId, threadId);
+    if (!run) throw new CodedError('not_found', 'Run 不存在');
+    return run;
   }
 
   /** turn 只记录一次；已有值时返回 undefined，调用方据此发现执行器异常。 */

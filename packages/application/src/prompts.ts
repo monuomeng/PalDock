@@ -92,8 +92,8 @@ export interface WakeContext {
   project: { name: string; rootPath: string };
   /** 本次唤醒：你的消息或一行任务事件摘要。 */
   wake: { trigger: 'user_message' | 'task_event'; summary: string };
-  /** 本项目任务板（每行一个任务）。 */
-  board: string[];
+  /** 本项目任务板（每行一个任务）；续用会话时和上次发的一样就是 null，不再重发。 */
+  board: string[] | null;
   /** 新开原生会话时才有：最新滚动摘要、最近的消息、检索到的历史片段。 */
   fresh?: { summary: string | null; messages: { role: string; body: string }[]; history: string[] };
   /** 这次结束前要写滚动摘要。 */
@@ -108,14 +108,22 @@ const COORDINATOR_RULES = [
   '- 你在这里写的回复就是对话里的消息，简洁、说清楚下一步。',
 ].join('\n');
 
-/** 协调助手每次唤醒的提示词。原生会话的压缩只在单次 Run 内使用，事实以这里给的为准。 */
+/** 协调助手的角色说明：只在新开原生会话时发一次（RunPlan.instructions），续用时不再重发。 */
+export function coordinatorInstructions(project: { name: string; rootPath: string }): string {
+  return `${COORDINATOR_RULES}\n项目：${project.name}（${project.rootPath}）`;
+}
+
+/**
+ * 协调助手每次唤醒的提示词：这次的消息或事件，加上任务板（变了才发）。角色说明不在这里，见 coordinatorInstructions。
+ * 新开会话时再附摘要、最近的对话和历史片段。原生会话的压缩只在单次 Run 内使用，事实以这里给的为准。
+ */
 export function wakePrompt(ctx: WakeContext, budget = 24_000): string {
-  const layers: string[] = [`${COORDINATOR_RULES}\n项目：${ctx.project.name}（${ctx.project.rootPath}）`];
+  const layers: string[] = [];
   layers.push(ctx.wake.trigger === 'user_message' ? `用户说：\n${ctx.wake.summary}` : `任务事件（不是用户的消息）：\n${ctx.wake.summary}\n请决定下一步：需要时提一个新计划（例如解决冲突的子任务），或用 notify_user 向用户汇报。`);
   if (ctx.askSummary) layers.push('这次结束前请调用 write_summary，写这个会话到目前为止的滚动摘要：目标、已定的事、进行中的任务、待用户决定的问题。');
   if (ctx.fresh?.summary) layers.push(`这个会话之前的摘要：\n${ctx.fresh.summary}`);
   if (ctx.fresh?.messages.length) layers.push(`最近的对话：\n${ctx.fresh.messages.map((m) => `${m.role === 'user' ? '用户' : '你'}：${m.body.slice(0, 1000)}`).join('\n')}`);
-  layers.push(`任务板：\n${ctx.board.length > 0 ? ctx.board.join('\n') : '（还没有任务）'}`);
+  if (ctx.board) layers.push(`${ctx.fresh ? '任务板' : '任务板（有变化，最新）'}：\n${ctx.board.length > 0 ? ctx.board.join('\n') : '（还没有任务）'}`);
   if (ctx.fresh?.history.length) layers.push(`可能相关的历史片段：\n${ctx.fresh.history.map((h) => `- ${h.slice(0, 300)}`).join('\n')}`);
   let out = '';
   for (const layer of layers) {
@@ -134,4 +142,32 @@ export function resumePrompt(goal: string): string {
 export function titleOf(goal: string): string {
   const line = goal.trim().split(/\r?\n/, 1)[0] ?? '';
   return line.length > 60 ? `${line.slice(0, 59)}…` : line;
+}
+
+/**
+ * 角色会话的说明（2026-11-26 已定，按项目、按角色复用原生会话）：只在新建会话时发一次。
+ * 每一轮另给这次子任务的任务包；工作目录每轮可能不同，以任务包里写的为准。
+ */
+export function roleInstructions(role: { name: string; displayName: string }, project: { name: string; rootPath: string }): string {
+  const review = role.name === 'reviewer';
+  return [
+    `你是 PalDock 的${role.displayName}，在项目 ${project.name}（${project.rootPath}）里长期负责这一类工作。`,
+    '- 每一轮 PalDock 会给你一个新的任务包（目标、这一轮的工作目录、相关路径、上游交接）。之前轮次的任务已经结束，不要再动它们的目录。',
+    '- 每个任务有自己独立的 git worktree，工作目录每一轮可能不同；只在这一轮指定的工作目录里操作。',
+    review
+      ? '- 你只读：不修改、不提交、不删除任何文件；看完必须用 submit_review 交结论。'
+      : '- 开始前可以用 get_task 读当前任务；做完用 submit_result 交接。不要提交、推送或合并分支。',
+    '- 之前轮次学到的项目约定、常用命令和踩过的坑可以沿用。',
+  ].join('\n');
+}
+
+/** 角色会话的这一轮：工作目录放最前面，接着是调用方给的任务包；新会话附上前一个会话留下的角色摘要；要轮换时要求先写摘要。 */
+export function roleTurnPrompt(turn: { worktree: string; packet: string; inheritedSummary: string | null; writeSummary: boolean }): string {
+  const parts = [`这一轮的工作目录（只在这里操作）：${turn.worktree}`];
+  if (turn.inheritedSummary) parts.push(`你接手了这个角色之前的会话，它留下的摘要：\n${turn.inheritedSummary.slice(0, 6000)}`);
+  parts.push(turn.packet);
+  if (turn.writeSummary) {
+    parts.push('这个会话用得比较久了，之后会换新会话。这一轮结束前请调用 write_summary，写一份角色摘要：这个项目的约定、常用命令、踩过的坑、还要注意的事（不写具体任务的细节）。');
+  }
+  return parts.join('\n\n');
 }

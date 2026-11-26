@@ -50,6 +50,8 @@ export function interruptActiveWork(db: Database, events: EventLog, clock: Clock
     const at = clock.iso();
     const active = db.all<InterruptedRun & { status: RunStatus }>(SQL.activeRuns);
     db.run(SQL.markRunsInterrupted, reason);
+    // 被中断的 Run 占着的角色会话放回空闲（续做时优先回到原来的原生会话）
+    db.run(`UPDATE role_sessions SET status = 'idle' WHERE status = 'busy'`);
     const emitted = active.map((run) =>
       events.append(run.id, { type: 'run.status_changed', payload: statusChanged(run.status, 'interrupted', reason) }),
     );

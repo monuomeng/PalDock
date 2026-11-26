@@ -79,6 +79,12 @@ export const P3_DEFAULTS = {
   historySnippets: 5,
   /** 简单计划提出后等多久自动确认（这段时间里可以撤回，2026-11-26 已定）。 */
   autoConfirmDelayMs: 30 * 1000,
+  /**
+   * 角色会话轮换（2026-11-26 已定）：一个会话跑满这么多 turn，或累计 token（输入 + 输出 + 缓存，每轮都会重读上下文）
+   * 超过这个数，下一轮先写角色摘要，结束后换新会话。
+   */
+  roleSessionMaxTurns: 30,
+  roleSessionMaxTokens: 4_000_000,
 } as const;
 
 export type P3Limits = typeof P3_DEFAULTS;

@@ -39,6 +39,11 @@ export interface RunStartRequest {
   resumeThreadId?: string;
   /** 只属于这次 Run 的 MCP 服务器（PalDock 的 MCP 桥）；执行器按会话注入，不改用户的全局配置。 */
   mcpServer?: McpServerSpec;
+  /**
+   * 角色说明：只在新建原生会话时交给执行器（Codex 放进 thread 的 developerInstructions，Claude 放在首条消息前面）；
+   * 续用会话时不再重发，免得每一轮都像新会话开头。
+   */
+  instructions?: string;
 }
 
 /** stdio MCP 服务器的启动方式。env 里带这次 Run 的一次性令牌，只能调用这个角色的编排工具。 */
@@ -117,4 +122,6 @@ export interface RuntimeAdapter {
   /** 启动失败（找不到执行器、恢复失败）时拒绝 Promise，不发事件。 */
   start(request: RunStartRequest, onEvent: (event: RuntimeEvent) => void): Promise<RuntimeRun>;
   checkTurn(threadId: string, turnId: string): Promise<TurnCheck>;
+  /** 归档 PalDock 换下的原生会话（Codex thread/archive）；不支持的执行器不实现。 */
+  archiveThread?(threadId: string): Promise<void>;
 }

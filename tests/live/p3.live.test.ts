@@ -206,6 +206,42 @@ describe.skipIf(process.env.PALDOCK_LIVE_P3 !== '1')('P3 真实执行器', () =>
     await report('chain', { proposedMs, totalMs: Date.now() - t0, branch, files: files.split('\n') });
   });
 
+  it('角色会话复用：两个开发节点、两轮审阅，Codex / Claude 里只多出协调、开发、审阅三个会话', { timeout: 60 * MINUTE }, async () => {
+    prepare('reuse');
+    const s = await boot();
+    const t0 = Date.now();
+    const detail = await proposeViaCoordinator(s, {
+      title: '加 sub 和 mul',
+      goal: '在 math.js 加 sub 和 mul 两个函数',
+      nodes: [
+        { key: 'sub', role: 'developer', title: '实现 sub', goal: '在 math.js 里加 export function sub(a, b) { return a - b; }。只改 math.js。', paths: ['math.js'] },
+        { key: 'mul', role: 'developer', title: '实现 mul', goal: '在 math.js 里加 export function mul(a, b) { return a * b; }。只改 math.js。', paths: ['math.js'], dependsOn: ['sub'] },
+      ],
+    });
+    await confirm(s, detail);
+    await until(async () => {
+      const d = await call(s, 'task.get', { taskId: detail.task.id });
+      const stuck = d.plan!.nodes.find((n) => n.subtask?.gateStage === 'human' || n.subtask?.status === 'blocked');
+      if (stuck) throw new Error(`节点 ${stuck.node.key} 停住：${stuck.subtask!.statusReason}`);
+      return d.task.status === 'succeeded' && d;
+    }, '任务全部通过', 45 * MINUTE);
+    await shutdown(s);
+    const store = await openStore(s.dataRoot);
+    try {
+      const threads = store.db.all<{ runtime: string; purpose: string; role: string | null; threads: number; runs: number }>(
+        `SELECT r.runtime, r.purpose, coalesce(rs.role, 'coordinator') AS role, count(DISTINCT r.native_thread_id) AS threads, count(*) AS runs
+           FROM runs r LEFT JOIN role_sessions rs ON rs.id = r.role_session_id GROUP BY r.runtime, r.purpose, role ORDER BY role`,
+      );
+      await report('reuse', { totalMs: Date.now() - t0, threads });
+      // 开发两轮在同一个 Claude 会话里，两轮审阅在同一个 Codex 会话里，协调助手一个会话
+      expect(threads.find((t) => t.role === 'developer')).toMatchObject({ runtime: 'claude', threads: 1, runs: 2 });
+      expect(threads.find((t) => t.role === 'reviewer')).toMatchObject({ runtime: 'codex', threads: 1, runs: 2 });
+      expect(threads.find((t) => t.role === 'coordinator')?.threads).toBe(1);
+    } finally {
+      store.close();
+    }
+  });
+
   it('开发节点运行中强杀本地服务后重启：检查残留进程，按 checkTurn 恢复', { timeout: 40 * MINUTE }, async () => {
     prepare('restart');
     let s = await boot();

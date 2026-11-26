@@ -6,7 +6,7 @@
 
 ## 0. 安装
 
-1. 安装包已经构建好（2026-11-26）：`D:\PalDock\release\desktop\PalDock-Setup-0.3.2.exe`。版本号 `0.3.2`，本地服务版本 `0.3.2-p3`；没有代码签名，Windows 可能提示「未知发布者」。0.3.0 装上后界面一直停在「本地服务启动中」，是渲染进程的问题（服务其实已经启动），0.3.1 已修；0.3.2 加了对话里确认计划和简单计划自动确认，第一次启动数据库升到 v14。直接覆盖安装即可。要重新构建的话，在仓库根目录先运行
+1. 安装包已经构建好（2026-11-26）：`D:\PalDock\release\desktop\PalDock-Setup-0.3.3.exe`。版本号 `0.3.3`，本地服务版本 `0.3.3-p3`；没有代码签名，Windows 可能提示「未知发布者」。0.3.0 装上后界面一直停在「本地服务启动中」，是渲染进程的问题（服务其实已经启动），0.3.1 已修；0.3.2 加了对话里确认计划和简单计划自动确认；0.3.3 起协调、开发、审阅各角色按项目复用同一个原生会话（Codex 应用里不再每个子任务一个会话），第一次启动数据库升到 v15。直接覆盖安装即可。要重新构建的话，在仓库根目录先运行
    ```bash
    pnpm build
    ```
@@ -14,7 +14,7 @@
    ```bash
    ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ pnpm dist
    ```
-2. 先退出旧版 PalDock（托盘里也没有它），再运行安装包，安装到原来的位置 `D:\software\PalDock`。数据根 `D:\software\PalDockCache` 不用动：第一次启动时会自动备份数据库，再从 P2 的 v4 升到 v14（迁移 005–014；装过 0.3.0 / 0.3.1 的从 v13 升到 v14）。
+2. 先退出旧版 PalDock（托盘里也没有它），再运行安装包，安装到原来的位置 `D:\software\PalDock`。数据根 `D:\software\PalDockCache` 不用动：第一次启动时会自动备份数据库，再从 P2 的 v4 升到 v15（迁移 005–015；装过 0.3.x 的从当时的版本升到 v15）。
 3. 启动后：「设置 → 助手」里 Codex、Claude 都显示可用；`D:\software\PalDockCache\backups\` 里多了一份升级前的备份。
 
 ## 1. 桌面对话与计划

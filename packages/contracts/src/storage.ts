@@ -14,6 +14,7 @@ import type {
 import type { PersistentEvent, RunNoticeCode } from './events.js';
 import type { MainSessionRecord, NoticeKind, NoticeRecord, SummaryRecord, WakeRecord, WakeStatus, WakeTrigger } from './conversations.js';
 import type { AutoDecisionRecord, AutoPolicy, PlanNodeEdit, RecoveryItem } from './plans.js';
+import type { RoleSessionStorePort } from './role-sessions.js';
 import type { GateStage, GraphNode, MergeOpRecord, MergePhase, PlanNodeInput, PlanNodeRecord, PlanRecord } from './plans.js';
 import type {
   AgentOverrideRecord,
@@ -286,6 +287,8 @@ export interface RunStorePort {
   /** 最近一次工作 Run（审阅 Run 不算）。 */
   latestRun(subtaskId: string): RunRecord | undefined;
   recordThread(run: Pick<RunRecord, 'id' | 'runtime' | 'sessionId'>, threadId: string): RunRecord | undefined;
+  /** 这次 Run 用的角色会话和它的原生会话（换了新会话重试时 threadId 为 null，之后由 recordThread 记）。 */
+  setRoleSession(runId: string, roleSessionId: string, threadId: string | null): RunRecord;
   recordTurn(runId: string, turnId: string): RunRecord | undefined;
   transitionRun(id: string, expectedVersion: number, to: RunStatus, reason?: string): Change<RunRecord>;
   requestApproval(input: NewApproval): Change<ApprovalRecord>;
@@ -444,6 +447,7 @@ export interface StorePort {
   channels: ChannelStorePort;
   outbox: OutboxPort;
   inbox: InboxPort;
+  roleSessions: RoleSessionStorePort;
   /** 多个写入合成一个事务（内层用 SAVEPOINT）。 */
   transaction<T>(fn: () => T): T;
   interruptActiveWork(reason: string): RecoveryReport;

@@ -42,7 +42,7 @@ describe('MCP 网关', () => {
     const token = gateway.issue(run.id, 'developer', 60_000);
     const caller = gateway.authenticate(token)!;
     expect(caller).toEqual({ runId: run.id, role: 'developer' });
-    expect(gateway.list(caller).map((t) => t.name)).toEqual(['get_task', 'submit_result']);
+    expect(gateway.list(caller).map((t) => t.name)).toEqual(['get_task', 'submit_result', 'write_summary']);
     expect(gateway.call(caller, 'get_task', {})).toMatchObject({ goal: '实现记住我', role: { name: 'developer', displayName: '开发助手' }, checkCommand: null });
 
     expect(gateway.authenticate(createToken())).toBeUndefined();
@@ -133,7 +133,7 @@ describe('MCP 桥端到端（模拟 Claude）', () => {
     expect(JSON.parse(final)).toEqual({
       server: 'paldock',
       allowed: 'mcp__paldock',
-      tools: ['get_task', 'submit_result'],
+      tools: ['get_task', 'submit_result', 'write_summary'],
       goal: '[mock:mcp] 加一个功能',
       submitted: true,
       resubmitDenied: true,

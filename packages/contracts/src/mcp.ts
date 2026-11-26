@@ -51,8 +51,10 @@ export const MCP_TOOLS = {
       .strict(),
   },
   write_summary: {
-    roles: COORDINATOR,
-    description: '写这个会话的滚动摘要：到目前为止的目标、已定的事、进行中的任务、待用户决定的问题。PalDock 提示时调用；新开会话时会把它交给你。',
+    roles: [...COORDINATOR, ...SPECIALISTS],
+    description:
+      '写这个会话的摘要，PalDock 提示时调用。协调助手：到目前为止的目标、已定的事、进行中的任务、待用户决定的问题。' +
+      '专业助手：这个项目的约定、常用命令、踩过的坑（换新会话时交给接手的会话）。',
     args: z.object({ summary: z.string().trim().min(1).max(8000).describe('摘要正文') }).strict(),
   },
   get_status: {
