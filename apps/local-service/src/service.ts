@@ -21,7 +21,7 @@ import { openStore, type Store } from '@paldock/storage-sqlite';
 import { createAdapter, systemCredentials } from './channels.js';
 import { createHandlers, type Handlers } from './commands.js';
 
-export const SERVICE_VERSION = '0.3.5-p3';
+export const SERVICE_VERSION = '0.3.6-p3';
 const HELLO_TIMEOUT_MS = 5_000;
 const REPLAY_BATCH = 500;
 

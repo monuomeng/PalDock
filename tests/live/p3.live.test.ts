@@ -6,7 +6,7 @@
  * 副作用：Codex、Claude 自己的历史里会留下这些会话。
  */
 import { execFileSync, fork, type ChildProcess } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -271,6 +271,125 @@ describe.skipIf(process.env.PALDOCK_LIVE_P3 !== '1')('P3 真实执行器', () =>
     // 直接改在你的工作区里，没有提交、没有拆计划
     expect(status).toContain('math.js');
     expect(tasks).toHaveLength(0);
+  });
+
+  it('当前仓库协作端到端：已有暂存内容的功能分支上 Codex 开发、Claude 测试并审阅，只提交这次修改，再推到临时远端', { timeout: 60 * MINUTE }, async () => {
+    prepare('current');
+    // 功能分支、你自己已暂存的内容、临时远端（上游）
+    git(repo, 'checkout', '-q', '-b', 'feature');
+    git(repo, 'config', 'user.name', 'tester');
+    git(repo, 'config', 'user.email', 't@t');
+    writeFileSync(join(repo, 'notes.md'), '我自己的笔记，已暂存\n');
+    git(repo, 'add', 'notes.md');
+    const remote = join(root, 'remote.git');
+    execFileSync('git', ['init', '-q', '--bare', remote]);
+    git(repo, 'remote', 'add', 'origin', remote);
+    git(repo, 'push', '-q', '-u', 'origin', 'feature');
+    const head0 = git(repo, 'rev-parse', 'HEAD');
+    const cached0 = git(repo, 'diff', '--cached', '--name-only');
+
+    const s = await boot();
+    const t0 = Date.now();
+    const workspace = await call(s, 'workspace.add', { rootPath: repo });
+    expect(workspace.workspaceMode).toBe('current');
+    await call(s, 'agent.setOverride', { workspaceId: workspace.id, role: 'developer', executor: 'codex' });
+    await call(s, 'agent.setOverride', { workspaceId: workspace.id, role: 'tester', executor: 'claude' });
+    await call(s, 'agent.setOverride', { workspaceId: workspace.id, role: 'reviewer', executor: 'claude' });
+    const detail = await proposeViaCoordinator(s, {
+      title: '加 mul',
+      goal: '在 math.js 加 mul 并补测试',
+      nodes: [
+        { key: 'dev', role: 'developer', title: '实现 mul', goal: '在 math.js 里加 export function mul(a, b) { return a * b; }。只改 math.js，不要提交。', paths: ['math.js'] },
+        {
+          key: 'test',
+          role: 'tester',
+          title: '测试 mul',
+          goal: '新建 test/mul.test.js，用 node:test 和 node:assert 测 math.js 的 mul（mul(2, 3) 等于 6），然后运行 node --test 确认通过。只新建这个文件，不要提交。',
+          paths: ['test'],
+          dependsOn: ['dev'],
+          check: { executable: 'node', args: ['--test'] },
+        },
+      ],
+    });
+    await confirm(s, detail);
+    await until(async () => {
+      const d = await call(s, 'task.get', { taskId: detail.task.id });
+      const stuck = d.plan!.nodes.find((n) => n.subtask?.gateStage === 'human' || n.subtask?.status === 'blocked');
+      if (stuck) throw new Error(`节点 ${stuck.node.key} 停住：${stuck.subtask!.statusReason}`);
+      return d.task.status === 'succeeded' && d;
+    }, '开发、测试、审阅都通过', 45 * MINUTE);
+    const developedMs = Date.now() - t0;
+    // 改动立即在原目录里，没有提交；你暂存的内容原样
+    expect(readFileSync(join(repo, 'math.js'), 'utf8')).toContain('mul');
+    expect(git(repo, 'rev-parse', 'HEAD')).toBe(head0);
+    expect(git(repo, 'diff', '--cached', '--name-only')).toBe(cached0);
+
+    const [session] = await call(s, 'chat.sessions', { workspaceId: workspace.id });
+    const card = async (kind: 'commit' | 'push', text: string) => {
+      await call(s, 'chat.send', { sessionId: session!.sessionId, text, idempotencyKey: `${kind}-${Date.now()}` });
+      return until(async () => (await call(s, 'chat.get', { sessionId: session!.sessionId, limit: 5 })).gitOps.find((o) => o.kind === kind && o.status === 'proposed'), `${kind} 卡片`, 10 * MINUTE);
+    };
+    const commitCard = await card('commit', '只提交这次修改（mul 和它的测试），提交说明写「加 mul」。请直接调用 propose_commit 提出卡片，不要做别的。');
+    if (commitCard.request.kind !== 'commit') throw new Error('不是提交卡片');
+    const hunks = commitCard.request.hunks.map((h) => ({ path: h.path, evidenced: h.evidenced, stagedByUser: h.stagedByUser }));
+    const chosen = commitCard.request.hunks.filter((h) => h.evidenced).map((h) => h.id);
+    await call(s, 'gitop.decide', { opId: commitCard.id, expectedVersion: commitCard.version, decision: 'confirm', hunkIds: chosen });
+    const committedFiles = git(repo, 'show', '--name-only', '--format=', 'HEAD').split('\n').filter(Boolean);
+    const cachedAfter = git(repo, 'diff', '--cached', '--name-only');
+
+    const pushCard = await card('push', '推送当前分支。请直接调用 propose_push 提出卡片，不要做别的。');
+    await call(s, 'gitop.decide', { opId: pushCard.id, expectedVersion: pushCard.version, decision: 'confirm' });
+    const remoteHead = execFileSync('git', ['-C', remote, 'rev-parse', 'feature'], { encoding: 'utf8' }).trim();
+    await shutdown(s);
+    await report('current-e2e', { developedMs, totalMs: Date.now() - t0, hunks, committedFiles, cachedAfter, pushed: remoteHead === git(repo, 'rev-parse', 'HEAD'), pushRequest: pushCard.request });
+    // 新提交只含勾选的（助手写的）改动；你原本暂存的内容提交后仍是暂存状态；推到了临时远端的同名分支
+    expect(committedFiles).not.toContain('notes.md');
+    expect(committedFiles).toContain('math.js');
+    expect(cachedAfter).toBe('notes.md');
+    expect(remoteHead).toBe(git(repo, 'rev-parse', 'HEAD'));
+  });
+
+  it('测试正在运行时切分支：记录检测延迟、实际停止了哪些进程、切换后已经写入了哪些文件', { timeout: 30 * MINUTE }, async () => {
+    prepare('switch');
+    // 一个慢脚本：每 1.5 秒写一个文件（内容是写入时间），共约 40 秒
+    writeFileSync(
+      join(repo, 'slow.js'),
+      [
+        "const fs = require('fs');",
+        "fs.mkdirSync('ticks', { recursive: true });",
+        'let n = 0;',
+        "const t = setInterval(() => { n += 1; fs.writeFileSync('ticks/tick-' + n + '.txt', String(Date.now())); if (n >= 26) clearInterval(t); }, 1500);",
+        '',
+      ].join('\n'),
+    );
+    git(repo, 'add', '-A');
+    git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'slow');
+    const s = await boot();
+    const detail = await proposeViaCoordinator(s, {
+      title: '跑慢测试',
+      goal: '跑一下慢脚本',
+      nodes: [{ key: 'run', role: 'developer', title: '跑慢脚本', goal: '在前台运行 node slow.js（大约 40 秒，会在 ticks 目录里写文件），等它跑完后告诉我写了几个文件。不要改任何文件。' }],
+    });
+    await confirm(s, detail);
+    await until(async () => existsSync(join(repo, 'ticks', 'tick-2.txt')), '慢脚本开始写文件', 15 * MINUTE);
+    const switchedAt = Date.now();
+    git(repo, 'checkout', '-q', '-b', 'other');
+    const workspaceId = detail.task.workspaceId;
+    await until(async () => (await call(s, 'workspace.list', {})).find((w) => w.id === workspaceId)?.pausedReason, '暂停', 60_000);
+    const detectedMs = Date.now() - switchedAt;
+    await new Promise((r) => setTimeout(r, 5_000));
+    const stillRunning = leftovers();
+    const ticksAfter = readdirSync(join(repo, 'ticks')).filter((f) => Number(readFileSync(join(repo, 'ticks', f), 'utf8')) > switchedAt);
+    const node = (await call(s, 'task.get', { taskId: detail.task.id })).plan!.nodes[0]!.subtask!;
+    const [session] = await call(s, 'chat.sessions', { workspaceId });
+    const notice = (await call(s, 'chat.get', { sessionId: session!.sessionId, limit: 5 })).notices[0]?.body ?? null;
+    await new Promise((r) => setTimeout(r, 10_000));
+    const ticksLater = readdirSync(join(repo, 'ticks')).length;
+    await call(s, 'workspace.resume', { workspaceId, action: 'cancel' });
+    await shutdown(s);
+    await report('branch-switch', { detectedMs, stillRunningAfter5s: stillRunning, ticksWrittenAfterSwitch: ticksAfter, ticksTotal10sLater: ticksLater, node: { status: node.status, reason: node.statusReason }, notice });
+    expect(detectedMs).toBeLessThan(10_000);
+    expect(node.status).toBe('blocked');
   });
 
   it('开发节点运行中强杀本地服务后重启：检查残留进程，按 checkTurn 恢复', { timeout: 40 * MINUTE }, async () => {
