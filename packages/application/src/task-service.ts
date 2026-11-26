@@ -147,14 +147,29 @@ export class TaskService {
   /** 登记项目（不建任务）：和建任务同一套校验。 */
   async addWorkspace(rootPath: string): Promise<WorkspaceRecord> {
     const root = await this.validateProject(rootPath);
-    return this.store.tasks.ensureWorkspace(basename(root), root);
+    return this.register(root);
+  }
+
+  /** 登记项目；第一次登记的项目默认用当前工作区方式（2026-11-26 已定），已有项目保持原样。 */
+  private register(root: string): WorkspaceRecord {
+    const known = new Set(this.store.tasks.listWorkspaces().map((w) => w.id));
+    const workspace = this.store.tasks.ensureWorkspace(basename(root), root);
+    if (known.has(workspace.id)) return workspace;
+    const { record, events } = this.store.tasks.setWorkspaceMode(workspace.id, workspace.version, 'current');
+    this.publish(events);
+    return record;
+  }
+
+  /** 工作区方式（只在桌面有入口）：当前工作区 / 独立 worktree。 */
+  setWorkspaceMode(workspaceId: string, expectedVersion: number, mode: 'current' | 'worktree'): void {
+    this.publish(this.store.tasks.setWorkspaceMode(workspaceId, expectedVersion, mode).events);
   }
 
   /** 新任务：校验并登记项目。 */
   private async freshStart(rootPath: string | undefined, goal: string): Promise<{ workspace: WorkspaceRecord; prompt: string }> {
     if (!rootPath) throw new CodedError('bad_request', '请选择项目目录');
     const root = await this.validateProject(rootPath);
-    return { workspace: this.store.tasks.ensureWorkspace(basename(root), root), prompt: firstRunPrompt(goal) };
+    return { workspace: this.register(root), prompt: firstRunPrompt(goal) };
   }
 
   /** 接续任务：项目取自来源任务（已登记、校验过）；来源必须已结束、有分支。提示词带上来源的目标和最后说明。 */

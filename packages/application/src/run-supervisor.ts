@@ -27,7 +27,7 @@ import type {
 import { checkCapability, isAutoApproved, outOfScope, P1_DEFAULTS, taskKey } from '@paldock/domain';
 import { runCheck } from './check-runner.js';
 import { addWorktree, branchCommit, changedFiles, changedSince, commitStaged, dirtyFiles, fingerprints, headCommit, stageAndDiffStat, workingDiffStat } from './git.js';
-import { accessOf, runPolicy, type RunPolicy } from './project-policy.js';
+import { accessOf, runPolicy, worksInProject, type RunPolicy } from './project-policy.js';
 import { redact } from './redact.js';
 import { operationOf, riskOf } from './risk.js';
 import type { McpGateway } from './mcp-gateway.js';
@@ -100,6 +100,8 @@ interface LiveRun {
   lease: RoleSessionLease | undefined;
   /** 项目设置算出的隔离方式和审批严格度（2026-11-26 已定，项目级助手设置）。 */
   policy: RunPolicy;
+  /** 这次 Run 在项目目录里干活（同一项目同一时刻只有一个）。 */
+  inProject: boolean;
   /** 直接在项目目录里改时，开始前工作区里已经有改动的文件和它们当时的内容指纹（内容没变的不算这次的交付）。 */
   directBaseline: Map<string, string> | undefined;
 }
@@ -184,19 +186,33 @@ export class RunSupervisor {
     if (ofTask >= this.limits.maxRunsPerTask) return false;
     const slot = this.poolSlot(subtaskId, plan);
     if (slot && !this.pool.hasRoom(slot.key, slot.max)) return false;
-    // 直接在项目目录里改：同一个项目同一时刻只有一个写入者（单人主会话也算），其余排队
-    const writer = this.directWriterOf(subtaskId, plan);
-    if (writer) for (const live of this.live.values()) if (live.task.workspaceId === writer && live.policy.isolation === 'direct') return false;
+    // 在项目目录里干活的 Run（当前工作区方式的计划节点与审阅、直接写入者、单人主会话）：同一个项目同一时刻只跑一个，其余排队；
+    // 切了分支暂停写入时也不开始
+    const project = this.projectOf(subtaskId, plan);
+    if (project) {
+      if (this.deps.store.tasks.getWorkspace(project)?.pausedReason) return false;
+      for (const live of this.live.values()) if (live.task.workspaceId === project && live.inProject) return false;
+    }
     return true;
   }
 
-  /** 这次 Run 是不是项目目录里的直接写入者；是的话返回项目 ID。 */
-  private directWriterOf(subtaskId: string, plan: RunPlan): string | undefined {
+  /** 这次 Run 要不要占用项目目录（是的话返回项目 ID）。 */
+  private projectOf(subtaskId: string, plan: RunPlan): string | undefined {
     const { store } = this.deps;
     const subtask = store.tasks.getSubtask(subtaskId);
     const task = subtask && store.tasks.getTask(subtask.taskId);
     if (!subtask || !task) return undefined;
-    return this.policyOf(task, subtask, plan.review?.role ?? subtask.role, this.modeOf(task, plan)).isolation === 'direct' ? task.workspaceId : undefined;
+    return this.occupiesProject(task, subtask, plan.review?.role ?? subtask.role, this.modeOf(task, plan)) ? task.workspaceId : undefined;
+  }
+
+  /**
+   * 在项目目录里干活：当前工作区方式（或角色设成直接改）下计划节点的工作与审阅、单人模式直接改的主会话、单人模式改完后的审阅。
+   * 团队模式的协调助手只读、不占用（不然它要等开发跑完才能回你话）；旧入口的单子任务始终在自己的 worktree 里。
+   */
+  private occupiesProject(task: TaskRecord, subtask: SubtaskRecord, role: string, mode: LiveRun['mode']): boolean {
+    if (task.kind === 'conversation') return mode === 'review' || this.policyOf(task, subtask, role, mode).isolation === 'direct';
+    if (!subtask.planId) return false;
+    return worksInProject(this.deps.store, task.workspaceId, role) || this.policyOf(task, subtask, role, mode).isolation === 'direct';
   }
 
   private modeOf(task: TaskRecord, plan: RunPlan): LiveRun['mode'] {
@@ -476,9 +492,11 @@ export class RunSupervisor {
       check: new AbortController(),
       lease: undefined,
       policy: { isolation: 'worktree', approval: 'worktree_auto' },
+      inProject: false,
       directBaseline: undefined,
     };
     live.policy = this.policyOf(task, subtask, role, live.mode);
+    live.inProject = this.occupiesProject(task, subtask, role, live.mode);
     this.live.set(subtask.id, live);
     return live;
   }
@@ -489,9 +507,10 @@ export class RunSupervisor {
    */
   private async ensureWorktree(live: LiveRun): Promise<string> {
     const workspace = this.deps.store.tasks.getWorkspace(live.task.workspaceId)!;
-    // 直接在项目目录里改（节点或单人主会话）：工作目录就是项目根目录，不建 worktree，也不把它记成 worktree
-    // （记成 worktree 会被当成 PalDock 的目录清理）；记下开始前已有的改动，交付时不算进去
-    if (live.policy.isolation === 'direct') {
+    // 在项目目录里干活（当前工作区方式的计划节点与审阅、直接写入者、单人主会话）：工作目录就是项目根目录，不建 worktree，
+    // 也不把它记成 worktree（记成 worktree 会被当成 PalDock 的目录清理）；记下开始前已有的改动，交付时不算进去
+    const soloWorktree = live.task.kind === 'conversation' && this.deps.store.projectSettings.get(live.task.workspaceId).soloIsolation === 'worktree';
+    if (live.inProject && !soloWorktree) {
       live.directBaseline = fingerprints(workspace.rootPath, await dirtyFiles(workspace.rootPath));
       return workspace.rootPath;
     }

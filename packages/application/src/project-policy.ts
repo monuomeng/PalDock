@@ -17,7 +17,16 @@ export function runPolicy(store: StorePort, workspaceId: string, role: string, m
     return settings.mode === 'solo' ? { isolation: settings.soloIsolation, approval: settings.soloApproval } : { isolation: 'readonly', approval: 'all' };
   }
   const setting = store.projectSettings.role(workspaceId, role);
+  // 当前工作区方式（2026-11-26 已定，新项目默认）：所有角色都在项目目录里，可写角色直接改，只读角色只读
+  if (store.tasks.getWorkspace(workspaceId)?.workspaceMode === 'current') {
+    return { isolation: setting.isolation === 'readonly' ? 'readonly' : 'direct', approval: setting.approval };
+  }
   return { isolation: setting.isolation, approval: setting.approval };
+}
+
+/** 这个角色的计划节点是不是在项目目录里干活（当前工作区方式，或角色设成直接改）。 */
+export function worksInProject(store: StorePort, workspaceId: string, role: string): boolean {
+  return store.tasks.getWorkspace(workspaceId)?.workspaceMode === 'current' || store.projectSettings.role(workspaceId, role).isolation === 'direct';
 }
 
 export const isSolo = (store: StorePort, workspaceId: string) => store.projectSettings.get(workspaceId).mode === 'solo';

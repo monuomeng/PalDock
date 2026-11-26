@@ -362,3 +362,51 @@ describe('worktree 准备命令', () => {
     expect(runtime.runs.filter((r) => r.title.startsWith('审阅'))).toEqual([]);
   });
 });
+
+describe('当前工作区方式（默认在当前仓库协作，2026-11-26 已定）', () => {
+  const setCurrent = () => {
+    const ws = store.tasks.getWorkspace(workspaceId)!;
+    store.tasks.setWorkspaceMode(ws.id, ws.version, 'current');
+  };
+
+  it('开发、测试、审阅都在项目目录里：不建集成分支、不合并、不提交，测试看得到开发还没提交的改动；你的暂存区不动', async () => {
+    await setup();
+    setCurrent();
+    writeFileSync(join(repo, 'mine.txt'), '我暂存的\n');
+    git(repo, 'add', 'mine.txt');
+    const cached = git(repo, 'diff', '--cached');
+    const taskId = await confirmPlan([
+      { key: 'a', paths: ['src'] },
+      { key: 'b', role: 'tester', dependsOn: ['a'], paths: ['src'] },
+    ]);
+    expect(store.tasks.getTask(taskId)!.integrationBranch).toBeNull();
+    const a = await started('做 a');
+    expect(a.request.cwd).toBe(repo);
+    a.succeed({ 'src/a.ts': 'export const a = 1;\n' });
+    const b = await started('做 b');
+    expect(b.request.cwd).toBe(repo);
+    expect(readFileSync(join(b.request.cwd, 'src/a.ts'), 'utf8')).toBe('export const a = 1;\n');
+    b.succeed({ 'src/a.test.ts': 'test\n' });
+    await until(() => store.tasks.getTask(taskId)!.status, (s) => s === 'succeeded', '任务成功');
+    // 没有提交、没有合并：改动都在你的工作区里，HEAD 没动，你暂存的内容原样
+    expect(git(repo, 'rev-parse', 'main')).toBe(initial);
+    expect(git(repo, 'diff', '--cached')).toBe(cached);
+    expect(git(repo, 'status', '--porcelain')).toContain('src/');
+    expect(subtaskWorktrees(taskId)).toEqual([null, null]);
+  });
+
+  it('同一个项目里在项目目录干活的 Run 一律排队：两个没有依赖的节点一个一个来', async () => {
+    await setup();
+    setCurrent();
+    await confirmPlan([{ key: 'p', paths: ['src'] }, { key: 'q', paths: ['src'] }]);
+    await until(() => runtime.runs.length, (n) => n >= 1, '第一个开始');
+    await new Promise((r) => setTimeout(r, 150));
+    expect(runtime.runs.filter((r) => !r.ended)).toHaveLength(1);
+    runtime.runs[0]!.succeed({ 'src/p.ts': 'p\n' });
+    await until(() => runtime.runs.filter((r) => !r.title.startsWith('审阅')).length, (n) => n === 2, '第二个在第一个（和它的审阅）结束后开始');
+  });
+});
+
+function subtaskWorktrees(taskId: string): (string | null)[] {
+  return store.tasks.listSubtasks(taskId).map((s) => s.worktreePath);
+}

@@ -1,5 +1,6 @@
 import { CodedError, type McpToolArgs, type PersistentEvent, type PlanNodeEdit, type PlanRecord, type StorePort } from '@paldock/contracts';
 import { isSimplePlan, P3_DEFAULTS, validatePlan } from '@paldock/domain';
+import { worksInProject } from './project-policy.js';
 import type { IntegrationService } from './integration.js';
 import type { TaskGraphScheduler } from './task-graph-scheduler.js';
 import { settleTask } from './transitions.js';
@@ -53,7 +54,7 @@ export class PlanService {
    * 下游拿不到上游的改动——直接写入的改动不进集成分支，worktree 节点的改动也不在你的工作区里。提出和确认时都查。
    */
   private assertSameWorkspace(workspaceId: string, nodes: readonly { key: string; role: string; dependsOn: readonly string[] }[]): void {
-    const direct = (role: string) => this.deps.store.projectSettings.role(workspaceId, role).isolation === 'direct';
+    const direct = (role: string) => worksInProject(this.deps.store, workspaceId, role);
     const byKey = new Map(nodes.map((n) => [n.key, n]));
     const crossing = nodes.flatMap((n) =>
       n.dependsOn.flatMap((dep) => {
@@ -179,7 +180,9 @@ export class PlanService {
     const task = store.tasks.getTask(plan.taskId)!;
     this.assertEnabled(task.workspaceId, store.plans.nodes(planId));
     this.assertSameWorkspace(task.workspaceId, store.plans.nodes(planId));
-    if (this.deps.integration && task.status === 'draft') await this.deps.integration.ensureBranch(task);
+    // 当前工作区方式：大家都在项目目录里，不建任务集成分支、不合并
+    const current = store.tasks.getWorkspace(task.workspaceId)?.workspaceMode === 'current';
+    if (this.deps.integration && task.status === 'draft' && !current) await this.deps.integration.ensureBranch(task);
     const { record, events } = store.plans.confirm(planId, expectedVersion, note?.trim() || null, via);
     this.deps.publish(events);
     for (const id of record.cancelled) this.deps.supervisor?.cancel(id);

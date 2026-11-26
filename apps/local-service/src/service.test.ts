@@ -65,7 +65,8 @@ describe('本地服务 IPC', () => {
     await newTask(a, 'key-aaaaaaaa');
     await a.close();
     const before = seen.length;
-    expect(seen[0]?.type).toBe('task.created');
+    // 第一次登记的项目先记一条工作区方式（默认当前工作区），然后才是建任务
+    expect(seen.map((e) => e.type).slice(0, 2)).toEqual(['workspace.mode_changed', 'task.created']);
 
     // 离线期间由另一个客户端再建一个任务
     const b = await connectClient();
