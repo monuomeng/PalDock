@@ -263,9 +263,13 @@ class CodexRun implements RuntimeRun {
         return;
       case 'item/started':
       case 'item/completed': {
-        const item = params.item as { type?: string; id?: string; text?: string; changes?: { path: string }[] } | undefined;
+        const item = params.item as { type?: string; id?: string; text?: string; status?: string; changes?: { path: string; diff?: string }[] } | undefined;
         if (!item?.id || params.threadId !== this.threadId) return;
         if (item.type === 'fileChange' && item.changes) this.fileChanges.set(item.id, item.changes.map((c) => c.path));
+        // 写完的文件改动：补丁作为写入证据（提交时据此决定哪些改动块默认勾选）
+        if (method === 'item/completed' && item.type === 'fileChange' && item.status === 'completed' && item.changes?.length) {
+          this.emit({ type: 'file_written', writes: item.changes.filter((c) => typeof c.diff === 'string').map((c) => ({ path: c.path, kind: 'patch' as const, detail: c.diff! })) });
+        }
         if (method === 'item/completed' && item.type === 'agentMessage' && typeof item.text === 'string') this.lastAgentMessage = item.text;
         return;
       }

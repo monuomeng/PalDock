@@ -1,19 +1,19 @@
-import { createHash } from 'node:crypto';
-import { readFileSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { execFile } from 'node:child_process';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { childEnv } from '@paldock/platform';
 
 /**
  * PalDock 对 git 的全部调用都经这里：参数数组、不经 shell；统一带 `-c core.longpaths=true`
  * （Windows 上删除含超长路径的 worktree 否则会失败并残留文件，P0-04 实测），不修改用户的全局配置。
  */
-export function git(cwd: string, args: readonly string[], timeoutMs = 60_000): Promise<string> {
+export function git(cwd: string, args: readonly string[], timeoutMs = 60_000, env: Record<string, string> = {}): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       'git',
       ['-c', 'core.longpaths=true', '-C', cwd, ...args],
-      { encoding: 'utf8', windowsHide: true, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env: childEnv({ GIT_TERMINAL_PROMPT: '0' }) },
+      { encoding: 'utf8', windowsHide: true, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env: childEnv({ GIT_TERMINAL_PROMPT: '0', ...env }) },
       (error, stdout, stderr) => (error ? reject(new GitError(args[0] ?? 'git', stderr.trim() || error.message)) : resolve(stdout)),
     );
   });
@@ -154,26 +154,43 @@ export async function workingDiffStat(repo: string): Promise<string> {
 }
 
 /**
- * 文件内容指纹（sha1；文件不存在记为 `-`）。「直接在项目目录里改」时，开始前记下工作区里已有改动的文件的内容，
- * 结束时内容变了就算这次的改动（你自己改过、助手又改的文件也能分出来）。只读。
+ * 工作区快照（默认在当前仓库协作，2026-11-26 已定）：把项目目录里的所有文件（含未跟踪的，尊重 .gitignore）写成一个 git tree。
+ * 用一份临时索引（从当前索引复制过来，复用它的文件状态缓存）：只写对象库，不动用户的暂存区、工作区和分支。
  */
-export function fingerprints(repo: string, files: Iterable<string>): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const file of files) {
-    try {
-      out.set(file, createHash('sha1').update(readFileSync(join(repo, file))).digest('hex'));
-    } catch {
-      out.set(file, '-');
-    }
+export async function snapshotTree(repo: string, scratchDir: string): Promise<string> {
+  const gitDir = resolve(repo, (await git(repo, ['rev-parse', '--git-dir'])).trim());
+  mkdirSync(scratchDir, { recursive: true });
+  const index = join(scratchDir, `index-${randomUUID()}`);
+  try {
+    if (existsSync(join(gitDir, 'index'))) copyFileSync(join(gitDir, 'index'), index);
+    const env = { GIT_INDEX_FILE: index };
+    await git(repo, ['add', '-A'], 120_000, env);
+    return (await git(repo, ['write-tree'], 60_000, env)).trim();
+  } finally {
+    rmSync(index, { force: true });
   }
-  return out;
 }
 
-/** 这次 Run 改了哪些文件：现在有改动、开始时没有的；开始时就有改动、内容变了（含被改回原样）的。 */
-export async function changedSince(repo: string, baseline: ReadonlyMap<string, string>): Promise<string[]> {
-  const dirty = await dirtyFiles(repo);
-  const candidates = new Set([...dirty, ...baseline.keys()]);
-  const now = fingerprints(repo, candidates);
-  const dirtyNow = new Set(dirty);
-  return [...candidates].filter((file) => (baseline.has(file) ? baseline.get(file) !== now.get(file) || !dirtyNow.has(file) : true)).sort();
+/** 当前分支名（分离 HEAD 时为 null）和 HEAD 提交。 */
+export async function branchAndHead(repo: string): Promise<{ branch: string | null; head: string }> {
+  const branch = (await git(repo, ['symbolic-ref', '--short', '-q', 'HEAD']).catch(() => '')).trim() || null;
+  return { branch, head: await headCommit(repo) };
+}
+
+/** 两个 tree 之间改动的文件（相对仓库根，`/` 分隔）。 */
+export async function treeChangedFiles(repo: string, from: string, to: string): Promise<string[]> {
+  return (await git(repo, ['diff', '--name-only', '-z', from, to])).split('\0').filter((f) => f !== '');
+}
+
+/** 带标准输入的 git 调用（update-index --index-info 之类）。 */
+export function gitInput(cwd: string, args: readonly string[], input: string, env: Record<string, string> = {}): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const child = execFile(
+      'git',
+      ['-c', 'core.longpaths=true', '-C', cwd, ...args],
+      { encoding: 'utf8', windowsHide: true, timeout: 60_000, maxBuffer: 64 * 1024 * 1024, env: childEnv({ GIT_TERMINAL_PROMPT: '0', ...env }) },
+      (error, stdout, stderr) => (error ? reject(new GitError(args[0] ?? 'git', stderr.trim() || error.message)) : resolvePromise(stdout)),
+    );
+    child.stdin?.end(input);
+  });
 }

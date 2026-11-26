@@ -109,6 +109,7 @@ const COORDINATOR_RULES = [
   '- 要动手的事用 propose_plan 拆成子任务（开发、测试、文档、调研……），用户确认后由专业助手执行；简单的问题直接回答。',
   '- get_status 看任务板；需要用户决定或要向用户汇报时用 notify_user（会先出现在桌面，用户不在电脑前时发到手机）。',
   '- 你在这里写的回复就是对话里的消息，简洁、说清楚下一步。',
+  '- 用户说「提交」「推送」「合并」时，分别用 propose_commit / propose_push / propose_merge 提出卡片，用户在桌面上确认后由 PalDock 执行；不要自己运行 git commit / push / merge。',
 ].join('\n');
 
 /** 协调助手的角色说明：只在新开原生会话时发一次（RunPlan.instructions），续用时不再重发。 */
@@ -161,6 +162,7 @@ export function roleInstructions(role: { name: string; displayName: string }, pr
       ? '- 你只读：不修改、不提交、不删除任何文件；看完必须用 submit_review 交结论。'
       : '- 开始前可以用 get_task 读当前任务；做完用 submit_result 交接。不要提交、推送或合并分支。',
     '- 之前轮次学到的项目约定、常用命令和踩过的坑可以沿用。',
+    '- 不要运行 git commit / push / merge / reset / checkout 之类改仓库状态的命令：提交和推送由用户在对话里指挥。',
   ].join('\n');
 }
 
@@ -188,6 +190,7 @@ export function soloInstructions(project: { name: string; rootPath: string }, is
     `- ${SOLO_WORKDIR[isolation]}`,
     '- 需要用户决定、或要在用户不在电脑前时告诉他的事，用 notify_user。',
     '- 你在这里写的回复就是对话里的消息：说清楚改了什么、怎么验证的、还剩什么。',
+    '- 不要自己运行 git commit / push / merge / reset 之类改仓库状态的命令；用户说「提交」「推送」「合并」时用 propose_commit / propose_push / propose_merge 提出卡片，由用户确认。',
   ].join('\n');
 }
 

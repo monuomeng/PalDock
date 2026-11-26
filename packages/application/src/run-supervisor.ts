@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { AgentRole } from '@paldock/contracts';
 import type {
   CheckCommand,
@@ -16,6 +16,7 @@ import type {
   RuntimeAdapter,
   RuntimeApprovalDecision,
   RuntimeApprovalRequest,
+  RuntimeWrite,
   RuntimeEvent,
   RuntimeRun,
   StorePort,
@@ -24,9 +25,9 @@ import type {
   TaskRecord,
   TurnCheck,
 } from '@paldock/contracts';
-import { checkCapability, isAutoApproved, outOfScope, P1_DEFAULTS, taskKey } from '@paldock/domain';
+import { checkCapability, isAutoApproved, isGitWrite, outOfScope, P1_DEFAULTS, taskKey } from '@paldock/domain';
 import { runCheck } from './check-runner.js';
-import { addWorktree, branchCommit, changedFiles, changedSince, commitStaged, dirtyFiles, fingerprints, headCommit, stageAndDiffStat, workingDiffStat } from './git.js';
+import { addWorktree, branchAndHead, branchCommit, changedFiles, commitStaged, headCommit, snapshotTree, stageAndDiffStat, treeChangedFiles, workingDiffStat } from './git.js';
 import { accessOf, runPolicy, worksInProject, type RunPolicy } from './project-policy.js';
 import { redact } from './redact.js';
 import { operationOf, riskOf } from './risk.js';
@@ -96,14 +97,16 @@ interface LiveRun {
   flushTimer: NodeJS.Timeout | undefined;
   cancelRequested: boolean;
   check: AbortController;
+  /** 待审批的写文件请求带的内容（批准后记成写入证据）。 */
+  writeRequests: Map<string, RuntimeWrite[]>;
   /** 计划节点和审阅的 Run 占用的角色会话（P1 / P2 单子任务和协调助手没有）。 */
   lease: RoleSessionLease | undefined;
   /** 项目设置算出的隔离方式和审批严格度（2026-11-26 已定，项目级助手设置）。 */
   policy: RunPolicy;
   /** 这次 Run 在项目目录里干活（同一项目同一时刻只有一个）。 */
   inProject: boolean;
-  /** 直接在项目目录里改时，开始前工作区里已经有改动的文件和它们当时的内容指纹（内容没变的不算这次的交付）。 */
-  directBaseline: Map<string, string> | undefined;
+  /** 在项目目录里干活时，开始时的工作区快照（tree）和分支、HEAD；结束快照记下后清掉 startTree 以外的部分。 */
+  snapshot: { startTree: string; branch: string | null; head: string; ended: boolean } | undefined;
 }
 
 /** 角色会话池的键和池大小（角色的 maxConcurrency）。 */
@@ -295,9 +298,24 @@ export class RunSupervisor {
   }
 
   private reply(live: LiveRun, nativeId: string, decision: RuntimeApprovalDecision): void {
+    // 批准的写文件请求：内容记成写入证据
+    const writes = live.writeRequests.get(nativeId);
+    live.writeRequests.delete(nativeId);
+    if (writes && decision === 'allow_once') this.recordWrites(live, writes);
     if (live.handle) live.handle.respondApproval(nativeId, decision);
     else live.pendingReplies.push([nativeId, decision]);
   }
+
+  /** 助手的写入证据（路径统一成相对项目目录、`/` 分隔；项目目录外的不记）。 */
+  private recordWrites(live: LiveRun, writes: readonly RuntimeWrite[]): void {
+    if (!live.worktree) return;
+    for (const write of writes) {
+      const path = relative(live.worktree, resolve(live.worktree, write.path));
+      if (!path || path.startsWith('..') || isAbsolute(path)) continue;
+      this.deps.store.git.addWrite({ runId: live.run.id, path: path.split(sep).join('/'), kind: write.kind, detail: write.detail });
+    }
+  }
+
 
   private liveRun(runId: string): LiveRun | undefined {
     for (const live of this.live.values()) if (live.run.id === runId) return live;
@@ -493,7 +511,8 @@ export class RunSupervisor {
       lease: undefined,
       policy: { isolation: 'worktree', approval: 'worktree_auto' },
       inProject: false,
-      directBaseline: undefined,
+      snapshot: undefined,
+      writeRequests: new Map(),
     };
     live.policy = this.policyOf(task, subtask, role, live.mode);
     live.inProject = this.occupiesProject(task, subtask, role, live.mode);
@@ -511,7 +530,7 @@ export class RunSupervisor {
     // 也不把它记成 worktree（记成 worktree 会被当成 PalDock 的目录清理）；记下开始前已有的改动，交付时不算进去
     const soloWorktree = live.task.kind === 'conversation' && this.deps.store.projectSettings.get(live.task.workspaceId).soloIsolation === 'worktree';
     if (live.inProject && !soloWorktree) {
-      live.directBaseline = fingerprints(workspace.rootPath, await dirtyFiles(workspace.rootPath));
+      await this.startSnapshot(live, workspace.rootPath);
       return workspace.rootPath;
     }
     // 主会话（和单人模式改完后的审阅）：单人模式独立 worktree 时用那个长期的 worktree，其余在项目根目录里
@@ -535,6 +554,26 @@ export class RunSupervisor {
     const updated = this.deps.store.tasks.setWorktree(live.subtask.id, path, branch, start);
     if (updated) live.subtask = updated;
     return path;
+  }
+
+  /**
+   * 在项目目录里干活的 Run 开始时给工作区拍快照（2026-11-26 已定）：之后按两次快照的差算这次的改动，不动用户的暂存区。
+   * 同时记下分支和 HEAD，供分支保护核对。
+   */
+  private async startSnapshot(live: LiveRun, repo: string): Promise<void> {
+    const { branch, head } = await branchAndHead(repo);
+    const startTree = await snapshotTree(repo, join(this.deps.dataRoot, 'tmp'));
+    live.snapshot = { startTree, branch, head, ended: false };
+    this.deps.store.git.startSnapshot({ runId: live.run.id, workspaceId: live.task.workspaceId, branch, head, startTree });
+  }
+
+  /** 结束快照（取证时、或 Run 结束时）；返回这段时间改动的文件。 */
+  private async endSnapshot(live: LiveRun, repo: string): Promise<string[]> {
+    if (!live.snapshot || live.snapshot.ended) return [];
+    live.snapshot.ended = true;
+    const endTree = await snapshotTree(repo, join(this.deps.dataRoot, 'tmp'));
+    this.deps.store.git.endSnapshot(live.run.id, endTree);
+    return treeChangedFiles(repo, live.snapshot.startTree, endTree);
   }
 
   /** 单人模式的独立 worktree：每个项目一个（`paldock/solo-<项目>`），第一次用时从项目 HEAD 建，之后一直用；改动留在那里由你合。 */
@@ -602,7 +641,10 @@ export class RunSupervisor {
         live.flushTimer ??= setTimeout(() => this.flushOutput(live), this.limits.outputCheckpointMs);
         return;
       case 'approval_request':
+        if (event.request.writes?.length) live.writeRequests.set(event.request.nativeRequestId, event.request.writes);
         return this.onApprovalRequest(live, event.request);
+      case 'file_written':
+        return this.recordWrites(live, event.writes);
       case 'approval_withdrawn':
         return this.onApprovalWithdrawn(live, event.nativeRequestId);
       case 'notice':
@@ -629,6 +671,13 @@ export class RunSupervisor {
     if (live.worktree) {
       const operation = operationOf(request, live.worktree);
       const actor = `run:${live.run.id}`;
+      // 当前工作区方式：提交、推送、合并由你在对话里指挥（卡片确认），助手自己运行改仓库状态的 git 命令一律拒绝
+      const current = this.deps.store.tasks.getWorkspace(live.task.workspaceId)?.workspaceMode === 'current';
+      if (current && request.kind === 'command' && isGitWrite(request.command ?? '')) {
+        this.deps.store.audit.append(actor, 'approval.auto', request.summary.slice(0, 200), 'deny:git_write');
+        this.publish([this.deps.store.runs.addNotice(live.run.id, 'git_write_denied', `拒绝了助手自己运行的 git 命令：${(request.command ?? '').slice(0, 200)}`)]);
+        return this.reply(live, request.nativeRequestId, 'deny');
+      }
       if (live.policy.isolation === 'readonly' && request.kind === 'file_change') {
         this.deps.store.audit.append(actor, 'approval.auto', request.summary.slice(0, 200), 'deny:readonly');
         return this.reply(live, request.nativeRequestId, 'deny');
@@ -694,6 +743,10 @@ export class RunSupervisor {
   /** 让出并发名额（Run 与证据收集都结束后调用一次）。 */
   private release(live: LiveRun): void {
     this.deps.mcp?.gateway.revoke(live.run.id);
+    // 没取证的 Run（单人主会话、审阅、失败的）也记下结束快照，提交时据此找「这次的改动」
+    if (live.snapshot && !live.snapshot.ended && live.worktree) {
+      this.background(this.endSnapshot(live, live.worktree).then(() => undefined).catch((error) => this.deps.log(`end snapshot ${live.run.id} failed: ${errorText(error)}`)));
+    }
     if (live.lease) {
       const usage = this.deps.store.runs.getUsage(live.run.id);
       const tokens = usage ? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0) : 0;
@@ -808,7 +861,7 @@ export class RunSupervisor {
       if (node) {
         const parsed = AgentRole.safeParse(live.subtask.role);
         const roleScope = parsed.success ? (this.deps.store.agents.getProfile(parsed.data)?.deliveryScope ?? []) : [];
-        base.outOfScope = outOfScope(await changedSince(worktree, live.directBaseline ?? new Map()), [...roleScope, ...node.paths]);
+        base.outOfScope = outOfScope(await this.endSnapshot(live, worktree), [...roleScope, ...node.paths]);
         check = { command: node.checkCommand, confirmed: true };
       }
     } else if (node) {

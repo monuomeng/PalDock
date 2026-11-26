@@ -14,6 +14,7 @@ import {
 import { createToken } from '@paldock/platform';
 import type { CoordinatorService } from './coordinator.js';
 import type { PlanService } from './plan-service.js';
+import type { GitOpsService } from './git-ops.js';
 import { handoffOf, nodeOf, upstreamOf } from './task-graph-scheduler.js';
 
 /** 令牌对应的调用者：只认服务签发时记下的 Run 和角色，不信模型自报身份。 */
@@ -27,6 +28,8 @@ export interface McpGatewayDeps {
   publish(events: PersistentEvent[]): void;
   /** propose_plan 的后端；取值延后，因为计划用例依赖的调度器又依赖带这个网关的监管器。缺省时该工具报错。 */
   plans?: () => PlanService | undefined;
+  /** 提交 / 推送 / 合并卡片（默认在当前仓库协作）；同样延后取。 */
+  gitOps?: () => GitOpsService | undefined;
   /** 主会话：请求计数、notify_user、write_summary 的后端；同样延后取。 */
   coordinator?: () => CoordinatorService | undefined;
   now?: () => number;
@@ -150,6 +153,19 @@ export class McpGateway {
         if (!roleSessionId) throw new CodedError('bad_request', '这次执行不在角色会话里，不需要写摘要');
         this.deps.store.roleSessions.setSummary(roleSessionId, summary);
         return { saved: true, next: '摘要已保存，换新会话时会交给接手的会话' };
+      }
+      case 'propose_commit':
+      case 'propose_push':
+      case 'propose_merge': {
+        const gitOps = this.deps.gitOps?.();
+        if (!gitOps) throw new CodedError('unavailable', '提交 / 推送 / 合并功能未启用');
+        const card =
+          tool === 'propose_commit'
+            ? gitOps.proposeCommit(caller.runId, (args as McpToolArgs<'propose_commit'>).message)
+            : tool === 'propose_push'
+              ? gitOps.proposePush(caller.runId, (args as McpToolArgs<'propose_push'>).remote, (args as McpToolArgs<'propose_push'>).branch)
+              : gitOps.proposeMerge(caller.runId, (args as McpToolArgs<'propose_merge'>).source, (args as McpToolArgs<'propose_merge'>).target);
+        return card.then((op) => ({ cardId: op.id, kind: op.kind, next: '卡片已交给用户在桌面上确认；确认前不会执行' }));
       }
       case 'propose_plan': {
         const plans = this.deps.plans?.();

@@ -75,6 +75,33 @@ export const MCP_TOOLS = {
       })
       .strict(),
   },
+  propose_commit: {
+    roles: COORDINATOR,
+    description:
+      '用户说「提交」时用：提出一张提交卡片，列出助手上次提交之后改的改动块（有写入记录的默认勾选），用户在桌面上勾选、确认后由 PalDock 提交到当前分支。' +
+      '只在「当前工作区」方式的项目里可用。不要自己运行 git commit。',
+    args: z.object({ message: z.string().trim().min(1).max(2000).describe('提交说明') }).strict(),
+  },
+  propose_push: {
+    roles: COORDINATOR,
+    description: '用户说「推送」时用：提出一张推送卡片（远端、远端分支、要推的提交），用户确认后由 PalDock 推送当前分支，不强推。不要自己运行 git push。',
+    args: z
+      .object({
+        remote: z.string().trim().min(1).max(100).optional().describe('远端名，缺省为当前分支的上游远端或 origin'),
+        branch: z.string().trim().min(1).max(200).optional().describe('远端分支名，缺省为上游分支或同名分支'),
+      })
+      .strict(),
+  },
+  propose_merge: {
+    roles: COORDINATOR,
+    description: '用户说「合并」时用：提出一张本地合并卡片（源分支 → 目标分支），用户确认后由 PalDock 合并；冲突时不落地。不要自己运行 git merge。',
+    args: z
+      .object({
+        source: z.string().trim().min(1).max(200).describe('源分支'),
+        target: z.string().trim().min(1).max(200).describe('目标分支'),
+      })
+      .strict(),
+  },
 } as const;
 
 export type McpToolName = keyof typeof MCP_TOOLS;

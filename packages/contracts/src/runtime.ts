@@ -56,9 +56,18 @@ export interface McpServerSpec {
   env: Record<string, string>;
 }
 
+/** 助手的一次写入：patch 为统一补丁；replace 为 JSON {old,new}；content 为写入的全文。path 为绝对路径或相对工作目录。 */
+export interface RuntimeWrite {
+  path: string;
+  kind: 'patch' | 'replace' | 'content';
+  detail: string;
+}
+
 export interface RuntimeApprovalRequest {
   /** 执行器侧的请求 ID，回复审批时原样带回。 */
   nativeRequestId: string;
+  /** 写文件请求的具体内容（Claude 的 Edit / Write / MultiEdit）：批准后记成写入证据。 */
+  writes?: RuntimeWrite[];
   kind: 'command' | 'file_change' | 'permissions';
   /** 一行摘要，例如命令本身或「修改 3 个文件」。 */
   summary: string;
@@ -95,6 +104,8 @@ export type RuntimeEvent =
   | { type: 'approval_withdrawn'; nativeRequestId: string }
   /** 执行器发来未识别的请求，适配器已回复错误（等同拒绝），只需记录。 */
   | { type: 'notice'; code: 'unknown_request'; detail: string }
+  /** 执行器报告的写入（Codex 的 fileChange 条目）：提交时据此决定哪些改动块默认勾选。 */
+  | { type: 'file_written'; writes: RuntimeWrite[] }
   | { type: 'completed'; finalMessage: string | null; usage?: RuntimeUsage }
   | { type: 'failed'; message: string; usage?: RuntimeUsage }
   | { type: 'interrupted' }

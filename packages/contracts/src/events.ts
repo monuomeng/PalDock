@@ -22,7 +22,7 @@ import {
 const Id = z.string().min(1);
 const Reason = z.string().max(500).optional();
 
-export const RunNoticeCode = z.enum(['unknown_request', 'resume_failed', 'output_truncated']);
+export const RunNoticeCode = z.enum(['unknown_request', 'resume_failed', 'output_truncated', 'git_write_denied', 'branch_changed']);
 export type RunNoticeCode = z.infer<typeof RunNoticeCode>;
 
 const transition = <T extends z.ZodType>(status: T) => z.object({ from: status, to: status, reason: Reason });

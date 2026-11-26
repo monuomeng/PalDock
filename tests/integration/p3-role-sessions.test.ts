@@ -435,4 +435,19 @@ describe('Codex 复审的修复（0.3.5）', () => {
     ]);
     logs.length = 0;
   });
+
+  it('当前工作区方式：助手自己运行 git commit / push 之类的命令一律拒绝并记审计，普通命令照旧', async () => {
+    await setup();
+    const ws = store.tasks.getWorkspace(workspaceId)!;
+    store.tasks.setWorkspaceMode(ws.id, ws.version, 'current');
+    await runPlan([{ key: 'g', role: 'developer' }, { key: 'h', role: 'developer' }]);
+    const g = await until(() => runtime.runs[0], (r) => r !== undefined, '开始');
+    expect(g.request.cwd).toBe(repo());
+    expect(await g.ask({ kind: 'command', command: 'git commit -am "顺手提交"' })).toBe('deny');
+    expect(await g.ask({ kind: 'command', command: 'git push origin HEAD' })).toBe('deny');
+    expect(await g.ask({ kind: 'command', command: 'node --test' })).toBe('allow_once');
+    expect(store.db.all<{ result: string }>(`SELECT result FROM audit_log WHERE result = 'deny:git_write'`)).toHaveLength(2);
+    g.succeed();
+    (await until(() => runtime.runs[1], (r) => r !== undefined, '第二个')).succeed();
+  });
 });

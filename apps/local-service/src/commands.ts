@@ -1,4 +1,4 @@
-import type { AgentService, ChannelService, CoordinatorService, IntegrationService, PlanService, RecoveryService, TaskService } from '@paldock/application';
+import type { AgentService, ChannelService, CoordinatorService, GitOpsService, IntegrationService, PlanService, RecoveryService, TaskService } from '@paldock/application';
 import type { CommandArgs, CommandName, CommandResultOf } from '@paldock/contracts';
 import type { Store } from '@paldock/storage-sqlite';
 import type { z } from 'zod';
@@ -18,7 +18,7 @@ export function createHandlers(
   integration: IntegrationService,
   coordinator: CoordinatorService,
   recovery: RecoveryService,
-  channels: ChannelService, agents: AgentService, info: ServiceInfo): Handlers {
+  channels: ChannelService, agents: AgentService, gitOps: GitOpsService, info: ServiceInfo): Handlers {
   return {
     'service.status': () => info,
     'recovery.report': () => recovery.report(),
@@ -35,7 +35,7 @@ export function createHandlers(
     'chat.newSession': ({ workspaceId, title }) => coordinator.newSession(workspaceId, title),
     'chat.get': ({ sessionId, taskId, limit }) => {
       const id = sessionId ?? coordinator.sessionOfConversation(taskId!);
-      return { ...coordinator.detail(id, limit), plans: tasks.sessionPlans(id) };
+      return { ...coordinator.detail(id, limit), plans: tasks.sessionPlans(id), gitOps: store.git.opsOfSession(id, 20) };
     },
     'chat.send': ({ sessionId, text, idempotencyKey }) => coordinator.send(sessionId, text, idempotencyKey),
     'notice.ack': ({ sessionId }) => coordinator.ack(sessionId),
@@ -57,6 +57,10 @@ export function createHandlers(
     'maintenance.backup': () => store.backup(),
     'workspace.list': () => store.tasks.listWorkspaces(),
     'workspace.add': ({ rootPath }) => tasks.addWorkspace(rootPath),
+    'workspace.setMode': ({ workspaceId, expectedVersion, mode }) => tasks.setWorkspaceMode(workspaceId, expectedVersion, mode),
+    'gitop.decide': async ({ opId, expectedVersion, decision, hunkIds }) => {
+      await gitOps.decide(opId, expectedVersion, decision, hunkIds ?? []);
+    },
     'workspace.setRemoteApprovalLevel': ({ workspaceId, expectedVersion, level }) => tasks.setRemoteApprovalLevel(workspaceId, expectedVersion, level),
     'workspace.setPrepareCommand': ({ workspaceId, expectedVersion, command }) => tasks.setPrepareCommand(workspaceId, expectedVersion, command),
     'channel.overview': () => channels.overview(),

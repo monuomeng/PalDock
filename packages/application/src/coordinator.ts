@@ -106,7 +106,7 @@ export class CoordinatorService {
   }
 
   /** 会话详情（计划卡片由 TaskService.sessionPlans 补上）。 */
-  detail(sessionId: string, limit: number): Omit<ConversationDetail, 'plans'> {
+  detail(sessionId: string, limit: number): Omit<ConversationDetail, 'plans' | 'gitOps'> {
     const session = this.session(sessionId);
     const { coordinator } = this.store;
     return {

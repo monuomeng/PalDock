@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from 'node:path';
-import type { RuntimeApprovalDecision, RuntimeApprovalRequest, RuntimeEvent, RuntimeUsage, TurnCheck } from '@paldock/contracts';
+import type { RuntimeWrite, RuntimeApprovalDecision, RuntimeApprovalRequest, RuntimeEvent, RuntimeUsage, TurnCheck } from '@paldock/contracts';
 
 /**
  * Claude Code CLI stream-json → PalDock 运行时契约的纯函数映射（Claude Code 2.1.325）。
@@ -32,15 +32,38 @@ export function toApprovalRequest(toolName: string, input: Record<string, unknow
   if (pathKey) {
     const raw = str(input[pathKey]);
     const paths = raw ? [isAbsolute(raw) ? raw : resolve(cwd, raw)] : [];
+    const writes = paths.length > 0 ? writesOf(toolName, input, paths[0]!) : [];
     return {
       nativeRequestId,
       kind: 'file_change',
       summary: paths.length > 0 ? `${toolName}：${clip(paths[0]!, 180)}` : `${toolName}：路径未知`,
       detail: clip(paths.join('\n'), 4000),
       paths,
+      ...(writes.length > 0 ? { writes } : {}),
     };
   }
   return { nativeRequestId, kind: 'permissions', summary: clip(`使用工具 ${toolName}`, 200), detail: clip(JSON.stringify(input), 4000) };
+}
+
+/** 写文件请求的具体内容：Edit / MultiEdit 是替换前后的文本，Write 是全文（批准后作为写入证据）。 */
+function writesOf(toolName: string, input: Record<string, unknown>, path: string): RuntimeWrite[] {
+  if (toolName === 'Write') {
+    const content = str(input.content);
+    return content === undefined ? [] : [{ path, kind: 'content', detail: content }];
+  }
+  if (toolName === 'Edit') {
+    const old = str(input.old_string);
+    const next = str(input.new_string);
+    return old === undefined || next === undefined ? [] : [{ path, kind: 'replace', detail: JSON.stringify({ old, new: next }) }];
+  }
+  if (toolName === 'MultiEdit' && Array.isArray(input.edits)) {
+    return (input.edits as Record<string, unknown>[]).flatMap((e) => {
+      const old = str(e.old_string);
+      const next = str(e.new_string);
+      return old === undefined || next === undefined ? [] : [{ path, kind: 'replace' as const, detail: JSON.stringify({ old, new: next }) }];
+    });
+  }
+  return [];
 }
 
 /** 审批决定 → `can_use_tool` 的响应体。批准时原样带回参数，不让执行器换成别的输入。 */

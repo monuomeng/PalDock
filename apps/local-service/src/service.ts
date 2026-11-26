@@ -1,6 +1,6 @@
 import type { Server, Socket } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { AgentService, ChannelService, CoordinatorService, IntegrationService, RecoveryService, McpGateway, PlanService, ReviewGate, RunSupervisor, TaskGraphScheduler, TaskService, type McpCaller, type AdapterFactory, type CredentialPort } from '@paldock/application';
+import { AgentService, ChannelService, CoordinatorService, IntegrationService, RecoveryService, GitOpsService, McpGateway, PlanService, ReviewGate, RunSupervisor, TaskGraphScheduler, TaskService, type McpCaller, type AdapterFactory, type CredentialPort } from '@paldock/application';
 import {
   ClientFrame,
   CodedError,
@@ -116,7 +116,8 @@ export class LocalService {
       };
       // 计划用例依赖调度器，调度器依赖带这个网关的监管器：propose_plan 的后端延后取
       let plans: PlanService | undefined;
-      service.mcp = new McpGateway({ store, publish, plans: () => plans, coordinator: () => service.coordinator });
+      const gitOps = new GitOpsService({ store, dataRoot, publish, log });
+      service.mcp = new McpGateway({ store, publish, plans: () => plans, coordinator: () => service.coordinator, gitOps: () => gitOps });
       service.supervisor = new RunSupervisor({
         store,
         runtimes,
@@ -169,7 +170,7 @@ export class LocalService {
         publish,
         log,
       });
-      service.handlers = createHandlers(store, tasks, plans, integration, service.coordinator, recovery, service.channels, agents, {
+      service.handlers = createHandlers(store, tasks, plans, integration, service.coordinator, recovery, service.channels, agents, gitOps, {
         version: SERVICE_VERSION,
         startedAt: new Date().toISOString(),
         interruptedRuns,
@@ -222,8 +223,12 @@ export class LocalService {
       if (mcp) {
         if (frame.kind !== 'mcp_list' && frame.kind !== 'mcp_call') return drop('mcp client sent a non-mcp frame');
         const caller = mcp;
-        const outcome = this.mcpCall(() => (frame.kind === 'mcp_list' ? this.mcp.list(caller) : this.mcp.call(caller, frame.tool, frame.args)));
-        return send('error' in outcome ? { kind: 'result', id: frame.id, ok: false, error: outcome.error } : { kind: 'result', id: frame.id, ok: true, value: outcome.value ?? null });
+        const id = frame.id;
+        // 提交 / 推送 / 合并卡片要跑 git，结果是异步的
+        void this.mcpCall(() => (frame.kind === 'mcp_list' ? this.mcp.list(caller) : this.mcp.call(caller, frame.tool, frame.args))).then((outcome) =>
+          send('error' in outcome ? { kind: 'result', id, ok: false, error: outcome.error } : { kind: 'result', id, ok: true, value: outcome.value ?? null }),
+        );
+        return;
       }
       if (!authed) {
         if (frame.kind !== 'hello' || !tokensEqual(this.token, frame.token)) return drop('unauthorized');
@@ -260,9 +265,9 @@ export class LocalService {
   }
 
   /** MCP 工具调用的结果：业务错误原样返回给助手，内部错误不带细节。 */
-  private mcpCall(run: () => unknown): Outcome {
+  private async mcpCall(run: () => unknown): Promise<Outcome> {
     try {
-      return { value: run() };
+      return { value: await run() };
     } catch (error) {
       if (error instanceof CodedError) return { error: { code: error.code, message: error.message } };
       this.log(`mcp call failed: ${(error as Error).name}`);
