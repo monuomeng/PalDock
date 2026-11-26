@@ -137,7 +137,8 @@ const SQL = {
     INSERT INTO channel_cursors (provider, account, cursor, updated_at) VALUES (?, ?, ?, ?)
     ON CONFLICT (provider, account) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at`,
   // 升级扫描走部分索引 approvals_pending_unescalated
-  escalationCandidates: `${CANDIDATE_SELECT} WHERE a.status = 'pending' AND a.escalated_at IS NULL ORDER BY a.requested_at`,
+  // 交给协调助手判断中的不外发，回到你这里后再按规则外发
+  escalationCandidates: `${CANDIDATE_SELECT} WHERE a.status = 'pending' AND a.escalated_at IS NULL AND a.routed_to IS NULL ORDER BY a.requested_at`,
   approvalContext: `${CANDIDATE_SELECT} WHERE a.id = ?`,
   markEscalated: `
     UPDATE approvals SET escalated_at = ? WHERE id = ? AND status = 'pending' AND escalated_at IS NULL RETURNING id`,

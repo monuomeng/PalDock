@@ -406,7 +406,8 @@ export class RemoteCommands implements InboundHandler {
     if (!context || context.approval.status !== 'pending') throw new CodedError('conflict', '这个审批已经处理过了');
     const approve = action.kind === 'approve';
     if (approve && !canApproveRemotely(context.remoteApprovalLevel, context.approval)) {
-      throw new CodedError('bad_request', '这个审批只能在电脑上批准');
+      const need = context.approval.riskLevel === 'high' ? 'L2' : 'L1 或 L2';
+      throw new CodedError('bad_request', `这个项目的远程审批等级是 ${context.remoteApprovalLevel}，这个审批在这里只能拒绝；请到电脑上批，或把远程审批等级调到 ${need}`);
     }
     // 成功后卡片由审批决定事件统一更新（桌面、各渠道一致），这里不另外回复
     this.deps.tasks.decideApproval(context.approval.id, action.targetVersion!, approve ? 'allow_once' : 'deny', ctx.conversation.provider);

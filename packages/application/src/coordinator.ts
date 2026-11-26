@@ -1,6 +1,8 @@
 import {
   CodedError,
   noticeRef,
+  type ApprovalDecision,
+  type ApprovalRecord,
   type ChannelProvider,
   type ConversationRecord,
   type ConversationDetail,
@@ -20,7 +22,7 @@ import type { RunPlan } from './run-supervisor.js';
 
 export interface CoordinatorDeps {
   store: StorePort;
-  supervisor: { enqueue(subtaskId: string, plan: RunPlan): void; isActive(subtaskId: string): boolean; cancel(subtaskId: string): boolean };
+  supervisor: { enqueue(subtaskId: string, plan: RunPlan): void; isActive(subtaskId: string): boolean; cancel(subtaskId: string): boolean; forwardDecision(approval: ApprovalRecord, decision: ApprovalDecision): void };
   publish(events: PersistentEvent[]): void;
   log(message: string): void;
   now?: () => number;
@@ -236,6 +238,26 @@ export class CoordinatorService {
       return sessionId && task ? { sessionId, summary: `任务 #${taskRef(task.id)}「${task.title}」：${summary}` } : undefined;
     };
     switch (event.type) {
+      case 'approval.requested':
+      case 'approval.routed': {
+        // 交给协调助手判断的项目外只读：唤醒提出这个任务的主会话（没有就用项目的第一个主会话）
+        if (event.type === 'approval.routed' && event.payload.to !== 'coordinator') return undefined;
+        const approval = store.runs.getApproval(event.aggregateId);
+        if (approval?.routedTo !== 'coordinator' || approval.status !== 'pending') return undefined;
+        const run = approval && store.runs.getRun(approval.runId);
+        const subtask = run && store.tasks.getSubtask(run.subtaskId);
+        const task = subtask && store.tasks.getTask(subtask.taskId);
+        if (!approval || !subtask || !task) return undefined;
+        const sessionId = this.sessionOfTask(task.id) ?? store.coordinator.mainSessions(task.workspaceId)[0]?.sessionId;
+        if (!sessionId) return undefined;
+        const who = subtask.planId ? `节点「${nodeTitle(store, subtask)}」的${subtask.role}` : `任务「${task.title}」的助手`;
+        return {
+          sessionId,
+          summary:
+            `审批 ${approval.id} 交给你判断：${who}要${approval.summary}。${approval.detail ? `请求内容：${approval.detail.slice(0, 800)}。` : ''}` +
+            '只读、不含 shell；请用 decide_approval 回复 allow / deny / unsure（拿不准就 unsure，交给用户）。',
+        };
+      }
       case 'subtask.status_changed': {
         if (event.payload.to !== 'blocked') return undefined;
         const node = this.nodeTitle(event.aggregateId);
@@ -457,6 +479,38 @@ export class CoordinatorService {
     const { record, events } = this.store.coordinator.addNotice({ sessionId, runId, kind: question ? 'question' : 'info', body });
     this.deps.publish(events);
     return record.id;
+  }
+
+  /**
+   * decide_approval（审批分层，2026-11-26 已定）：只处理交给协调助手判断的项目外只读（不含敏感路径）；
+   * 必须是同一个项目的主会话，发起读取的 Run 不能自己批。allow / deny 记审计 approval.coordinator，unsure 回到用户那里。
+   */
+  decideApproval(runId: string, approvalId: string, decision: 'allow' | 'deny' | 'unsure', reason: string): { status: string; next: string } {
+    const { store } = this;
+    const session = this.mainSessionOfRun(runId);
+    if (!session) throw new CodedError('bad_request', '只有主会话里的协调助手能处理审批');
+    const approval = store.runs.getApproval(approvalId);
+    if (!approval) throw new CodedError('not_found', '审批不存在');
+    if (approval.runId === runId) throw new CodedError('bad_request', '不能批自己发起的请求');
+    const run = store.runs.getRun(approval.runId);
+    const task = run && store.tasks.getTask(store.tasks.getSubtask(run.subtaskId)!.taskId);
+    if (!task || task.workspaceId !== session.workspaceId) throw new CodedError('bad_request', '这条审批不在这个项目里');
+    if (approval.status !== 'pending') return { status: approval.status, next: '这条审批已经处理过了' };
+    if (approval.routedTo !== 'coordinator' || approval.access !== 'read' || approval.sensitive) {
+      throw new CodedError('bad_request', '这条审批没有交给你判断（敏感路径、写入类的只能由用户批）');
+    }
+    const actor = `run:${runId}`;
+    if (decision === 'unsure') {
+      const change = store.runs.routeApproval(approvalId, null, `协调助手拿不准：${reason}`);
+      if (change) this.deps.publish(change.events);
+      store.audit.append(actor, 'approval.coordinator', approval.summary.slice(0, 200), `unsure: ${reason.slice(0, 200)}`);
+      return { status: 'pending', next: '已交给用户处理' };
+    }
+    const change = store.runs.decideApproval(approval.id, approval.version, decision === 'allow' ? 'approved' : 'denied', 'coordinator');
+    store.audit.append(actor, 'approval.coordinator', approval.summary.slice(0, 200), `${decision}: ${reason.slice(0, 200)}`);
+    this.deps.publish(change.events);
+    this.deps.supervisor.forwardDecision(change.record, decision === 'allow' ? 'allow_once' : 'deny');
+    return { status: change.record.status, next: decision === 'allow' ? '已允许这一次' : '已拒绝' };
   }
 
   /** write_summary：滚动摘要带版本号存库；记下当时已完成的唤醒数，用来判断下一次。 */

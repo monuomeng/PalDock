@@ -104,6 +104,10 @@ export interface NewApproval {
   cwd: string | null;
   nativeRequestId: string | null;
   ttlMs: number;
+  access?: 'read' | null;
+  sensitive?: boolean;
+  groupId?: string | null;
+  routedTo?: 'coordinator' | null;
 }
 
 /** 提交 SHA 与越界文件只有计划节点才有。 */
@@ -300,6 +304,9 @@ export interface RunStorePort {
   recordTurn(runId: string, turnId: string): RunRecord | undefined;
   transitionRun(id: string, expectedVersion: number, to: RunStatus, reason?: string): Change<RunRecord>;
   requestApproval(input: NewApproval): Change<ApprovalRecord>;
+  /** 交给协调助手判断，或回到你这里（to 为 null）；只改还在等待的，已处理的返回 undefined。 */
+  routeApproval(id: string, to: 'coordinator' | null, reason?: string): Change<ApprovalRecord> | undefined;
+  approvalsOfGroup(groupId: string): ApprovalRecord[];
   getApproval(id: string): ApprovalRecord | undefined;
   cancelPendingApprovals(runId: string): Change<ApprovalRecord[]>;
   expiredApprovals(): ApprovalRecord[];

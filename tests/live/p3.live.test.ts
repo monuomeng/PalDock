@@ -159,8 +159,10 @@ async function report(name: string, extra: Record<string, unknown>): Promise<voi
        FROM runs r JOIN subtasks s ON s.id = r.subtask_id ORDER BY r.started_at`,
   );
   const recovery = store.events.since(0, 100_000).filter((e) => e.type === 'recovery.performed').map((e) => e.payload);
+  // 助手的写入记录（只提交这次的归属核对用）
+  const writes = store.db.all<Record<string, unknown>>('SELECT run_id AS runId, path, kind, substr(detail, 1, 2000) AS detail, before_hash AS beforeHash FROM run_writes ORDER BY id');
   store.close();
-  appendFileSync(REPORT, `${JSON.stringify({ name, at: new Date().toISOString(), elapsedMs: Date.now() - started, runs, recovery, approvals: approvals.splice(0), ...extra })}\n`);
+  appendFileSync(REPORT, `${JSON.stringify({ name, at: new Date().toISOString(), elapsedMs: Date.now() - started, runs, recovery, writes, approvals: approvals.splice(0), ...extra })}\n`);
 }
 
 describe.skipIf(process.env.PALDOCK_LIVE_P3 !== '1')('P3 真实执行器', () => {
@@ -271,6 +273,90 @@ describe.skipIf(process.env.PALDOCK_LIVE_P3 !== '1')('P3 真实执行器', () =>
     // 直接改在你的工作区里，没有提交、没有拆计划
     expect(status).toContain('math.js');
     expect(tasks).toHaveLength(0);
+  });
+
+  it('只提交这次、只推送看过的（0.3.7）：同项目两个任务改同一文件的不同块（A 用 Codex、B 用 Claude），在 B 的对话里只提交 B，再推到临时远端；之后在 A 的对话里提交 A', { timeout: 60 * MINUTE }, async () => {
+    prepare('scope');
+    // 一个文件里两个相隔很远的函数：A 改上面那个，B 改下面那个
+    const filler = Array.from({ length: 30 }, (_, i) => `// 占位 ${i + 1}`).join('\n');
+    writeFileSync(join(repo, 'shapes.js'), `export function area(w, h) {\n  return w * h;\n}\n${filler}\nexport function perimeter(w, h) {\n  return 2 * (w + h);\n}\n`);
+    git(repo, 'add', '-A');
+    git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'shapes');
+    git(repo, 'config', 'user.name', 'tester');
+    git(repo, 'config', 'user.email', 't@t');
+    const remote = join(root, 'remote.git');
+    execFileSync('git', ['init', '-q', '--bare', remote]);
+    git(repo, 'remote', 'add', 'origin', remote);
+    git(repo, 'push', '-q', '-u', 'origin', 'main');
+    const head0 = git(repo, 'rev-parse', 'HEAD');
+
+    const s = await boot();
+    const t0 = Date.now();
+    const workspace = await call(s, 'workspace.add', { rootPath: repo });
+    expect(workspace.workspaceMode).toBe('current');
+    const [chatA] = await call(s, 'chat.sessions', { workspaceId: workspace.id });
+    const chatB = await call(s, 'chat.newSession', { workspaceId: workspace.id, title: '任务 B' });
+    // 在指定对话里经协调助手提出计划、确认，等它做完
+    const runPlan = async (sessionId: string, executor: 'codex' | 'claude', plan: object) => {
+      await call(s, 'agent.setOverride', { workspaceId: workspace.id, role: 'developer', executor });
+      const before = new Set((await call(s, 'task.list', { limit: 50 })).map((t) => t.task.id));
+      const text = `请直接调用 PalDock 的 propose_plan 工具提出下面这份计划，参数原样照抄，不要读代码、不要做别的，提完用一句话告诉我：\n${JSON.stringify(plan)}`;
+      await call(s, 'chat.send', { sessionId, text, idempotencyKey: `live-${Date.now()}` });
+      const task = await until(async () => (await call(s, 'task.list', { limit: 50 })).find((t) => !before.has(t.task.id) && t.task.status === 'draft'), '协调助手提出计划', 10 * MINUTE);
+      const detail = await call(s, 'task.get', { taskId: task.task.id });
+      await confirm(s, detail).catch(() => {}); // 单节点计划可能已自动确认
+      await until(async () => {
+        const d = await call(s, 'task.get', { taskId: task.task.id });
+        const stuck = d.plan!.nodes.find((n) => n.subtask?.gateStage === 'human' || n.subtask?.status === 'blocked');
+        if (stuck) throw new Error(`节点 ${stuck.node.key} 停住：${stuck.subtask!.statusReason}`);
+        return d.task.status === 'succeeded' && d;
+      }, '开发、审阅都通过', 30 * MINUTE);
+    };
+    await runPlan(chatA!.sessionId, 'codex', {
+      title: '任务 A：面积取整',
+      goal: '改 area',
+      nodes: [{ key: 'a', role: 'developer', title: '改 area', goal: '把 shapes.js 里 area 函数的返回值改成 Math.round(w * h)。只改这一行，别的都不要动，不要提交。', paths: ['shapes.js'] }],
+    });
+    await runPlan(chatB.sessionId, 'claude', {
+      title: '任务 B：周长取整',
+      goal: '改 perimeter',
+      nodes: [{ key: 'b', role: 'developer', title: '改 perimeter', goal: '把 shapes.js 里 perimeter 函数的返回值改成 Math.round(2 * (w + h))。只改这一行，别的都不要动，不要提交。', paths: ['shapes.js'] }],
+    });
+    const developedMs = Date.now() - t0;
+    expect(git(repo, 'rev-parse', 'HEAD')).toBe(head0);
+
+    const card = async (sessionId: string, kind: 'commit' | 'push', text: string) => {
+      await call(s, 'chat.send', { sessionId, text, idempotencyKey: `${kind}-${Date.now()}` });
+      return until(async () => (await call(s, 'chat.get', { sessionId, limit: 5 })).gitOps.find((o) => o.kind === kind && o.status === 'proposed'), `${kind} 卡片`, 10 * MINUTE);
+    };
+    const hunksOf = (c: Awaited<ReturnType<typeof card>>) => (c.request.kind === 'commit' ? c.request.hunks.map((h) => ({ path: h.path, evidenced: h.evidenced, note: h.note, patch: h.patch })) : []);
+    // 在 B 的对话里只提交 B
+    const cardB = await card(chatB.sessionId, 'commit', '只提交这次修改，提交说明写「周长取整」。请直接调用 propose_commit 提出卡片（不要填 taskId 和 wholeProject），不要做别的。');
+    const hunksB = hunksOf(cardB);
+    await call(s, 'gitop.decide', { opId: cardB.id, expectedVersion: cardB.version, decision: 'confirm', hunkIds: cardB.request.kind === 'commit' ? cardB.request.hunks.filter((h) => h.evidenced).map((h) => h.id) : [] });
+    const committedB = git(repo, 'show', '--format=', 'HEAD');
+    const pushCard = await card(chatB.sessionId, 'push', '推送当前分支。请直接调用 propose_push 提出卡片，不要做别的。');
+    await call(s, 'gitop.decide', { opId: pushCard.id, expectedVersion: pushCard.version, decision: 'confirm' });
+    const remoteHead = execFileSync('git', ['-C', remote, 'rev-parse', 'main'], { encoding: 'utf8' }).trim();
+    const pushedB = remoteHead === git(repo, 'rev-parse', 'HEAD');
+    // 之后在 A 的对话里提交 A：A 的块还在
+    const cardA = await card(chatA!.sessionId, 'commit', '只提交这次修改，提交说明写「面积取整」。请直接调用 propose_commit 提出卡片（不要填 taskId 和 wholeProject），不要做别的。');
+    const hunksA = hunksOf(cardA);
+    await shutdown(s);
+    await report('scope-commit-push', { developedMs, totalMs: Date.now() - t0, hunksB, committedB, pushRequest: pushCard.request, pushedB, hunksA, statusAfterB: git(repo, 'status', '--porcelain') });
+    // B 的卡片只有 B 的块（周长），默认勾选；提交只含它；A 的改动还在工作区；推到了临时远端
+    expect(hunksB).toHaveLength(1);
+    expect(hunksB[0]!.patch).toContain('perimeter');
+    expect(hunksB[0]!.evidenced).toBe(true);
+    expect(committedB).toContain('Math.round(2 * (w + h))');
+    expect(committedB).not.toContain('Math.round(w * h)');
+    expect(pushedB).toBe(true);
+    expect(hunksA).toHaveLength(1);
+    expect(hunksA[0]!.patch).toContain('Math.round(w * h)');
+    // Codex 有时用 shell 命令改文件（没有 fileChange 写入记录）：那时 A 的块列出但不勾，宁可少勾（实测 3 次里 2 次如此）
+    const { writes } = JSON.parse(readFileSync(REPORT, 'utf8').trim().split('
+').at(-1)!) as { writes: { kind: string }[] };
+    expect(hunksA[0]!.evidenced).toBe(writes.some((w) => w.kind === 'patch'));
   });
 
   it('当前仓库协作端到端：已有暂存内容的功能分支上 Codex 开发、Claude 测试并审阅，只提交这次修改，再推到临时远端', { timeout: 60 * MINUTE }, async () => {

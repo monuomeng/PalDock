@@ -1,4 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, watch, writeFileSync, type FSWatcher } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, watch, writeFileSync, type FSWatcher } from 'node:fs';
+import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { AgentRole } from '@paldock/contracts';
 import type {
@@ -25,7 +27,8 @@ import type {
   TaskRecord,
   TurnCheck,
 } from '@paldock/contracts';
-import { checkCapability, isAutoApproved, isGitWrite, outOfScope, P1_DEFAULTS, taskKey, toLf } from '@paldock/domain';
+import { checkCapability, isAutoApproved, isGitWrite, isSensitivePath, outOfScope, P1_DEFAULTS, routeRead, taskKey, toLf, type ReadRoute } from '@paldock/domain';
+import { isInside } from '@paldock/platform';
 import { contentDigest } from './attribution.js';
 import type { GitOpsService } from './git-ops.js';
 import { runCheck } from './check-runner.js';
@@ -75,6 +78,8 @@ export interface SupervisorDeps {
   limits?: Partial<Limits>;
   /** 提交 / 推送 / 合并卡片（暂存区保护在 Run 结束时提出「保留 / 恢复」卡片）；缺省时只暂停、不出卡片（测试）。 */
   gitOps?: () => GitOpsService | undefined;
+  /** 非敏感的项目外只读交给协调助手判断（2026-11-26 已定）；缺省时都交给你。 */
+  coordinatorApprovals?: boolean;
 }
 
 /** 一次 Run 的提示词与原生会话：续做或退回重做时沿用 thread，重新开始时不带。 */
@@ -128,6 +133,8 @@ interface LiveRun {
   snapshot: { startTree: string; branch: string | null; head: string; ended: boolean; index: string } | undefined;
   /** 分支保护：开始时 HEAD 的内容（`ref: refs/heads/x`）、git 目录、停止监视的函数；检测到切换后为真。 */
   guard: { headRef: string; gitDir: string; stop: () => void; tripped: boolean } | undefined;
+  /** 审批合并展示：这次 Run 当前这一组的编号和开始时间。 */
+  approvalGroup: { id: string; at: number } | undefined;
 }
 
 /** 角色会话池的键和池大小（角色的 maxConcurrency）。 */
@@ -150,6 +157,8 @@ export class RunSupervisor {
   private readonly live = new Map<string, LiveRun>();
   private readonly queue: { subtaskId: string; taskId: string; plan: RunPlan }[] = [];
   private readonly limits: Limits;
+  /** 交给协调助手判断的审批的时限（停止时清掉）。 */
+  private readonly routeTimers = new Set<ReturnType<typeof setTimeout>>();
   private expiryTimer: NodeJS.Timeout | undefined;
   private stopping = false;
   /** 进行中的异步收尾（启动、证据收集、断线核对）；退出时等它们结束，避免在数据库关闭后写入。 */
@@ -178,6 +187,8 @@ export class RunSupervisor {
   async stop(): Promise<void> {
     this.stopping = true;
     clearInterval(this.expiryTimer);
+    for (const timer of this.routeTimers) clearTimeout(timer);
+    this.routeTimers.clear();
     this.queue.length = 0;
     await Promise.all(
       [...this.live.values()].map(async (live) => {
@@ -543,6 +554,7 @@ export class RunSupervisor {
       inProject: false,
       snapshot: undefined,
       guard: undefined,
+      approvalGroup: undefined,
       writeRequests: new Map(),
     };
     live.policy = this.policyOf(task, subtask, role, live.mode);
@@ -831,6 +843,15 @@ export class RunSupervisor {
         this.deps.store.audit.append(actor, 'approval.auto', request.summary.slice(0, 200), 'deny:readonly');
         return this.reply(live, request.nativeRequestId, 'deny');
       }
+      // 只读工具要读允许范围之外的路径：按分层处理（2026-11-26 已定），不走下面的通用放行规则
+      if (request.readPaths?.length) {
+        const route = this.readRoute(live, request.readPaths);
+        if (route === 'inside' || route === 'own_output') {
+          this.deps.store.audit.append(actor, 'approval.auto', request.summary.slice(0, 200), route === 'inside' ? 'allow:read' : 'allow:read_own_output');
+          return this.reply(live, request.nativeRequestId, 'allow_once');
+        }
+        return this.askApproval(live, request, route);
+      }
       const auto =
         live.policy.approval === 'high_only'
           ? riskOf(request, live.worktree) !== 'high'
@@ -840,20 +861,77 @@ export class RunSupervisor {
         return this.reply(live, request.nativeRequestId, 'allow_once');
       }
     }
+    this.askApproval(live, request, request.readPaths?.length ? 'user' : undefined);
+  }
+
+  /**
+   * 记一条待审批。同一次 Run 在 approvalGroupMs 之内的审批归为一组（桌面一张卡、外部渠道一条消息），各项仍独立审计、独立过期。
+   * 项目外只读：敏感路径高风险、只能你批；交给协调助手的先标上 routed_to，协调助手 coordinatorApprovalMs 内没答复就回到你这里。
+   */
+  private askApproval(live: LiveRun, request: RuntimeApprovalRequest, read: ReadRoute | undefined): void {
+    const now = Date.now();
+    if (!live.approvalGroup || now - live.approvalGroup.at > this.limits.approvalGroupMs) live.approvalGroup = { id: `grp_${randomUUID()}`, at: now };
     const change = this.deps.store.runs.requestApproval({
       runId: live.run.id,
       kind: request.kind,
-      riskLevel: riskOf(request, live.worktree ?? ''),
+      riskLevel: read ? (read === 'sensitive' ? 'high' : 'medium') : riskOf(request, live.worktree ?? ''),
       summary: request.summary,
       detail: request.reason ? `${request.detail ?? ''}\n理由（执行器自述）：${request.reason}`.trim() : (request.detail ?? null),
       cwd: request.cwd ?? null,
       nativeRequestId: request.nativeRequestId,
       ttlMs: this.limits.approvalTtlMs,
+      access: read ? 'read' : null,
+      sensitive: read === 'sensitive',
+      groupId: live.approvalGroup.id,
+      routedTo: read === 'coordinator' ? 'coordinator' : null,
     });
     live.approvals.set(change.record.id, request.nativeRequestId);
+    if (read === 'coordinator') this.coordinatorDeadline(change.record.id);
     // 审批请求可能先于 turn 事件到达（Run 仍是 starting），先进入 running
     const started = live.run.status === 'starting' ? this.runTo(live, 'running') : [];
     this.publish([...change.events, ...started, ...this.runTo(live, 'waiting_approval')]);
+  }
+
+  /**
+   * 项目外只读的分层：都在项目里、或都是这一轮生成的文件（创建时间不早于 Run 开始）→ 直接放行；
+   * 有敏感路径 → 只能你批；发起读取的不是协调助手自己、项目有主会话 → 交协调助手判断；其余你批。路径按真实路径（跟随链接）判断。
+   */
+  private readRoute(live: LiveRun, paths: readonly string[]): ReadRoute {
+    const real = (p: string) => {
+      try {
+        return realpathSync(p);
+      } catch {
+        return p;
+      }
+    };
+    const startMs = Date.parse(live.run.startedAt);
+    const home = homedir();
+    const isCoordinator = live.task.kind === 'conversation' || live.subtask.role === 'coordinator';
+    return routeRead({
+      paths,
+      inside: (p) => isInside(live.worktree!, real(p)),
+      sensitive: (p) => isSensitivePath(p, home, [this.deps.dataRoot]) || isSensitivePath(real(p), home, [this.deps.dataRoot]),
+      createdThisRun: (p) => {
+        try {
+          return statSync(real(p)).birthtimeMs >= startMs;
+        } catch {
+          return false;
+        }
+      },
+      coordinatorAvailable: (this.deps.coordinatorApprovals ?? false) && !isCoordinator && this.deps.store.coordinator.mainSessions(live.task.workspaceId).length > 0,
+    });
+  }
+
+  /** 协调助手没在时限内答复：回到你这里（桌面和外部渠道照常提醒）。 */
+  private coordinatorDeadline(approvalId: string): void {
+    const timer = setTimeout(() => {
+      this.routeTimers.delete(timer);
+      if (this.stopping) return;
+      const change = this.deps.store.runs.routeApproval(approvalId, null, `协调助手 ${Math.round(this.limits.coordinatorApprovalMs / 1000)} 秒内没有答复`);
+      if (change) this.publish(change.events);
+    }, this.limits.coordinatorApprovalMs);
+    timer.unref();
+    this.routeTimers.add(timer);
   }
 
   /** 执行器自己收回了请求：审批置为 cancelled，不再回复执行器。 */

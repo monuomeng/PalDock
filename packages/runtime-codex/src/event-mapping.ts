@@ -91,10 +91,13 @@ export function toApprovalRequest(
 
 /**
  * 审批决定 → 协议响应。权限扩展请求的响应没有「拒绝」字段，拒绝即授予空权限、只限本 turn；
- * P1 不开放权限扩展，即使收到 allow_once 也按拒绝处理。
+ * 你批准了（2026-11-26 起权限扩展可以「允许一次」）才授予它请求的权限，同样只限本 turn。
  */
-export function approvalResponse(kind: RuntimeApprovalRequest['kind'], decision: RuntimeApprovalDecision): unknown {
-  if (kind === 'permissions') return { permissions: {}, scope: 'turn' };
+export function approvalResponse(kind: RuntimeApprovalRequest['kind'], decision: RuntimeApprovalDecision, params?: unknown): unknown {
+  if (kind === 'permissions') {
+    const requested = (params as PermissionsParams | undefined)?.permissions;
+    return { permissions: decision === 'allow_once' && requested ? requested : {}, scope: 'turn' };
+  }
   return { decision: decision === 'allow_once' ? 'accept' : decision === 'cancel' ? 'cancel' : 'decline' };
 }
 

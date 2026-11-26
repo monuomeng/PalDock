@@ -284,8 +284,28 @@ export function approvalCard(c: EscalationCandidate, buttons: { approve: string;
   return card('电脑上有一个审批等你处理', approval.riskLevel === 'high' ? 'danger' : 'warning', lines, actions);
 }
 
+/** 同一次 Run 短时间内的几个审批合成一条消息：逐项列出；按钮只在电脑上（全部允许 / 全部拒绝 / 逐项处理）。 */
+export function approvalGroupCard(cs: readonly EscalationCandidate[]): Card {
+  const first = cs[0]!;
+  const lines = [
+    `项目：${first.workspaceName}`,
+    `任务：#${taskRef(first.taskId)} ${clip(first.taskTitle, 60)}`,
+    ...cs.map((c, i) => `${i + 1}. ${RISK_LABEL[c.approval.riskLevel]}：${clip(c.approval.summary, 160)}`),
+    `共 ${cs.length} 项，请到电脑上一起或逐项处理（各项独立过期，最早 ${cs.map((c) => c.approval.expiresAt).sort()[0]!.replace('T', ' ').slice(0, 16)} UTC）。`,
+  ];
+  return card(`电脑上有 ${cs.length} 个审批等你处理`, cs.some((c) => c.approval.riskLevel === 'high') ? 'danger' : 'warning', lines, []);
+}
+
+export function approvalGroupDecidedCard(c: EscalationCandidate, group: readonly { status: string }[]): Card {
+  const count = (s: string) => group.filter((a) => a.status === s).length;
+  return card('这组审批已处理', 'info', [
+    `任务：#${taskRef(c.taskId)} ${clip(c.taskTitle, 60)}`,
+    `共 ${group.length} 项：批准 ${count('approved')}、拒绝 ${count('denied')}、过期 ${count('expired')}、取消 ${count('cancelled')}`,
+  ]);
+}
+
 const DECIDED_TEXT = { approved: '已批准', denied: '已拒绝', expired: '已过期（自动拒绝）', cancelled: '已取消' } as const;
-const VIA_TEXT: Record<string, string> = { desktop: '在电脑上', feishu: '在飞书', telegram: '在 Telegram', policy: '' };
+const VIA_TEXT: Record<string, string> = { desktop: '在电脑上', feishu: '在飞书', telegram: '在 Telegram', policy: '', coordinator: '由协调助手' };
 
 export function approvalDecidedCard(c: EscalationCandidate, status: keyof typeof DECIDED_TEXT, via: string | null): Card {
   return card(`审批${DECIDED_TEXT[status]}`, 'info', [

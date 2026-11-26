@@ -77,6 +77,11 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
     payload: z.object({ runId: Id, kind: ApprovalKind, riskLevel: RiskLevel, expiresAt: z.iso.datetime() }),
   }),
   z.object({
+    // 交给协调助手判断 / 回到你这里（to 为 null）
+    type: z.literal('approval.routed'),
+    payload: z.object({ to: z.literal('coordinator').nullable(), reason: z.string().optional() }),
+  }),
+  z.object({
     type: z.literal('approval.decided'),
     payload: z.object({ status: ApprovalStatus.exclude(['pending']), via: ApprovalChannel }),
   }),

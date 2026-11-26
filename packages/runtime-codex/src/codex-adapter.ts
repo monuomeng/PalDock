@@ -309,7 +309,7 @@ class CodexRun implements RuntimeRun {
       return Promise.reject(new Error(`PalDock 不处理 ${method}`));
     }
     return new Promise((resolve) => {
-      this.approvals.set(nativeRequestId, (decision) => resolve(approvalResponse(request.kind, decision)));
+      this.approvals.set(nativeRequestId, (decision) => resolve(approvalResponse(request.kind, decision, params)));
       this.emit({ type: 'approval_request', request });
     });
   }

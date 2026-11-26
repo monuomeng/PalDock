@@ -50,6 +50,19 @@ export const MCP_TOOLS = {
       })
       .strict(),
   },
+  decide_approval: {
+    roles: COORDINATOR,
+    description:
+      '处理交给你判断的审批：专业助手要读项目外的文件（只读，不含 shell）。看路径和它的理由，和当前任务相关、不涉及隐私就 allow，' +
+      '明显无关或可疑就 deny，拿不准就 unsure（交给用户）。敏感路径和写入类的请求不会交给你。',
+    args: z
+      .object({
+        approvalId: z.string().min(1).max(100).describe('唤醒消息里给的审批编号'),
+        decision: z.enum(['allow', 'deny', 'unsure']),
+        reason: z.string().trim().min(1).max(500).describe('一句话说明为什么'),
+      })
+      .strict(),
+  },
   write_summary: {
     roles: [...COORDINATOR, ...SPECIALISTS],
     description:

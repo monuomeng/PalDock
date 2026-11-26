@@ -7,9 +7,12 @@ const REMOTELY_APPROVABLE: Readonly<Record<RemoteApprovalLevel, ReadonlySet<Risk
   L2: new Set(['low', 'medium', 'high']),
 };
 
-/** 外部渠道能否批准这条审批：看项目等级与风险；权限扩展在任何一端都只能拒绝。拒绝总是允许，不经这里。 */
+/**
+ * 外部渠道能否批准这条审批：只看项目的远程审批等级与风险。权限扩展、敏感路径的读取都是高风险，
+ * 只有 L2 能远程「允许一次」，L0 / L1 远程只能拒绝（2026-11-26 已定）。拒绝总是允许，不经这里。
+ */
 export function canApproveRemotely(level: RemoteApprovalLevel, approval: { riskLevel: RiskLevel; kind: ApprovalKind }): boolean {
-  return approval.kind !== 'permissions' && REMOTELY_APPROVABLE[level].has(approval.riskLevel);
+  return REMOTELY_APPROVABLE[level].has(approval.riskLevel);
 }
 
 /**

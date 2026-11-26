@@ -51,8 +51,8 @@ const SQL = {
     UPDATE runs SET native_turn_id = ? WHERE id = ? AND native_turn_id IS NULL
     RETURNING ${COLUMNS.run()}`,
   insertApproval: `
-    INSERT INTO approvals (id, run_id, kind, risk_level, summary, detail, cwd, native_request_id, status, requested_at, expires_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+    INSERT INTO approvals (id, run_id, kind, risk_level, summary, detail, cwd, native_request_id, status, requested_at, expires_at, access, sensitive, group_id, routed_to)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
     RETURNING ${COLUMNS.approval()}`,
   selectApproval: `SELECT ${COLUMNS.approval()} FROM approvals WHERE id = ?`,
   // 走部分索引 approvals_pending（条件逐字一致）
@@ -205,6 +205,10 @@ export class RunRepository implements RunStorePort {
       input.nativeRequestId,
       this.clock.iso(),
       expiresAt,
+      input.access ?? null,
+      input.sensitive ? 1 : 0,
+      input.groupId ?? null,
+      input.routedTo ?? null,
     ];
     return insertWithEvent(this.db, this.events, SQL.insertApproval, params, () => ({
       type: 'approval.requested',
@@ -214,6 +218,24 @@ export class RunRepository implements RunStorePort {
 
   getApproval(id: string): ApprovalRecord | undefined {
     return this.db.get<ApprovalRecord>(SQL.selectApproval, id);
+  }
+
+  /** 交给协调助手判断，或回到你这里（to 为 null）；只改还在等待的。 */
+  routeApproval(id: string, to: 'coordinator' | null, reason?: string): Change<ApprovalRecord> | undefined {
+    return this.db.transaction(() => {
+      const record = this.db.get<ApprovalRecord>(
+        `UPDATE approvals SET routed_to = ?2, version = version + 1 WHERE id = ?1 AND status = 'pending' RETURNING ${COLUMNS.approval()}`,
+        id,
+        to,
+      );
+      if (!record) return undefined;
+      return { record, events: [this.events.append(id, { type: 'approval.routed', payload: { to, ...(reason ? { reason } : {}) } })] };
+    });
+  }
+
+  /** 同一组的审批（按请求时间）。 */
+  approvalsOfGroup(groupId: string): ApprovalRecord[] {
+    return this.db.all<ApprovalRecord>(`SELECT ${COLUMNS.approval()} FROM approvals WHERE group_id = ? ORDER BY requested_at, rowid`, groupId);
   }
 
   /** Run 结束或执行器断线时，把这次 Run 仍挂起的审批一次置为 cancelled（policy），每条各写一个事件。 */

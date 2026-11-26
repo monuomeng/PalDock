@@ -12,7 +12,8 @@ import type {
   TaskRecord,
 } from '@paldock/contracts';
 import { canApproveRemotely, canConfirmPlanRemotely, shouldEscalateApproval, subtaskMachine, type DesktopPresence, type P2Limits } from '@paldock/domain';
-import { approvalCard, approvalDecidedCard, coordinatorReplyCard, noticeCard, planCard, planDecidedCard, taskProgressCard } from './cards.js';
+import { approvalCard, approvalDecidedCard, approvalGroupCard, approvalGroupDecidedCard, coordinatorReplyCard, noticeCard, planCard, planDecidedCard, taskProgressCard } from './cards.js';
+import { P1_DEFAULTS } from '@paldock/domain';
 
 export interface NotifierDeps {
   store: StorePort;
@@ -24,6 +25,8 @@ export interface NotifierDeps {
   attached(provider: ChannelProvider): boolean;
   now: () => Date;
   limits: P2Limits;
+  /** 同一次 Run 多久之内的审批合并成一条消息（缺省 P1_DEFAULTS.approvalGroupMs）。 */
+  approvalGroupMs?: number;
 }
 
 /** 从外部建的任务在这些节点通知来源会话。 */
@@ -31,6 +34,8 @@ const NOTIFY_STATUSES = new Set<SubtaskStatus>(['running', 'review', 'blocked', 
 
 /** 升级审批卡片的主题：同一审批在同一会话里只有一张卡片，处理后更新它。 */
 const approvalSubject = (approvalId: string) => `approval:${approvalId}`;
+/** 合并成一组的审批：一条消息，处理完后更新它。 */
+const groupSubject = (groupId: string) => `approval-group:${groupId}`;
 
 /**
  * 业务事件 → 外部渠道：
@@ -170,6 +175,17 @@ export class ChannelNotifier {
     this.channels.voidActions(approvalId);
     const context = this.channels.approvalContext(approvalId);
     if (!context?.approval.escalatedAt || context.approval.status === 'pending') return;
+    // 合并外发的一组：全部处理完才更新那一条消息
+    const group = context.approval.groupId ? this.deps.store.runs.approvalsOfGroup(context.approval.groupId).filter((a) => a.escalatedAt) : [];
+    if (group.length > 1) {
+      if (group.some((a) => a.status === 'pending')) return;
+      const subject = groupSubject(context.approval.groupId!);
+      const card = approvalGroupDecidedCard(context, group);
+      for (const conversation of this.channels.activeDirectConversations()) {
+        if (this.deps.store.outbox.hasSubject(conversation.id, subject)) this.deps.send(conversation, card, subject);
+      }
+      return;
+    }
     const card = approvalDecidedCard(context, context.approval.status, context.approval.decidedVia);
     const subject = approvalSubject(approvalId);
     // 只更新收到过（或正排队要收）审批卡片的会话
@@ -191,12 +207,25 @@ export class ChannelNotifier {
     const providers = [...new Set(targets.map((t) => t.provider))] as ChannelProvider[];
     this.escalateNotices(targets, providers, presence, nowMs);
     this.escalatePlans(targets, providers, presence, nowMs);
-    for (const candidate of candidates) {
+    // 同一组的审批合在一起发一条；组还在收（第一条到达后不到 approvalGroupMs）时先不发，免得拆成几条
+    const groupMs = this.deps.approvalGroupMs ?? P1_DEFAULTS.approvalGroupMs;
+    const groups = new Map<string, EscalationCandidate[]>();
+    for (const c of candidates) {
+      const key = c.approval.groupId ?? c.approval.id;
+      const list = groups.get(key);
+      if (list) list.push(c);
+      else groups.set(key, [c]);
+    }
+    for (const group of groups.values()) {
+      if (group[0]!.approval.groupId && nowMs - Date.parse(group[0]!.approval.requestedAt) < groupMs) continue;
       this.deps.store.transaction(() => {
-        const event = this.channels.markEscalated(candidate.approval.id, providers);
-        if (!event) return; // 期间已被处理或已升级
-        for (const conversation of targets) this.sendApproval(conversation, candidate, nowMs);
-        this.deps.publish([event]);
+        const marked = group.map((c) => ({ c, event: this.channels.markEscalated(c.approval.id, providers) })).filter((m) => m.event);
+        if (marked.length === 0) return; // 期间已被处理或已升级
+        for (const conversation of targets) {
+          if (marked.length === 1) this.sendApproval(conversation, marked[0]!.c, nowMs);
+          else this.deps.send(conversation, approvalGroupCard(marked.map((m) => m.c)), groupSubject(marked[0]!.c.approval.groupId!));
+        }
+        this.deps.publish(marked.map((m) => m.event!));
       });
     }
   }
@@ -228,9 +257,7 @@ export class ChannelNotifier {
       : undefined;
     const why = remote
       ? null
-      : approval.kind === 'permissions'
-        ? '权限扩展只能在电脑上处理。'
-        : `这个项目的远程审批等级是 ${c.remoteApprovalLevel}，${approval.riskLevel === 'high' ? '高风险' : '这类'}审批请到电脑上处理。`;
+      : `这个项目的远程审批等级是 ${c.remoteApprovalLevel}，${approval.riskLevel === 'high' ? '高风险（含权限扩展、敏感路径的读取）' : '这类'}审批在这里只能拒绝；请到电脑上批，或把项目的远程审批等级调到 ${approval.riskLevel === 'high' ? 'L2' : 'L1 或 L2'}。`;
     this.deps.send(conversation, approvalCard(c, buttons, why), approvalSubject(approval.id));
   }
 }

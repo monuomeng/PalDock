@@ -1,9 +1,9 @@
-import type { AttentionItem, RecoveryItem, RecoveryKind } from '@paldock/contracts';
+import type { ApprovalRecord, AttentionItem, RecoveryItem, RecoveryKind } from '@paldock/contracts';
 import { call } from '../api.js';
 import { h } from '../dom.js';
 import { ATTENTION_LABEL, time } from '../format.js';
 import { chatLink, navigate, taskLink } from '../router.js';
-import { approvalView, type Act } from './approval-card.js';
+import { approvalGroupView, approvalView, type Act } from './approval-card.js';
 
 /**
  * 首页「待我处理」：审批、待命中、阻塞、执行状态待确认，按时间排序。
@@ -24,12 +24,12 @@ export async function attentionView(): Promise<HTMLElement> {
   return h(
     'section',
     { 'aria-labelledby': 'attention-title' },
-    h('h2', { id: 'attention-title' }, `待我处理（${items.length}）`),
+    h('h2', { id: 'attention-title' }, `待我处理（${grouped(items).length}）`),
     error,
     recovered.length > 0 ? recoveryPanel(recovered) : null,
     items.length === 0
       ? h('p', { class: 'empty' }, '没有需要你处理的事项。')
-      : h('ul', { class: 'attention-list' }, ...items.map((item) => row(item, act))),
+      : h('ul', { class: 'attention-list' }, ...grouped(items).map(([item, group]) => row(item, act, group))),
   );
 }
 
@@ -45,7 +45,32 @@ function recoveryPanel(items: RecoveryItem[]): HTMLElement {
   );
 }
 
-function row(item: AttentionItem, act: Act): HTMLElement {
+/**
+ * 同一次 Run 短时间内的审批（同一组）合成一条：取组里第一条作为条目，带上整组。其余条目原样。
+ */
+export function grouped(items: readonly AttentionItem[]): [AttentionItem, ApprovalRecord[]][] {
+  const groups = new Map<string, ApprovalRecord[]>();
+  for (const item of items) {
+    const g = item.approval?.groupId;
+    if (!g || !item.approval) continue;
+    const list = groups.get(g);
+    if (list) list.push(item.approval);
+    else groups.set(g, [item.approval]);
+  }
+  const seen = new Set<string>();
+  const out: [AttentionItem, ApprovalRecord[]][] = [];
+  for (const item of items) {
+    const g = item.approval?.groupId;
+    if (g && groups.get(g)!.length > 1) {
+      if (seen.has(g)) continue;
+      seen.add(g);
+      out.push([item, groups.get(g)!]);
+    } else out.push([item, []]);
+  }
+  return out;
+}
+
+function row(item: AttentionItem, act: Act, group: readonly ApprovalRecord[] = []): HTMLElement {
   const open = async () => {
     if (!item.read) await call('attention.markRead', { itemKind: item.kind, itemId: item.itemId }).catch(() => {});
     // 协调助手的通知在对话页看；其余打开对应任务（和那次 Run）
@@ -63,6 +88,6 @@ function row(item: AttentionItem, act: Act): HTMLElement {
       h('span', { class: 'meta' }, time(item.since), item.read ? '' : ' · 未读'),
     ),
     // 审批直接在这里处理：P3 计划任务的详情页以前没有审批卡片，点进去找不到按钮（0.3.1 实测）
-    item.approval ? approvalView(item.approval, act) : null,
+    group.length > 1 ? approvalGroupView(group, act) : item.approval ? approvalView(item.approval, act) : null,
   );
 }

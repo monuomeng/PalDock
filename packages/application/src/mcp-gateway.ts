@@ -145,6 +145,10 @@ export class McpGateway {
         const notice = this.coordinatorService().notify(caller.runId, message, question);
         return { ...notice, next: '已发给用户；用户回复会作为新消息出现在对话里' };
       }
+      case 'decide_approval': {
+        const { approvalId, decision, reason } = args as McpToolArgs<'decide_approval'>;
+        return this.coordinatorService().decideApproval(caller.runId, approvalId, decision, reason);
+      }
       case 'write_summary': {
         const { summary } = args as McpToolArgs<'write_summary'>;
         if (caller.role === 'coordinator') return this.coordinatorService().writeSummary(caller.runId, summary);

@@ -81,6 +81,8 @@ export interface RuntimeApprovalRequest {
   command?: string;
   /** 执行器给出的理由，仅供展示，不参与风险判定。 */
   reason?: string;
+  /** 只读工具（Read / Glob / Grep 之类，不含 shell）要读的路径：走项目外只读的分层（2026-11-26 已定）。 */
+  readPaths?: string[];
 }
 
 /** 「本会话允许」P1 不开放；`cancel` 用于审批过期、任务取消或 Run 结束时收尾。 */

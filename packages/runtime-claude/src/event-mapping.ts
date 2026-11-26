@@ -14,6 +14,8 @@ const str = (value: unknown) => (typeof value === 'string' && value.length > 0 ?
 const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
 
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
+/** 只读的工具 → 参数里的路径字段（它们来审批说明要读允许范围之外的路径）。 */
+const READ_TOOLS: Readonly<Record<string, string>> = { Read: 'file_path', Glob: 'path', Grep: 'path', LS: 'path', NotebookRead: 'notebook_path' };
 /** 写文件的工具 → 参数里的路径字段。 */
 const FILE_TOOLS: Readonly<Record<string, string>> = { Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path', NotebookEdit: 'notebook_path' };
 
@@ -40,6 +42,18 @@ export function toApprovalRequest(toolName: string, input: Record<string, unknow
       detail: clip(paths.join('\n'), 4000),
       paths,
       ...(writes.length > 0 ? { writes } : {}),
+    };
+  }
+  const readKey = READ_TOOLS[toolName];
+  const readRaw = readKey ? str(input[readKey]) : undefined;
+  if (readKey && readRaw) {
+    const path = isAbsolute(readRaw) ? readRaw : resolve(cwd, readRaw);
+    return {
+      nativeRequestId,
+      kind: 'permissions',
+      summary: clip(`读取（${toolName}）：${path}`, 200),
+      detail: clip(JSON.stringify(input), 4000),
+      readPaths: [path],
     };
   }
   return { nativeRequestId, kind: 'permissions', summary: clip(`使用工具 ${toolName}`, 200), detail: clip(JSON.stringify(input), 4000) };

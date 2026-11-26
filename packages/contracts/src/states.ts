@@ -55,7 +55,8 @@ export const RemoteApprovalLevel = z.enum(['L0', 'L1', 'L2']);
 export type RemoteApprovalLevel = z.infer<typeof RemoteApprovalLevel>;
 
 /** 审批来源：桌面、外部渠道（与 ChannelProvider 同名）或策略（过期、Run 结束时自动取消）。 */
-export const ApprovalChannel = z.enum(['desktop', 'feishu', 'telegram', 'policy']);
+/** coordinator：协调助手按审批分层规则批的（2026-11-26 已定，只限非敏感的项目外只读）。 */
+export const ApprovalChannel = z.enum(['desktop', 'feishu', 'telegram', 'policy', 'coordinator']);
 export type ApprovalChannel = z.infer<typeof ApprovalChannel>;
 
 export const MessageRole = z.enum(['user', 'assistant', 'system']);

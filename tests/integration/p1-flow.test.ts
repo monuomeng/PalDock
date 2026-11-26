@@ -245,14 +245,11 @@ describe('审批', () => {
     expect(existsSync(join(reviewed.subtask.worktreePath!, 'installed.txt'))).toBe(true);
   });
 
-  it('权限扩展：高风险，P1 不允许批准', async () => {
+  it('权限扩展：高风险；2026-11-26 起你可以「允许一次」（以前只能拒绝，按钮是灰的）', async () => {
     const created = await create('[mock:permissions] 联网');
     const approval = pendingApproval(await until(created.task.id, (d) => !!pendingApproval(d)))!;
     expect(approval).toMatchObject({ kind: 'permissions', riskLevel: 'high' });
-    await expect(
-      call('approval.decide', { approvalId: approval.id, expectedVersion: approval.version, decision: 'allow_once' }),
-    ).rejects.toMatchObject({ code: 'bad_request' });
-    await call('approval.decide', { approvalId: approval.id, expectedVersion: approval.version, decision: 'deny' });
+    await call('approval.decide', { approvalId: approval.id, expectedVersion: approval.version, decision: 'allow_once' });
     await until(created.task.id, (d) => d.subtask.status === 'review');
   });
 

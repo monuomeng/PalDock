@@ -144,6 +144,14 @@ export interface ApprovalRecord {
   decidedVia: ApprovalChannel | null;
   /** 已升级到外部单聊的时间。 */
   escalatedAt: string | null;
+  /** read：项目外只读（Read / Glob / Grep 之类，不含 shell）。 */
+  access: 'read' | null;
+  /** 敏感路径（凭据、密钥、.env 之类）：只能由你批（0 / 1）。 */
+  sensitive: number;
+  /** 同一次 Run 短时间内的审批合并成一组：一张卡、一条通知，各项仍独立审计、独立过期。 */
+  groupId: string | null;
+  /** coordinator：交给协调助手判断中（它批不了、不确定或超时后回到你这里）。 */
+  routedTo: 'coordinator' | null;
   version: number;
 }
 

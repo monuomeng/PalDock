@@ -333,13 +333,13 @@ export class TaskService {
     ];
   }
 
-  /** 先到者为准（版本号）；权限扩展只能拒绝。via 记录决定来自桌面还是哪个外部渠道。 */
+  /**
+   * 先到者为准（版本号）。via 记录决定来自桌面还是哪个外部渠道。
+   * 权限扩展（项目外写入、联网、敏感路径的读取等）2026-11-26 起你可以「允许一次」；外部渠道能不能批由远程审批规则决定。
+   */
   decideApproval(approvalId: string, expectedVersion: number, decision: ApprovalDecision, via: ApprovalChannel = 'desktop'): void {
     const approval = this.store.runs.getApproval(approvalId);
     if (!approval) throw new CodedError('not_found', '审批不存在');
-    if (decision === 'allow_once' && approval.kind === 'permissions') {
-      throw new CodedError('bad_request', '暂不支持批准权限扩展，只能拒绝');
-    }
     const change = this.store.runs.decideApproval(approval.id, expectedVersion, decision === 'allow_once' ? 'approved' : 'denied', via);
     this.publish(change.events);
     this.deps.supervisor.forwardDecision(change.record, decision);

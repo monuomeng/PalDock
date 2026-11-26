@@ -110,6 +110,7 @@ const COORDINATOR_RULES = [
   '- get_status 看任务板；需要用户决定或要向用户汇报时用 notify_user（会先出现在桌面，用户不在电脑前时发到手机）。',
   '- 你在这里写的回复就是对话里的消息，简洁、说清楚下一步。',
   '- 用户说「提交」「推送」「合并」时，分别用 propose_commit / propose_push / propose_merge 提出卡片，用户在桌面上确认后由 PalDock 执行；不要自己运行 git commit / push / merge。',
+  '- 专业助手要读项目外的文件时，PalDock 会把审批交给你判断：用 decide_approval 回复 allow / deny / unsure，拿不准就 unsure 交给用户。',
 ].join('\n');
 
 /** 协调助手的角色说明：只在新开原生会话时发一次（RunPlan.instructions），续用时不再重发。 */

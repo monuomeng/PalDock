@@ -55,7 +55,9 @@ describe('approval policy', () => {
     expect(canApproveRemotely('L1', of('medium'))).toBe(true);
     expect(canApproveRemotely('L1', of('high'))).toBe(false);
     expect(canApproveRemotely('L2', of('high'))).toBe(true);
-    expect(canApproveRemotely('L2', of('low', 'permissions'))).toBe(false);
+    // 权限扩展（含敏感路径的读取）是高风险：L2 能远程允许一次，L1 只能拒绝（2026-11-26 已定）
+    expect(canApproveRemotely('L2', of('high', 'permissions'))).toBe(true);
+    expect(canApproveRemotely('L1', of('high', 'permissions'))).toBe(false);
   });
 
   it('桌面优先，满足任一条件才升级', () => {

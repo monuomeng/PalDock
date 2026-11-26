@@ -107,13 +107,14 @@ describe('Codex 适配器（模拟 app-server）', () => {
     expect(existsSync(join(cwd, 'installed.txt'))).toBe(true);
   });
 
-  it('权限扩展：即使传入允许也只授予空权限', async () => {
-    const { events, finished } = await runToEnd('[mock:permissions]', {
-      approve: 'allow_once',
-    });
-    await finished;
-    expect(ofType(events, 'approval_request')[0]?.request).toMatchObject({ kind: 'permissions', summary: '请求扩展权限：联网' });
-    expect(ofType(events, 'output_delta').map((e) => e.text).join('')).toContain('没有获得额外权限');
+  it('权限扩展：你允许一次才授予它请求的权限（只限本 turn），拒绝时授予空权限', async () => {
+    const allowed = await runToEnd('[mock:permissions]', { approve: 'allow_once' });
+    await allowed.finished;
+    expect(ofType(allowed.events, 'approval_request')[0]?.request).toMatchObject({ kind: 'permissions', summary: '请求扩展权限：联网' });
+    expect(ofType(allowed.events, 'output_delta').map((e) => e.text).join('')).toContain('已获得联网权限');
+    const denied = await runToEnd('[mock:permissions]', { approve: 'deny' });
+    await denied.finished;
+    expect(ofType(denied.events, 'output_delta').map((e) => e.text).join('')).toContain('没有获得额外权限');
   });
 
   it('未识别的服务端请求立即回错误并上报，turn 不挂起', async () => {

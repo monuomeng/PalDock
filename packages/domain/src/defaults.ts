@@ -28,6 +28,10 @@ export const P1_DEFAULTS = {
   branchPrefix: 'paldock/',
   /** 分支保护：运行中每隔多久读一次 HEAD（fs.watch 之外的兜底）。 */
   branchPollMs: 1000 as number,
+  /** 同一次 Run 多久之内的审批合并成一组（一张卡、一条通知）。 */
+  approvalGroupMs: 3000 as number,
+  /** 交给协调助手判断的项目外只读请求，多久没答复就回到你这里。 */
+  coordinatorApprovalMs: 90_000 as number,
 } as const;
 
 /**

@@ -39,7 +39,8 @@ export const COLUMNS = {
   ),
   approval: cols(
     `id, run_id AS runId, kind, risk_level AS riskLevel, summary, detail, cwd, status, requested_at AS requestedAt,
-     expires_at AS expiresAt, decided_via AS decidedVia, escalated_at AS escalatedAt, version`,
+     expires_at AS expiresAt, decided_via AS decidedVia, escalated_at AS escalatedAt, access, sensitive, group_id AS groupId,
+     routed_to AS routedTo, version`,
   ),
   result: cols(
     `run_id AS runId, final_message AS finalMessage, diff_stat AS diffStat, check_status AS checkStatus,
