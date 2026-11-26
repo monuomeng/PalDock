@@ -83,7 +83,7 @@ export const COLUMNS = {
   ),
   wake: cols(
     `id, session_id AS sessionId, trigger, summary, status, run_id AS runId, requests, note, created_at AS createdAt,
-     started_at AS startedAt, ended_at AS endedAt`,
+     started_at AS startedAt, ended_at AS endedAt, message_id AS messageId`,
   ),
   notice: cols(
     `id, session_id AS sessionId, run_id AS runId, kind, body, status, escalated_at AS escalatedAt, answered_at AS answeredAt,

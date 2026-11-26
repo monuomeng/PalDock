@@ -136,6 +136,15 @@ export class CoordinatorRepository implements CoordinatorStorePort {
     });
   }
 
+  setWakeMessage(wakeId: number, messageId: number): void {
+    this.db.run(`UPDATE wakes SET message_id = ? WHERE id = ?`, messageId, wakeId);
+  }
+
+  /** 这个会话里比 afterId 新的用户消息（交决定前核对：之后又说了话就不执行）。 */
+  newerUserMessage(sessionId: string, afterId: number): MessageRecord | undefined {
+    return this.db.get<MessageRecord>(`SELECT ${COLUMNS.message()} FROM messages WHERE session_id = ? AND role = 'user' AND id > ? ORDER BY id LIMIT 1`, sessionId, afterId);
+  }
+
   private wakeEvent(wake: WakeRecord): PersistentEvent {
     return this.events.append(wake.sessionId, { type: 'wake.changed', payload: { wakeId: wake.id, status: wake.status, trigger: wake.trigger } });
   }

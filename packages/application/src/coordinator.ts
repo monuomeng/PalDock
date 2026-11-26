@@ -29,7 +29,7 @@ export interface CoordinatorDeps {
   now?: () => number;
   limits?: Partial<P3Limits>;
   /** 对话里正在问用户的问题（0.3.8）：唤醒时附上，用户的话可能是在回答它。 */
-  questionContext?: (sessionId: string) => string | undefined;
+  questionContext?: (sessionId: string, triggerMessageId: number | null) => string | undefined;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -134,7 +134,10 @@ export class CoordinatorService {
     this.session(sessionId);
     const events = this.store.transaction(() => {
       const wake = this.store.coordinator.addWake({ sessionId, trigger: 'user_message', dedupeKey, summary });
-      return wake ? [...this.store.messages.append(sessionId, 'user', text, null, channel).events, ...wake.events] : [];
+      if (!wake) return [];
+      const message = this.store.messages.append(sessionId, 'user', text, null, channel);
+      this.store.coordinator.setWakeMessage(wake.record.id, message.record.id);
+      return [...message.events, ...wake.events];
     });
     this.deps.publish(events);
     this.schedule(sessionId);
@@ -165,6 +168,7 @@ export class CoordinatorService {
       const wake = this.store.coordinator.addWake({ sessionId: notice.sessionId, trigger: 'user_message', dedupeKey: `ext:${eventKey}`, summary });
       if (!wake) return [];
       const message = this.store.messages.append(notice.sessionId, 'user', `回复 ${noticeRef(notice.id)}：${text}`, null, channel);
+      this.store.coordinator.setWakeMessage(wake.record.id, message.record.id);
       const answered = this.store.coordinator.answerNotice(notice.id, message.record.id, channel);
       return [...message.events, ...(answered?.events ?? []), ...wake.events];
     });
@@ -386,7 +390,7 @@ export class CoordinatorService {
     const boardText = board.join('\n');
     const boardChanged = !threadId || this.lastBoard.get(session.sessionId) !== boardText;
     this.lastBoard.set(session.sessionId, boardText);
-    const question = this.deps.questionContext?.(session.sessionId);
+    const question = this.deps.questionContext?.(session.sessionId, wake.messageId);
     const prompt = wakePrompt({
       project,
       wake: { trigger: wake.trigger, summary: question ? `${wake.summary}\n\n${question}` : wake.summary },

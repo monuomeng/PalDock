@@ -15,6 +15,7 @@ export interface DiffHunk {
 }
 
 const strip = (line: string) => line.replace(/\r$/, '');
+const stripName = (name: string) => name.replace(/\r$/, '').replace(/\t$/, '');
 
 /** 统一补丁 → 改动块（按文件、按 @@ 分）。 */
 export function splitDiff(patch: string): DiffHunk[] {
@@ -45,13 +46,32 @@ export function splitDiff(patch: string): DiffHunk[] {
   return hunks;
 }
 
-/** 补丁头里的路径（新路径；删除时用旧路径）。 */
+/**
+ * 存下来的一个块（补丁头 + 块）还原成 DiffHunk，路径用调用方给的原始路径（0.3.9：不从补丁头的文本里解析路径，
+ * 中文路径会被转义、带空格的路径行尾多一个 TAB）。
+ */
+export function hunkFromPatch(id: string, path: string, patch: string): DiffHunk {
+  const at = patch.search(/^@@ /m);
+  const header = at < 0 ? patch : patch.slice(0, at);
+  const body = at < 0 ? '' : patch.slice(at);
+  const lines = body.split('\n').slice(1);
+  return {
+    id,
+    path,
+    header,
+    body,
+    added: lines.filter((l) => l.startsWith('+')).map((l) => strip(l.slice(1))),
+    removed: lines.filter((l) => l.startsWith('-')).map((l) => strip(l.slice(1))),
+  };
+}
+
+/** 补丁头里的路径（新路径；删除时用旧路径）。只用于没有原始路径可用的场合；带空格的路径 git 会在行尾加一个 TAB。 */
 function pathOf(file: string): string {
   const plus = /^\+\+\+ b\/(.+)$/m.exec(file)?.[1];
-  if (plus) return strip(plus);
+  if (plus) return stripName(plus);
   const minus = /^--- a\/(.+)$/m.exec(file)?.[1];
-  if (minus) return strip(minus);
-  return strip(/^diff --git a\/(.+?) b\//.exec(file)?.[1] ?? '');
+  if (minus) return stripName(minus);
+  return stripName(/^diff --git a\/(.+?) b\//.exec(file)?.[1] ?? '');
 }
 
 /** 选中的块拼回补丁：同一文件的补丁头只写一次，块按原顺序。 */

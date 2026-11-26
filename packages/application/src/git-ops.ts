@@ -12,8 +12,8 @@ import {
   type RunWriteRecord,
   type StorePort,
 } from '@paldock/contracts';
-import { classifyHunk, joinHunks, splitDiff, type DiffHunk } from '@paldock/domain';
-import { attributeHunks } from './attribution.js';
+import { classifyHunk, hunkFromPatch, joinHunks, type DiffHunk } from '@paldock/domain';
+import { attributeHunks, LITERAL } from './attribution.js';
 import { branchAndHead, git, gitInput, indexTree, snapshotTree, treeChangedFiles } from './git.js';
 import { errorText } from './util.js';
 
@@ -133,7 +133,7 @@ export class GitOpsService {
       chain.map((s) => ({ runId: s.runId, startTree: s.startTree, endTree: s.endTree, writes: writes.get(s.runId) ?? [] })),
       [...files],
     );
-    const staged = (await git(ctx.repo, ['-c', 'core.quotepath=false', 'diff', '--cached', '--name-only', '-z'])).split('\0').filter((f) => f !== '');
+    const staged = nul(await git(ctx.repo, ['diff', '--cached', '--no-renames', '--name-only', '-z']));
     const stagedSet = new Set(staged);
     const scoped = (id: string) => scopedRuns.has(id);
     const items: CommitHunk[] = attributed.flatMap(({ hunk, owners, lineless, fileRuns }) => {
@@ -269,7 +269,8 @@ export class GitOpsService {
       return { status: 'stale' as const, detail: `分支或 HEAD 变了（卡片：${request.branch}@${request.head.slice(0, 10)}，现在：${branch ?? '分离 HEAD'}@${head.slice(0, 10)}），这张卡片作废，请重新让助手提出` };
     }
     const chosen = new Set(hunkIds);
-    const selected: DiffHunk[] = splitDiff(request.hunks.filter((h) => chosen.has(h.id)).map((h) => h.patch).join(''));
+    // 块的路径用卡片里存的原始路径，不从补丁头的文本里解析（0.3.9）
+    const selected: DiffHunk[] = request.hunks.filter((h) => chosen.has(h.id)).map((h) => hunkFromPatch(h.id, h.path, h.patch));
     if (selected.length === 0) return { status: 'cancelled' as const, detail: '没有勾选任何改动块' };
     const paths = [...new Set(selected.map((h) => h.path))];
     const dir = this.scratch();
@@ -286,9 +287,9 @@ export class GitOpsService {
       const tree = (await git(repo, ['write-tree'], 60_000, { GIT_INDEX_FILE: commitIndex })).trim();
       // 2. 先在临时索引里试：新提交为底，重打你在这些文件上的暂存差异；打不上就停下，分支不动
       const commit = (await gitInput(repo, ['commit-tree', tree, '-p', head], request.message)).trim();
-      writeFileSync(stagedFile, await git(repo, ['diff', '--cached', '--binary', head, '--', ...paths]));
+      writeFileSync(stagedFile, await git(repo, ['diff', '--cached', '--no-renames', '--binary', head, '--', ...paths], 60_000, LITERAL));
       await git(repo, ['read-tree', commit], 60_000, { GIT_INDEX_FILE: keepIndex });
-      const userStaged = (await git(repo, ['-c', 'core.quotepath=false', 'diff', '--cached', '--name-only', head, '--', ...paths])).trim();
+      const userStaged = nul(await git(repo, ['diff', '--cached', '--no-renames', '--name-only', '-z', head, '--', ...paths], 60_000, LITERAL)).join('\n');
       if (userStaged) {
         const ok = await git(repo, ['apply', '--cached', '--whitespace=nowarn', stagedFile], 60_000, { GIT_INDEX_FILE: keepIndex }).then(() => true, () => false);
         if (!ok) {
@@ -301,11 +302,12 @@ export class GitOpsService {
       // 3. 推进分支（旧值核对：期间有人动过就失败）
       await git(repo, ['update-ref', `refs/heads/${branch}`, commit, head]);
       // 4. 只更新这几个文件的索引项：新提交的内容，加上你原来暂存的差异
-      const entries = (await git(repo, ['ls-files', '-s', '--', ...paths], 60_000, { GIT_INDEX_FILE: keepIndex })).trim();
-      const present = new Set(entries.split('\n').filter(Boolean).map((l) => l.split('\t')[1]!));
-      if (entries) await gitInput(repo, ['update-index', '--index-info'], `${entries}\n`);
+      // 原始路径（-z）：中文等路径不加引号转义，带空格的也不会出错（0.3.9）
+      const entries = nul(await git(repo, ['ls-files', '-s', '-z', '--', ...paths], 60_000, { GIT_INDEX_FILE: keepIndex, ...LITERAL }));
+      const present = new Set(entries.map((e) => e.slice(e.indexOf('\t') + 1)));
+      if (entries.length > 0) await gitInput(repo, ['update-index', '-z', '--index-info'], entries.map((e) => `${e}\0`).join(''), LITERAL);
       const gone = paths.filter((p) => !present.has(p));
-      if (gone.length > 0) await git(repo, ['update-index', '--force-remove', '--', ...gone]);
+      if (gone.length > 0) await git(repo, ['update-index', '--force-remove', '--', ...gone], 60_000, LITERAL);
       return { status: 'done' as const, detail: `已提交 ${commit.slice(0, 10)} 到 ${branch}（${selected.length} 个改动块，${paths.length} 个文件）` };
     } finally {
       for (const f of [patchFile, stagedFile, commitIndex, keepIndex]) rmSync(f, { force: true });
@@ -364,7 +366,7 @@ export class GitOpsService {
       }
       const ok = await git(repo, ['merge', '--no-edit', '-m', message, request.sourceSha], 300_000).then(() => true, () => false);
       if (!ok) {
-        const conflicts = (await git(repo, ['diff', '--name-only', '--diff-filter=U']).catch(() => '')).trim();
+        const conflicts = nul(await git(repo, ['diff', '--name-only', '-z', '--diff-filter=U']).catch(() => '')).join('\n');
         await git(repo, ['merge', '--abort']).catch(() => {});
         return { status: 'failed' as const, detail: `合并冲突，已中止、没有改动：${conflicts.split('\n').join('、') || '（未知文件）'}` };
       }
@@ -376,7 +378,7 @@ export class GitOpsService {
     try {
       const ok = await git(temp, ['merge', '--no-edit', '-m', message, request.sourceSha], 300_000).then(() => true, () => false);
       if (!ok) {
-        const conflicts = (await git(temp, ['diff', '--name-only', '--diff-filter=U']).catch(() => '')).trim();
+        const conflicts = nul(await git(temp, ['diff', '--name-only', '-z', '--diff-filter=U']).catch(() => '')).join('\n');
         await git(temp, ['merge', '--abort']).catch(() => {});
         return { status: 'failed' as const, detail: `合并冲突，没有改动 ${request.target}：${conflicts.split('\n').join('、') || '（未知文件）'}` };
       }
@@ -438,4 +440,9 @@ async function commitList(repo: string, range: readonly string[]): Promise<{ com
   const total = Number((await git(repo, ['rev-list', '--count', ...range])).trim()) || 0;
   const commits = (await git(repo, ['log', '--oneline', '-n', '50', ...range])).trim().split('\n').filter(Boolean);
   return { commits, total };
+}
+
+/** `-z` 输出 → 各项（NUL 分隔，去掉空项）。 */
+function nul(out: string): string[] {
+  return out.split('\0').filter((x) => x !== '');
 }

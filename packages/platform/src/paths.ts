@@ -1,5 +1,5 @@
-import { existsSync, statSync } from 'node:fs';
-import { delimiter, extname, isAbsolute, join, resolve, sep } from 'node:path';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 /** Windows 与 macOS 默认文件系统都不区分大小写，路径比较统一转小写；Linux 区分。 */
 const normalize = (path: string) => {
@@ -16,6 +16,38 @@ export function isInside(root: string, path: string): boolean {
   const base = normalize(root);
   const target = normalize(resolve(root, path));
   return target === base || target.startsWith(base.endsWith(sep) ? base : base + sep);
+}
+
+/**
+ * 真实路径（跟随符号链接）；还不存在的文件取最近一个已存在的上级的真实路径再接上余下部分（0.3.9）。
+ * 例如 macOS 上 /var 是 /private/var 的链接，执行器报告的路径可能是任一种写法。
+ */
+export function realOrNearest(path: string): string {
+  const rest: string[] = [];
+  let cur = resolve(path);
+  for (;;) {
+    try {
+      return join(realpathSync.native(cur), ...rest.reverse());
+    } catch {
+      const parent = dirname(cur);
+      if (parent === cur) return resolve(path);
+      rest.push(basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+/** 同 isInside，但两边都按真实路径比较（软链的项目、macOS 的临时目录、Windows 盘符大小写不同时也判断正确）。 */
+export function isInsideReal(root: string, path: string): boolean {
+  return isInside(realOrNearest(root), realOrNearest(resolve(root, path)));
+}
+
+/** path 相对 root 的路径（两边按真实路径算）；不在 root 里时返回 undefined。 */
+export function relativeReal(root: string, path: string): string | undefined {
+  const base = realOrNearest(root);
+  const target = realOrNearest(resolve(root, path));
+  if (!isInside(base, target)) return undefined;
+  return relative(base, target);
 }
 
 /** 在给定环境的 PATH 上查找可执行文件；Windows 按 PATHEXT 补扩展名（.EXE 先于 .CMD）。 */

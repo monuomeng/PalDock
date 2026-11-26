@@ -21,6 +21,7 @@ import { projectSettingsSchema } from './016-project-settings.js';
 import { currentWorkspaceSchema } from './017-current-workspace.js';
 import { commitScopeSchema } from './018-commit-scope.js';
 import { approvalQuestionsSchema } from './019-approval-questions.js';
+import { wakeMessageSchema } from './020-wake-message.js';
 
 export interface Migration {
   version: number;
@@ -49,6 +50,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 17, name: 'current-workspace', sql: currentWorkspaceSchema },
   { version: 18, name: 'commit-scope', sql: commitScopeSchema },
   { version: 19, name: 'approval-questions', sql: approvalQuestionsSchema },
+  { version: 20, name: 'wake-message', sql: wakeMessageSchema },
 ];
 
 export interface MigrateResult {

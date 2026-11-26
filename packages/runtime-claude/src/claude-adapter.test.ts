@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { RuntimeApprovalDecision, RuntimeEvent, RuntimeRun } from '@paldock/contracts';
@@ -88,7 +88,8 @@ describe('Claude 适配器（模拟 CLI）', () => {
     const denied = await runToEnd('[mock:file-approval]', { approve: 'deny' });
     await denied.finished;
     const [request] = ofType(denied.events, 'approval_request');
-    expect(request!.request).toMatchObject({ kind: 'file_change', paths: [join(cwd, 'approved.txt')] });
+    // 模拟的 Claude 按它自己的 process.cwd() 解析路径，是真实路径（macOS 上 /var 是 /private/var 的链接）
+    expect(request!.request).toMatchObject({ kind: 'file_change', paths: [join(realpathSync(cwd), 'approved.txt')] });
     expect(existsSync(join(cwd, 'approved.txt'))).toBe(false);
     await run?.dispose();
 

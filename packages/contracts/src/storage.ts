@@ -229,6 +229,9 @@ export interface CoordinatorStorePort {
   getMainSession(sessionId: string): MainSessionRecord | undefined;
   /** 同一去重键只记一次；已有时返回 undefined。 */
   addWake(input: NewWake): Change<WakeRecord> | undefined;
+  /** 记下触发这次唤醒的用户消息（和消息、唤醒同一事务）。 */
+  setWakeMessage(wakeId: number, messageId: number): void;
+  newerUserMessage(sessionId: string, afterId: number): MessageRecord | undefined;
   /** 下一条待处理唤醒；给了 trigger 时只看这一类。 */
   nextPendingWake(sessionId: string, trigger?: WakeTrigger): WakeRecord | undefined;
   runningWake(sessionId: string): WakeRecord | undefined;

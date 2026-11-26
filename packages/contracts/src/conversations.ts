@@ -47,6 +47,8 @@ export interface WakeRecord {
   createdAt: string;
   startedAt: string | null;
   endedAt: string | null;
+  /** 触发这次唤醒的那条用户消息（0.3.9；任务事件唤醒为 null）。 */
+  messageId: number | null;
 }
 
 /** 协调助手发给你的通知；编号（Q + id）就是问题编号，外部回复时带上它。 */

@@ -414,25 +414,31 @@ describe('Codex 复审的修复（0.3.5）', () => {
     ]);
     const [p1, p2] = await Promise.all([started('p1'), started('p2')]);
     p1.succeed();
-    await new Promise((r) => setTimeout(r, 20));
     p2.succeed();
     await idle();
-    // 最近用过的（p2 的会话）会被优先续用：让它续不上
-    runtime.broken.add(p2.threadId);
+    // 池子会优先续用最近用过的那个会话（释放时间取决于收尾快慢，不靠两次结束之间的间隔）：从库里读出是哪一个，让它续不上
+    const picked = store.db.get<{ native_thread_id: string }>(
+      `SELECT native_thread_id FROM role_sessions WHERE role = 'developer' AND status = 'idle' ORDER BY last_used_at DESC, created_at LIMIT 1`,
+    )!.native_thread_id;
+    const other = picked === p1.threadId ? p2.threadId : p1.threadId;
+    runtime.broken.add(picked);
     await runPlan([{ key: 'q1', role: 'developer' }, { key: 'q2', role: 'tester' }]);
     const q1 = await started('q1');
     expect(q1.request.resumeThreadId).toBeUndefined();
     expect(q1.request.instructions).toContain('你是 PalDock 的开发助手');
-    expect(q1.threadId).not.toBe(p1.threadId);
+    // 不借池里另一个空闲会话
+    expect(q1.threadId).not.toBe(other);
     q1.succeed();
     (await started('q2')).succeed();
     await idle();
     const developer = sessions().filter((x) => x.role === 'developer');
-    expect(developer.map((x) => [x.native_thread_id, x.status])).toEqual([
-      [p1.threadId, 'idle'],
-      [p2.threadId, 'retired'],
-      [q1.threadId, 'idle'],
-    ]);
+    expect(new Map(developer.map((x) => [x.native_thread_id, x.status]))).toEqual(
+      new Map([
+        [other, 'idle'],
+        [picked, 'retired'],
+        [q1.threadId, 'idle'],
+      ]),
+    );
     logs.length = 0;
   });
 

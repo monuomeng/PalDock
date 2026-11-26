@@ -103,8 +103,8 @@ async function setup(options: { hostFallbackMs?: number } = {}) {
   const log = (m: string) => logs.push(m);
   // Git 卡片的执行由一个计数的替身代替（只看是否执行、执行几次）
   const gitOps = {
-    decide: async (opId: string, version: number, decision: string) => {
-      gitCalls.push(`${opId}:${decision}`);
+    decide: async (opId: string, version: number, decision: string, hunkIds: string[] = []) => {
+      gitCalls.push(`${opId}:${decision}${hunkIds.length > 0 ? `:${hunkIds.join(',')}` : ''}`);
       const { record, events } = store.git.finishOp(opId, version, decision === 'confirm' ? 'done' : 'cancelled', decision === 'confirm' ? '已推送' : '已取消');
       publish(events);
       return record;
@@ -122,7 +122,7 @@ async function setup(options: { hostFallbackMs?: number } = {}) {
   });
   scheduler = new TaskGraphScheduler({ store, supervisor, publish, log });
   plans = new PlanService({ store, scheduler, publish });
-  coordinator = new CoordinatorService({ store, supervisor, publish, log, questionContext: (s) => conversation.openQuestionContext(s) });
+  coordinator = new CoordinatorService({ store, supervisor, publish, log, questionContext: (s, m) => conversation.openQuestionContext(s, m) });
   conversation = new ApprovalConversation({
     store,
     publish,
@@ -242,7 +242,7 @@ describe('发布条件', () => {
     const msg = say('第一张可以');
     const t4 = await coordinatorTurn(4);
     // 唤醒里给出你这条消息的编号（交决定时要带上）
-    expect(t4.request.prompt).toContain(`用户最新这条消息的编号是 ${msg}`);
+    expect(t4.request.prompt).toContain(`这一轮是用户消息 ${msg} 触发的`);
     const result = (await tools(t4).async('resolve_approvals', { questionId, items: [{ ref: a, decision: 'allow' }], userMessageId: msg, decisionQuote: '第一张可以' })) as { results: string[]; remaining: string[] };
     t4.succeed('第一张已放行，测试继续了；第二张还在等你。');
     expect(await answers[0]).toBe('allow_once');
@@ -481,5 +481,74 @@ describe('外部会话', () => {
     notifier.escalate();
     expect(store.questions.get(questionId)!.delivery).toBe('failed');
     expect(sent.some((s) => s.subject === `approval:${x!.id}`)).toBe(true);
+  });
+});
+
+describe('决定绑定触发这一轮的那条消息（0.3.9）', () => {
+  it('「可以」紧接着「等等，不要」：第一轮按「可以」交的决定作废，第二轮按最新的话处理，什么都没放行', async () => {
+    await setup();
+    const tester = await startTester();
+    const { a, b, turn } = await twoImages(tester);
+    const { questionId } = tools(turn).call('suggest_decision', { text: '测试助手要读 login-before.png、login-after.png，建议都允许？', items: [{ ref: a, decision: 'allow' }, { ref: b, decision: 'allow' }] }) as { questionId: string };
+    // 协调助手这一轮还没结束，你连发两句：两条都排着
+    const yes = say('可以');
+    const wait = say('等等，不要');
+    turn.succeed('');
+    const t3 = await coordinatorTurn(3);
+    expect(t3.request.prompt).toContain(`这一轮是用户消息 ${yes} 触发的`);
+    // 只能用触发这一轮的那条消息
+    await expect(tools(t3).async('resolve_approvals', { questionId, items: [{ ref: a, decision: 'deny' }], userMessageId: wait, decisionQuote: '不要' })).rejects.toThrow(/不是触发这一轮的那条/);
+    // 按「可以」交：你之后又说了话，作废
+    await expect(tools(t3).async('resolve_approvals', { questionId, items: [{ ref: a, decision: 'allow' }, { ref: b, decision: 'allow' }], userMessageId: yes, decisionQuote: '可以' })).rejects.toThrow(/又发了消息.*作废/);
+    t3.succeed('');
+    const t4 = await coordinatorTurn(4);
+    await expect(tools(t4).async('resolve_approvals', { questionId, items: [{ ref: a, decision: 'allow' }], userMessageId: wait, decisionQuote: '等等，不要' })).rejects.toThrow(/还没决定/);
+    t4.succeed('好，先不放行。');
+    expect([statusOf(a), statusOf(b)]).toEqual(['pending', 'pending']);
+    expect(store.questions.get(questionId)!.status).toBe('open');
+  });
+
+  it('执行前刚到一条新消息：这次决定不执行', async () => {
+    await setup();
+    const tester = await startTester();
+    const { a, b, turn } = await twoImages(tester);
+    const { questionId } = tools(turn).call('suggest_decision', { text: '测试助手要读 login-before.png、login-after.png，建议都允许？', items: [{ ref: a, decision: 'allow' }, { ref: b, decision: 'allow' }] }) as { questionId: string };
+    turn.succeed('');
+    const yes = say('可以');
+    const t3 = await coordinatorTurn(3);
+    say('不对，先别读');
+    await expect(tools(t3).async('resolve_approvals', { questionId, items: [{ ref: a, decision: 'allow' }], userMessageId: yes, decisionQuote: '可以' })).rejects.toThrow(/作废/);
+    t3.succeed('');
+    expect([statusOf(a), statusOf(b)]).toEqual(['pending', 'pending']);
+  });
+});
+
+describe('提交块限定在卡片和问题范围内（0.3.9）', () => {
+  function proposeCommitCard(): GitOpRecord {
+    const hunk = (id: string, evidenced: boolean) => ({ id, path: 'a.txt', patch: `diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-a\n+${id}\n`, evidenced, note: '', stagedByUser: false });
+    const { record } = store.git.proposeOp({
+      workspaceId,
+      sessionId: main.sessionId,
+      runId: null,
+      request: { kind: 'commit', message: '加一行', branch: 'main', head: 'abc', scope: { kind: 'session', label: '这个对话发起的任务', taskIds: [] }, hunks: [hunk('0:0', true), hunk('1:0', false)], staged: [] },
+    });
+    return record;
+  }
+
+  it('suggest 只能挑卡片上的块；resolve 只能交问题里列出的块（你没看到的块不会被提交）', async () => {
+    await setup();
+    say('提交这次的改动');
+    const t1 = await coordinatorTurn(1);
+    const card = proposeCommitCard();
+    expect(() => tools(t1).call('suggest_decision', { text: '提交「加一行」？', items: [{ ref: card.id, decision: 'confirm', hunkIds: ['9:9'] }] })).toThrow(/不在提交卡片/);
+    const { questionId } = tools(t1).call('suggest_decision', { text: '提交「加一行」（只含第一块）？', items: [{ ref: card.id, decision: 'confirm', hunkIds: ['0:0'] }] }) as { questionId: string };
+    t1.succeed('');
+    const msg = say('可以，提交第二块');
+    const t2 = await coordinatorTurn(2);
+    await expect(tools(t2).async('resolve_approvals', { questionId, items: [{ ref: card.id, decision: 'confirm', hunkIds: ['1:0'] }], userMessageId: msg, decisionQuote: '可以' })).rejects.toThrow(/不在问题里/);
+    expect(gitCalls).toEqual([]);
+    await tools(t2).async('resolve_approvals', { questionId, items: [{ ref: card.id, decision: 'confirm', hunkIds: ['0:0'] }], userMessageId: msg, decisionQuote: '可以' });
+    t2.succeed('');
+    expect(gitCalls).toEqual([`${card.id}:confirm:0:0`]);
   });
 });

@@ -25,6 +25,9 @@ export interface AttributedHunk {
   fileRuns: string[];
 }
 
+/** 路径参数按字面匹配（文件名里有 * ? [ 之类时不当通配符）。 */
+export const LITERAL = { GIT_LITERAL_PATHSPECS: '1' };
+
 // 合成提交用固定的身份和时间（不进任何分支，只给 blame 用，之后由 gc 回收）
 const CHAIN_ENV = {
   GIT_AUTHOR_NAME: 'PalDock',
@@ -45,8 +48,12 @@ const CHAIN_ENV = {
  */
 export async function attributeHunks(repo: string, scratchDir: string, head: string, nowTree: string, runs: readonly ChainRun[], files: readonly string[]): Promise<AttributedHunk[]> {
   if (files.length === 0) return [];
-  const patch = await git(repo, ['-c', 'core.quotepath=false', 'diff', '--no-color', '--binary', '-U1', head, nowTree, '--', ...files]);
-  const hunks = splitDiff(patch);
+  // 逐个文件取补丁，块的路径用原始路径（0.3.9：不从补丁头的文本里解析，中文会被转义、带空格的行尾多一个 TAB）
+  const hunks: DiffHunk[] = [];
+  for (const [fileIndex, file] of files.entries()) {
+    const patch = await git(repo, ['diff', '--no-color', '--no-renames', '--binary', '-U1', head, nowTree, '--', file], 60_000, LITERAL);
+    hunks.push(...splitDiff(patch).map((h, i) => ({ ...h, id: `${fileIndex}:${i}`, path: file })));
+  }
   if (hunks.length === 0) return [];
 
   // 合成提交链
@@ -108,7 +115,7 @@ export async function attributeHunks(repo: string, scratchDir: string, head: str
 
 /** git blame --porcelain 的输出 → 行号（最终文件里的）→ 提交。文件不存在等出错时为空（这些行归为 other，不默认勾选）。 */
 async function blame(repo: string, args: string[]): Promise<Map<number, string>> {
-  const out = await git(repo, ['-c', 'core.quotepath=false', ...args], 120_000).catch(() => '');
+  const out = await git(repo, args, 120_000, LITERAL).catch(() => '');
   const lines = new Map<number, string>();
   for (const line of out.split('\n')) {
     const m = /^([0-9a-f]{40,64}) \d+ (\d+)/.exec(line);
@@ -134,13 +141,13 @@ async function replayTree(repo: string, scratchDir: string, startTree: string, w
   try {
     await git(repo, ['read-tree', startTree], 60_000, env);
     for (const [path, list] of byPath) {
-      const entry = (await git(repo, ['ls-tree', startTree, '--', path]).catch(() => '')).trim();
+      const entry = (await git(repo, ['ls-tree', '-z', startTree, '--', path], 60_000, LITERAL).catch(() => '')).replace(/\0$/, '');
       const mode = /^(\d+) blob /.exec(entry)?.[1] ?? '100644';
       const base = entry ? await git(repo, ['cat-file', 'blob', `${startTree}:${path}`]).catch(() => null) : null;
       const replayed = replayWrites(base, list, contentDigest);
       if (replayed === undefined) continue;
       if (replayed === null) {
-        await git(repo, ['update-index', '--force-remove', '--', path], 60_000, env);
+        await git(repo, ['update-index', '--force-remove', '--', path], 60_000, { ...env, ...LITERAL });
         continue;
       }
       const lastContent = [...list].reverse().find((w) => w.kind === 'content')?.detail;

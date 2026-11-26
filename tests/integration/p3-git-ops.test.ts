@@ -183,6 +183,35 @@ describe('只提交这次：按任务 / 对话、按块', () => {
     expect(read('big.txt')).toBe(lines(100, { 10: 'line 10 (你)', 80: 'line 80 (助手)' }));
   });
 
+  it('中文加空格的文件名（0.3.9）：块的路径是原始路径；只提交助手的块，你暂存的内容还在、没有变成删除，工作区不动', async () => {
+    const zh = '中文 文件.txt';
+    const sp = 'sp ace.txt';
+    await setup({ [zh]: lines(20), [sp]: lines(20) });
+    write(zh, lines(20, { 2: 'line 2 (你)' }));
+    git(repo, 'add', '--', zh);
+    const task = planTask(chat1, '改两个文件');
+    await assistantRun(task, (w) => {
+      w.replace(zh, 'line 15\n', 'line 15 (助手)\n');
+      w.replace(sp, 'line 5\n', 'line 5 (助手)\n');
+    });
+    const card = await ops.proposeCommit(chat1.runId, '改两个文件');
+    expect(commitHunks(card).map((h) => [h.path, h.evidenced])).toEqual([
+      [sp, true],
+      [zh, true],
+    ]);
+    expect((await ops.decide(card.id, card.version, 'confirm', commitHunks(card).map((h) => h.id))).status).toBe('done');
+    const committed = execFileSync('git', ['-C', repo, 'show', '--name-only', '-z', '--format=', 'HEAD'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+    expect(committed.sort()).toEqual([sp, zh].sort());
+    expect(execFileSync('git', ['-C', repo, 'show', `HEAD:${zh}`], { encoding: 'utf8' })).toBe(lines(20, { 15: 'line 15 (助手)' }));
+    // 你暂存的第 2 行还是暂存状态（不是删除），只有这一处
+    const cached = execFileSync('git', ['-C', repo, '-c', 'core.quotepath=false', 'diff', '--cached'], { encoding: 'utf8' });
+    expect(cached).toContain('+line 2 (你)');
+    expect(cached).not.toContain('deleted file');
+    expect(cached).not.toContain('line 15');
+    expect(execFileSync('git', ['-C', repo, 'diff', '--cached', '--name-only', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean)).toEqual([zh]);
+    expect(read(zh)).toBe(lines(20, { 2: 'line 2 (你)', 15: 'line 15 (助手)' }));
+  });
+
   it('你暂存的块和要提交的块重叠：推进分支之前停下，分支和暂存区都不动', async () => {
     await setup({ 'c.txt': lines(20) });
     write('c.txt', lines(20, { 5: 'line 5 (你暂存的)' }));

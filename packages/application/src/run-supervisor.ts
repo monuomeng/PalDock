@@ -28,7 +28,7 @@ import type {
   TurnCheck,
 } from '@paldock/contracts';
 import { checkCapability, isAutoApproved, isGitWrite, isSensitivePath, outOfScope, P1_DEFAULTS, routeRead, taskKey, toLf, type ReadRoute } from '@paldock/domain';
-import { isInside } from '@paldock/platform';
+import { isInsideReal, relativeReal } from '@paldock/platform';
 import { contentDigest } from './attribution.js';
 import type { GitOpsService } from './git-ops.js';
 import { runCheck } from './check-runner.js';
@@ -348,8 +348,9 @@ export class RunSupervisor {
   private recordWrites(live: LiveRun, writes: readonly RuntimeWrite[]): void {
     if (!live.worktree) return;
     for (const write of writes) {
-      const path = relative(live.worktree, resolve(live.worktree, write.path));
-      if (!path || path.startsWith('..') || isAbsolute(path)) continue;
+      // 两边按真实路径算（macOS 的 /var 与 /private/var、软链的项目）
+      const path = relativeReal(live.worktree, write.path);
+      if (!path) continue;
       // 整文件写入：记下写之前文件的样子，重放时据此确认助手是在它看到的内容上写的（期间有人改过就不算证据）
       const full = join(live.worktree, path);
       const beforeHash = write.kind === 'content' && write.beforeHash === undefined ? (existsSync(full) ? contentDigest(toLf(readFileSync(full, 'utf8'))) : 'absent') : (write.beforeHash ?? null);
@@ -909,7 +910,7 @@ export class RunSupervisor {
     const isCoordinator = live.task.kind === 'conversation' || live.subtask.role === 'coordinator';
     return routeRead({
       paths,
-      inside: (p) => isInside(live.worktree!, real(p)),
+      inside: (p) => isInsideReal(live.worktree!, p),
       sensitive: (p) => isSensitivePath(p, home, [this.deps.dataRoot]) || isSensitivePath(real(p), home, [this.deps.dataRoot]),
       createdThisRun: (p) => {
         try {

@@ -45,6 +45,8 @@ interface Described {
   sensitive: boolean;
   /** 提交卡片默认勾选的块。 */
   hunkIds?: string[];
+  /** 提交卡片上的全部块（协调助手只能从这里面挑）。 */
+  cardHunkIds?: string[];
   who: string;
 }
 
@@ -267,7 +269,11 @@ export class ApprovalConversation {
       // 敏感路径在外部会话里不写路径（卡片只说要到电脑上确认），所以只在桌面对话里要求写明
       const external = !!store.channels.conversationOfMainSession(session.sessionId);
       if (d.highImpact && d.target && !(d.sensitive && external) && !mentions(text, d.target)) throw new CodedError('bad_request', `问题里要写明目标：${d.target}`);
-      if (i.hunkIds && !d.hunkIds) throw new CodedError('bad_request', `${i.ref} 不是提交卡片，不能指定改动块`);
+      if (i.hunkIds && !d.cardHunkIds) throw new CodedError('bad_request', `${i.ref} 不是提交卡片，不能指定改动块`);
+      // 提交块只能是这张卡片上的块（0.3.9）
+      const unknown = (i.hunkIds ?? []).filter((h) => !d.cardHunkIds!.includes(h));
+      if (unknown.length > 0) throw new CodedError('bad_request', `这些块不在提交卡片 ${i.ref} 上：${unknown.join('、')}`);
+      if (i.hunkIds && i.hunkIds.length === 0) throw new CodedError('bad_request', '要提交的块不能是空的');
     }
     if (open) this.deps.publish(store.questions.close(open.id, open.version, 'replaced', '协调助手按你的回复改写了问题', []).events);
     const items = described.map(({ input: i, d }) => toItem(d, i.decision, i.hunkIds ?? d.hunkIds));
@@ -292,8 +298,8 @@ export class ApprovalConversation {
     const message = store.messages.get(input.userMessageId);
     if (!message || message.sessionId !== session.sessionId || message.role !== 'user') throw new CodedError('bad_request', 'userMessageId 不是用户在这个对话里的消息');
     if (message.createdAt < q.createdAt) throw new CodedError('bad_request', '这条消息早于问题，不能当作对问题的回答');
-    // 触发这一轮的消息在这一轮开始之前写入（和唤醒同一事务）；这一轮开始之后才来的消息属于下一轮
-    if (message.createdAt > (wake.startedAt ?? wake.createdAt)) throw new CodedError('bad_request', '这条消息不是触发这一轮的那条');
+    // 只认触发这一轮的那条消息（0.3.9）：别的消息由它自己的那一轮处理
+    if (wake.messageId === null || message.id !== wake.messageId) throw new CodedError('bad_request', `这条消息不是触发这一轮的那条（这一轮是消息 ${wake.messageId ?? '?'} 触发的）`);
     const quote = input.decisionQuote.trim();
     if (!quote || !squash(message.body).includes(squash(quote))) throw new CodedError('bad_request', 'decisionQuote 要原样引用用户那条消息里表示决定的话');
     if (input.items.length === 0) throw new CodedError('bad_request', '至少要有一项决定');
@@ -307,8 +313,15 @@ export class ApprovalConversation {
       const okDecision = item.kind === 'approval' ? i.decision === 'allow' || i.decision === 'deny' : i.decision === 'confirm' || i.decision === 'cancel';
       if (!okDecision) throw new CodedError('bad_request', `${i.ref} 的决定只能是 ${item.kind === 'approval' ? 'allow / deny' : 'confirm / cancel'}`);
       if (i.hunkIds && !item.hunkIds) throw new CodedError('bad_request', `${i.ref} 不是提交卡片`);
+      // 提交块只能是问题里列给用户看过的那些（0.3.9）；「只提交第二块」就只提交那一块
+      const unseen = (i.hunkIds ?? []).filter((h) => !item.hunkIds!.includes(h));
+      if (unseen.length > 0) throw new CodedError('bad_request', `这些块不在问题里（用户没看到）：${unseen.join('、')}；要提交它们请先改写问题`);
+      if (i.hunkIds && i.hunkIds.length === 0) throw new CodedError('bad_request', '要提交的块不能是空的');
     }
     const via = message.channel ?? 'desktop';
+    // 执行前核对：用户在这之后又说了话（比如「等等，不要」），这次决定作废，交给下一轮按最新的话处理
+    const newer = store.coordinator.newerUserMessage(session.sessionId, message.id);
+    if (newer) throw new CodedError('conflict', `用户在这之后又发了消息（「${newer.body.slice(0, 50)}」），这次决定作废、没有执行；问题继续挂着，下一轮按他最新的话处理`);
     // 先认领问题（带版本，先到者为准），再逐项执行
     const decided = input.items.map((i) => i.ref);
     this.deps.publish(store.questions.close(q.id, q.version, 'done', `按用户的回复处理：${quote.slice(0, 100)}`, decided).events);
@@ -406,15 +419,12 @@ export class ApprovalConversation {
   // ---- 查询 ----
 
   /** 唤醒里附上的当前问题（你这条消息可能是在回答它）。 */
-  openQuestionContext(sessionId: string): string | undefined {
+  openQuestionContext(sessionId: string, triggerMessageId: number | null = null): string | undefined {
     const q = this.store.questions.openOf(sessionId);
     if (!q) return undefined;
-    // 触发这一轮的那条用户消息（在问题之后的才算回答）：编号给协调助手，交决定时要带上
-    const lastUser = this.store.coordinator
-      .recentMessages(sessionId, 20)
-      .filter((m) => m.role === 'user')
-      .at(-1);
-    const answer = lastUser && lastUser.createdAt >= q.createdAt ? `用户最新这条消息的编号是 ${lastUser.id}（交决定时 userMessageId 填它）。\n` : '';
+    // 触发这一轮的那条用户消息（在问题之后的才算回答）：编号给协调助手，交决定时要带上；不是最新的那条
+    const trigger = triggerMessageId !== null ? this.store.messages.get(triggerMessageId) : undefined;
+    const answer = trigger && trigger.createdAt >= q.createdAt ? `这一轮是用户消息 ${trigger.id} 触发的（交决定时 userMessageId 填它，只按这条消息决定）。\n` : '';
     return (
       `当前在等用户回答的问题 ${q.id}：「${q.text.slice(0, 300)}」\n` +
       answer +
@@ -505,7 +515,14 @@ export class ApprovalConversation {
     }
     if (r.kind === 'commit') {
       const hunkIds = r.hunks.filter((h) => h.evidenced).map((h) => h.id);
-      return { ...base, label: `提交「${r.message}」到 ${r.branch}（${r.scope.label}，${hunkIds.length} 个块）`, target: null, highImpact: false, hunkIds };
+      return {
+        ...base,
+        label: `提交「${r.message}」到 ${r.branch}（${r.scope.label}，${hunkIds.length} 个块）`,
+        target: null,
+        highImpact: false,
+        hunkIds,
+        cardHunkIds: r.hunks.map((h) => h.id),
+      };
     }
     return { ...base, label: '暂存区卡片', target: null, highImpact: false };
   }
