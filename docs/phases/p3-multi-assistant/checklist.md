@@ -6,15 +6,15 @@
 
 ## 0. 安装
 
-1. 构建安装包：版本号 `0.3.0`（P3），本地服务版本 `0.3.0-p3`。
+1. 安装包已经构建好（2026-11-26，P3 分支 `931aade`，代码与 `45bc589` 相同）：`D:\PalDock\release\desktop\PalDock-Setup-0.3.0.exe`。版本号 `0.3.0`，本地服务版本 `0.3.0-p3`；没有代码签名，Windows 可能提示「未知发布者」。要重新构建的话，在仓库根目录先运行
    ```bash
    pnpm build
    ```
+   再到 `apps/desktop` 运行（electron-builder 的 NSIS 等工具走 npmmirror 镜像）：
    ```bash
-   pnpm --filter @paldock/desktop dist
+   ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ pnpm dist
    ```
-   （安装包在 `apps/desktop/release/`；electron-builder 二进制走 npmmirror 镜像，见 P2 的打包说明。）
-2. 先退出旧版 PalDock，再安装到原来的位置 `D:\software\PalDock`。数据根 `D:\software\PalDockCache` 不用动：第一次启动时会自动备份数据库，再从迁移 006 升到 013。
+2. 先退出旧版 PalDock（托盘里也没有它），再运行安装包，安装到原来的位置 `D:\software\PalDock`。数据根 `D:\software\PalDockCache` 不用动：第一次启动时会自动备份数据库，再从 P2 的 v4 升到 v13（迁移 005–013）。
 3. 启动后：「设置 → 助手」里 Codex、Claude 都显示可用；`D:\software\PalDockCache\backups\` 里多了一份升级前的备份。
 
 ## 1. 桌面对话与计划
