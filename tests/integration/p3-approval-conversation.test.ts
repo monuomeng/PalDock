@@ -273,8 +273,6 @@ describe('发布条件', () => {
     const t3 = await coordinatorTurn(3);
     // 协调助手想顺带问推送：问题还开着，新事项排在后面
     expect(() => tools(t3).call('suggest_decision', { text: '要推送 a1b2c3d 到 origin/main 吗？', items: [{ ref: push.id, decision: 'confirm' }] })).toThrow(/排在后面/);
-    // 也不能把推送塞进这次决定
-    await expect(tools(t3).async('resolve_approvals', { questionId, items: [{ ref: push.id, decision: 'confirm' }], userMessageId: msg, decisionQuote: '可以' })).rejects.toThrow(/不在这个问题里/);
     await tools(t3).async('resolve_approvals', { questionId, items: [{ ref: a, decision: 'allow' }], userMessageId: msg, decisionQuote: '第一张可以' });
     t3.succeed('第一张已放行。');
     expect([statusOf(a), statusOf(b)]).toEqual(['approved', 'pending']);
@@ -286,6 +284,23 @@ describe('发布条件', () => {
     expect(t4.request.prompt).toContain(push.id);
     expect(() => tools(t4).call('suggest_decision', { text: '第二张和推送 a1b2c3d 到 origin/main', items: [{ ref: b, decision: 'allow' }, { ref: push.id, decision: 'confirm' }] })).toThrow(/只能涉及一件事/);
     t4.succeed('');
+  });
+});
+
+describe('问题之外的事项不能顺带处理', () => {
+  it('把排在后面的推送塞进对读图问题的决定：拒绝，什么都没执行（这条消息也用掉了）', async () => {
+    await setup();
+    const tester = await startTester();
+    const { a, b, turn } = await twoImages(tester);
+    const { questionId } = tools(turn).call('suggest_decision', { text: '测试助手要读 login-before.png 和 login-after.png，建议都允许？', items: [{ ref: a, decision: 'allow' }, { ref: b, decision: 'allow' }] }) as { questionId: string };
+    turn.succeed('');
+    const push = proposePush();
+    const msg = say('可以');
+    const t3 = await coordinatorTurn(3);
+    await expect(tools(t3).async('resolve_approvals', { questionId, items: [{ ref: a, decision: 'allow' }, { ref: push.id, decision: 'confirm' }], userMessageId: msg, decisionQuote: '可以' })).rejects.toThrow(/不在这个问题里/);
+    t3.succeed('');
+    expect([statusOf(a), statusOf(b)]).toEqual(['pending', 'pending']);
+    expect(gitCalls).toEqual([]);
   });
 });
 
@@ -308,8 +323,8 @@ describe('一句话算不算同意', () => {
     const m2 = say('为什么要我点允许？');
     const t4 = await coordinatorTurn(4);
     await expect(tools(t4).async('resolve_approvals', { questionId, items: [{ ref: a, decision: 'allow' }], userMessageId: m2, decisionQuote: '允许' })).rejects.toThrow(/提问/);
-    // 原话对不上也不行
-    await expect(tools(t4).async('resolve_approvals', { questionId, items: [{ ref: a, decision: 'deny' }], userMessageId: m2, decisionQuote: '不用了' })).rejects.toThrow(/原样引用/);
+    // 这条消息已经用过（被拒也算）：换个决定再交也不行
+    await expect(tools(t4).async('resolve_approvals', { questionId, items: [{ ref: a, decision: 'deny' }], userMessageId: m2, decisionQuote: '为什么' })).rejects.toThrow(/交过一次决定/);
     t4.succeed('因为图片在项目外。');
     expect([statusOf(a), statusOf(b)]).toEqual(['pending', 'pending']);
     expect(store.questions.get(questionId)!.status).toBe('open');
@@ -535,20 +550,73 @@ describe('提交块限定在卡片和问题范围内（0.3.9）', () => {
     return record;
   }
 
-  it('suggest 只能挑卡片上的块；resolve 只能交问题里列出的块（你没看到的块不会被提交）', async () => {
-    await setup();
+  /** 问题只含第一块；你回「可以，提交第二块」。 */
+  async function firstBlockQuestion() {
     say('提交这次的改动');
     const t1 = await coordinatorTurn(1);
     const card = proposeCommitCard();
     expect(() => tools(t1).call('suggest_decision', { text: '提交「加一行」？', items: [{ ref: card.id, decision: 'confirm', hunkIds: ['9:9'] }] })).toThrow(/不在提交卡片/);
-    const { questionId } = tools(t1).call('suggest_decision', { text: '提交「加一行」（只含第一块）？', items: [{ ref: card.id, decision: 'confirm', hunkIds: ['0:0'] }] }) as { questionId: string };
+    const { questionId } = tools(t1).call('suggest_decision', { text: '提交「加一行」（只含第一块 0:0）？', items: [{ ref: card.id, decision: 'confirm', hunkIds: ['0:0'] }] }) as { questionId: string };
     t1.succeed('');
     const msg = say('可以，提交第二块');
     const t2 = await coordinatorTurn(2);
-    await expect(tools(t2).async('resolve_approvals', { questionId, items: [{ ref: card.id, decision: 'confirm', hunkIds: ['1:0'] }], userMessageId: msg, decisionQuote: '可以' })).rejects.toThrow(/不在问题里/);
-    expect(gitCalls).toEqual([]);
-    await tools(t2).async('resolve_approvals', { questionId, items: [{ ref: card.id, decision: 'confirm', hunkIds: ['0:0'] }], userMessageId: msg, decisionQuote: '可以' });
+    return { card, questionId, msg, t2 };
+  }
+
+  it('验收 1：你说「可以，提交第二块」，助手直接请求提交第一块、只引用「可以」：拒绝，Git 调用 0', async () => {
+    await setup();
+    const { card, questionId, msg, t2 } = await firstBlockQuestion();
+    await expect(tools(t2).async('resolve_approvals', { questionId, items: [{ ref: card.id, decision: 'confirm', hunkIds: ['0:0'] }], userMessageId: msg, decisionQuote: '可以' })).rejects.toThrow(/不是单纯的确认/);
+    // 这条消息已经用过：换个说法再交也不行
+    await expect(tools(t2).async('resolve_approvals', { questionId, items: [{ ref: card.id, decision: 'confirm' }], userMessageId: msg, decisionQuote: '可以' })).rejects.toThrow(/交过一次决定/);
     t2.succeed('');
-    expect(gitCalls).toEqual([`${card.id}:confirm:0:0`]);
+    expect(gitCalls).toEqual([]);
+  });
+
+  it('验收 2：助手先请求越界的第二块被拒、旧问题立即失效（已改选），再用同一条消息请求第一块：Git 调用 0', async () => {
+    await setup();
+    const { card, questionId, msg, t2 } = await firstBlockQuestion();
+    await expect(tools(t2).async('resolve_approvals', { questionId, items: [{ ref: card.id, decision: 'confirm', hunkIds: ['1:0'] }], userMessageId: msg, decisionQuote: '提交第二块' })).rejects.toThrow(/改选.*停止执行/);
+    expect(store.questions.get(questionId)).toMatchObject({ status: 'void', result: expect.stringContaining('已改选') });
+    await expect(tools(t2).async('resolve_approvals', { questionId, items: [{ ref: card.id, decision: 'confirm', hunkIds: ['0:0'] }], userMessageId: msg, decisionQuote: '可以' })).rejects.toThrow(/处理过/);
+    t2.succeed('');
+    expect(gitCalls).toEqual([]);
+  });
+
+  it('验收 3：助手按新选择展示只含第二块的问题，你说「确认提交」：Git 只调用一次，只提交第二块', async () => {
+    await setup();
+    const { card, questionId, msg, t2 } = await firstBlockQuestion();
+    await expect(tools(t2).async('resolve_approvals', { questionId, items: [{ ref: card.id, decision: 'confirm', hunkIds: ['1:0'] }], userMessageId: msg, decisionQuote: '提交第二块' })).rejects.toThrow(/改选/);
+    const second = tools(t2).call('suggest_decision', { text: '改成只提交第二块（1:0）「加一行」，确认吗？', items: [{ ref: card.id, decision: 'confirm', hunkIds: ['1:0'] }] }) as { questionId: string };
+    // 带具体选择的那条消息只能用来生成新问题，不能拿来确认新问题
+    await expect(tools(t2).async('resolve_approvals', { questionId: second.questionId, items: [{ ref: card.id, decision: 'confirm', hunkIds: ['1:0'] }], userMessageId: msg, decisionQuote: '可以' })).rejects.toThrow(/早于问题/);
+    t2.succeed('');
+    expect(gitCalls).toEqual([]);
+    const ok = say('确认提交');
+    const t3 = await coordinatorTurn(3);
+    await tools(t3).async('resolve_approvals', { questionId: second.questionId, items: [{ ref: card.id, decision: 'confirm', hunkIds: ['1:0'] }], userMessageId: ok, decisionQuote: '确认提交' });
+    // 再交一次（重投）：不再执行
+    await expect(tools(t3).async('resolve_approvals', { questionId: second.questionId, items: [{ ref: card.id, decision: 'confirm', hunkIds: ['1:0'] }], userMessageId: ok, decisionQuote: '确认提交' })).rejects.toThrow(/处理过|交过一次/);
+    t3.succeed('已提交第二块。');
+    expect(gitCalls).toEqual([`${card.id}:confirm:1:0`]);
+  });
+
+  it('服务重启后：同一条消息对同一个问题交过的决定（被拒的也算）不再执行', async () => {
+    await setup();
+    const tester = await startTester();
+    const { a, b, turn } = await twoImages(tester);
+    const { questionId } = tools(turn).call('suggest_decision', { text: '测试助手要读 login-before.png、login-after.png，建议都允许？', items: [{ ref: a, decision: 'allow' }, { ref: b, decision: 'allow' }] }) as { questionId: string };
+    turn.succeed('');
+    const msg = say('可以');
+    const t3 = await coordinatorTurn(3);
+    // 第一次交：原话对不上，被拒（这条消息就用掉了）
+    await expect(tools(t3).async('resolve_approvals', { questionId, items: [{ ref: a, decision: 'allow' }], userMessageId: msg, decisionQuote: '同意' })).rejects.toThrow(/原样引用/);
+    // 模拟服务重启：换一个新的审批对话实例（记录在数据库里）
+    conversation.stop();
+    conversation = new ApprovalConversation({ store, publish: () => {}, log: () => {}, supervisor, poke: (s) => coordinator.poke(s), limits: { askDebounceMs: 50, hostFallbackMs: 60_000 } });
+    await expect(tools(t3).async('resolve_approvals', { questionId, items: [{ ref: a, decision: 'allow' }], userMessageId: msg, decisionQuote: '可以' })).rejects.toThrow(/交过一次决定/);
+    t3.succeed('');
+    expect([statusOf(a), statusOf(b)]).toEqual(['pending', 'pending']);
+    expect(store.db.get<{ outcome: string }>(`SELECT outcome FROM question_decisions WHERE question_id = ? AND message_id = ?`, questionId, msg)!.outcome).toMatch(/^拒绝/);
   });
 });

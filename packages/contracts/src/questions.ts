@@ -65,5 +65,9 @@ export interface QuestionStorePort {
   /** 结束问题（带版本，先到者为准）；同一事务清掉没有执行的审批上的 question_id（它们回到队列）。 */
   close(id: string, expectedVersion: number, status: Exclude<QuestionStatus, 'open'>, result: string | null, decidedRefs: readonly string[]): Change<QuestionRecord>;
   setDelivery(id: string, delivery: QuestionDelivery): void;
+  /** 这条用户消息对这个问题交一次决定：第一次返回 true；交过（无论成败）返回 false（0.3.10，持久化）。 */
+  claimDecision(questionId: string, messageId: number): boolean;
+  /** 记下这次交决定的结果（执行了什么、为什么被拒）。 */
+  setDecisionOutcome(questionId: string, messageId: number, outcome: string): void;
   markEscalated(id: string): boolean;
 }

@@ -105,7 +105,7 @@ export async function chatView(route: { workspaceId: string | undefined; session
           : 'request' in item
             ? h('div', { class: 'message message-plan' }, gitCard(item, act))
             : questionOf(item.id)
-              ? h('div', {}, messageView(item), questionView(questionOf(item.id)!, act))
+              ? h('div', {}, messageView(item), questionView(questionOf(item.id)!, act, detail.gitOps))
               : messageView(item),
       ),
       live ? h('div', { class: 'message message-assistant live' }, h('span', { class: 'hint' }, '协调助手 · 正在回复'), h('pre', { 'data-live-run': running!.runId! }, live)) : null,

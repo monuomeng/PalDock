@@ -12,7 +12,7 @@ import {
   type QuestionRecord,
   type StorePort,
 } from '@paldock/contracts';
-import { canApproveRemotely, notAConsent, P1_DEFAULTS } from '@paldock/domain';
+import { canApproveRemotely, isPlainConfirmation, notAConsent, P1_DEFAULTS } from '@paldock/domain';
 import type { GitOpsService } from './git-ops.js';
 import { nodeTitle } from './task-graph-scheduler.js';
 import { errorText } from './util.js';
@@ -300,6 +300,26 @@ export class ApprovalConversation {
     if (message.createdAt < q.createdAt) throw new CodedError('bad_request', '这条消息早于问题，不能当作对问题的回答');
     // 只认触发这一轮的那条消息（0.3.9）：别的消息由它自己的那一轮处理
     if (wake.messageId === null || message.id !== wake.messageId) throw new CodedError('bad_request', `这条消息不是触发这一轮的那条（这一轮是消息 ${wake.messageId ?? '?'} 触发的）`);
+    // 同一条消息对同一个问题只能交一次决定（持久化）：被拒也算用过，重启、重投、换个说法再交都不再执行
+    if (!store.questions.claimDecision(q.id, message.id)) {
+      throw new CodedError('conflict', '这条消息已经对这个问题交过一次决定，不能再用它决定；请等用户的新回复');
+    }
+    try {
+      return await this.resolveClaimed(runId, session, q, message, input);
+    } catch (error) {
+      store.questions.setDecisionOutcome(q.id, message.id, `拒绝：${errorText(error, 300)}`);
+      throw error;
+    }
+  }
+
+  private async resolveClaimed(
+    runId: string,
+    session: MainSessionRecord,
+    q: QuestionRecord,
+    message: NonNullable<ReturnType<StorePort['messages']['get']>>,
+    input: { questionId: string; items: { ref: string; decision: QuestionItem['decision']; hunkIds?: string[] | undefined }[]; userMessageId: number; decisionQuote: string },
+  ): Promise<{ results: string[]; remaining: string[]; next: string }> {
+    const { store } = this;
     const quote = input.decisionQuote.trim();
     if (!quote || !squash(message.body).includes(squash(quote))) throw new CodedError('bad_request', 'decisionQuote 要原样引用用户那条消息里表示决定的话');
     if (input.items.length === 0) throw new CodedError('bad_request', '至少要有一项决定');
@@ -315,8 +335,24 @@ export class ApprovalConversation {
       if (i.hunkIds && !item.hunkIds) throw new CodedError('bad_request', `${i.ref} 不是提交卡片`);
       // 提交块只能是问题里列给用户看过的那些（0.3.9）；「只提交第二块」就只提交那一块
       const unseen = (i.hunkIds ?? []).filter((h) => !item.hunkIds!.includes(h));
-      if (unseen.length > 0) throw new CodedError('bad_request', `这些块不在问题里（用户没看到）：${unseen.join('、')}；要提交它们请先改写问题`);
+      if (unseen.length > 0) {
+        // 用户改选了要提交的块（例如问题只含第一块，他说「提交第二块」）：旧问题停止执行，这条回复不能再拿去确认旧问题里的块；
+        // 按他的新选择重新问，等他确认新问题后才提交（宿主不需要理解整句话，只要让旧问题不再执行）
+        this.deps.publish(store.questions.close(q.id, q.version, 'void', `已改选：用户要的块（${unseen.join('、')}）不在问题里，旧问题停止执行`, []).events);
+        throw new CodedError(
+          'conflict',
+          `这些块不在问题里（用户没看到）：${unseen.join('、')}。用户改选了要提交的块，旧问题已停止执行、什么都没提交；请按他的新选择用 suggest_decision 重新问，等他确认`,
+        );
+      }
       if (i.hunkIds && i.hunkIds.length === 0) throw new CodedError('bad_request', '要提交的块不能是空的');
+      // 选择性提交：只有整条回复是明确、无条件的确认（「可以」「确认提交」……）才执行冻结的选择；
+      // 带具体选择的回复（「可以，提交第二块」）只能用来改问题，这条消息本身不能触发提交（0.3.10）
+      if (item.hunkIds && i.decision === 'confirm' && !isPlainConfirmation(message.body)) {
+        throw new CodedError(
+          'bad_request',
+          '用户这条回复不是单纯的确认（带了具体的选择或条件），不能直接提交；请按他的选择用 suggest_decision 重新列出要提交的文件和块，等他确认',
+        );
+      }
     }
     const via = message.channel ?? 'desktop';
     // 执行前核对：用户在这之后又说了话（比如「等等，不要」），这次决定作废，交给下一轮按最新的话处理
@@ -332,6 +368,7 @@ export class ApprovalConversation {
       store.audit.append(`run:${runId}`, 'approval.conversation', item.label.slice(0, 200), JSON.stringify({ question: q.id, message: message.id, quote: quote.slice(0, 200), via, decision: i.decision }).slice(0, 500));
     }
     const remaining = q.items.filter((i) => !decided.includes(i.ref) && this.isPending(i.ref, i.kind)).map((i) => `${i.ref}：${i.label}`);
+    store.questions.setDecisionOutcome(q.id, message.id, `执行：${results.join('；').slice(0, 400)}`);
     return {
       results,
       remaining,

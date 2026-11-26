@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSensitivePath, notAConsent, routeRead } from './read-access.js';
+import { isPlainConfirmation, isSensitivePath, notAConsent, routeRead } from './read-access.js';
 
 const HOME = String.raw`C:\Users\me`;
 
@@ -39,5 +39,10 @@ describe('项目外只读的分层', () => {
     for (const t of ['我还没说可以', '为什么要我点允许？', '可以吗?', '是不是都要读', '先别放行', '等等，我看一下'])
       expect(notAConsent(t), t).toBeDefined();
     for (const t of ['可以', '第一张可以', '第一张可以，第二张不用', '好，推吧', '都不要']) expect(notAConsent(t), t).toBeUndefined();
+  });
+
+  it('明确、无条件的确认（选择性提交只认这种）：整条回复去掉标点空白后完全匹配', () => {
+    for (const t of ['可以', '可以。', ' 确认提交！', '好的', 'OK', 'yes', '按刚才的选择提交']) expect(isPlainConfirmation(t), t).toBe(true);
+    for (const t of ['可以，提交第二块', '可以吧但先别推', '提交第一块', '确认，不过只要 a.txt', '好像可以']) expect(isPlainConfirmation(t), t).toBe(false);
   });
 });

@@ -87,6 +87,14 @@ export class QuestionRepository implements QuestionStorePort {
     });
   }
 
+  claimDecision(questionId: string, messageId: number): boolean {
+    return this.db.run(`INSERT INTO question_decisions (question_id, message_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, questionId, messageId, this.clock.iso()) > 0;
+  }
+
+  setDecisionOutcome(questionId: string, messageId: number, outcome: string): void {
+    this.db.run(`UPDATE question_decisions SET outcome = ? WHERE question_id = ? AND message_id = ?`, outcome.slice(0, 500), questionId, messageId);
+  }
+
   setDelivery(id: string, delivery: QuestionDelivery): void {
     this.db.run(`UPDATE approval_questions SET delivery = ? WHERE id = ?`, delivery, id);
   }

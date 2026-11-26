@@ -85,6 +85,14 @@ export function routeRead(input: {
  * 提问（问号结尾，或以为什么 / 怎么 / 是不是 / 能不能 / 要不要 开头）或带否定、拖延（还没 / 没说 / 不是说 / 先别 / 先不 / 等等 / 等一下 / 再说）的，
  * 不算同意。返回不算的原因；算同意时返回 undefined。只用来挡「允许」，拒绝不经这里。
  */
+/** 明确、无条件的确认（去掉标点和空白、转小写后整条完全匹配）；带具体选择的回复不算（0.3.10）。 */
+const PLAIN_CONFIRMATIONS = new Set(['可以', '确认', '确认提交', '提交', '好', '好的', '行', '按刚才的选择提交', 'ok', 'yes']);
+
+/** 整条回复是不是明确的无条件确认：选择性提交只在这种回复下执行冻结的选择；「可以，提交第二块」这类只能用来改问题。 */
+export function isPlainConfirmation(text: string): boolean {
+  return PLAIN_CONFIRMATIONS.has(text.toLowerCase().replace(/[\s\p{P}\p{S}]/gu, ''));
+}
+
 export function notAConsent(text: string): string | undefined {
   const t = text.trim();
   if (/[?？]\s*$/.test(t) || /^(为什么|为啥|怎么|是不是|能不能|要不要|可不可以|会不会)/.test(t)) return '这句话是在提问';
