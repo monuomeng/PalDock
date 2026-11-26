@@ -79,3 +79,15 @@ export function routeRead(input: {
   if (outside.every(input.createdThisRun)) return 'own_output';
   return input.coordinatorAvailable ? 'coordinator' : 'user';
 }
+
+/**
+ * 你在对话里的一句话是不是明确的决定（0.3.8 宿主兜底；判断主要靠协调助手读懂整句）：
+ * 提问（问号结尾，或以为什么 / 怎么 / 是不是 / 能不能 / 要不要 开头）或带否定、拖延（还没 / 没说 / 不是说 / 先别 / 先不 / 等等 / 等一下 / 再说）的，
+ * 不算同意。返回不算的原因；算同意时返回 undefined。只用来挡「允许」，拒绝不经这里。
+ */
+export function notAConsent(text: string): string | undefined {
+  const t = text.trim();
+  if (/[?？]\s*$/.test(t) || /^(为什么|为啥|怎么|是不是|能不能|要不要|可不可以|会不会)/.test(t)) return '这句话是在提问';
+  if (/还没|没说|没有说|不是说|先别|先不|等等|等一下|再说吧|别急/.test(t)) return '这句话带着否定或还没决定';
+  return undefined;
+}

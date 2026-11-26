@@ -50,6 +50,14 @@ export class Outbox implements OutboxPort {
     });
   }
 
+  subjectStatus(conversationId: string, subject: string): 'pending' | 'sending' | 'sent' | 'failed' | 'unknown' | undefined {
+    return this.db.get<{ status: 'pending' | 'sending' | 'sent' | 'failed' | 'unknown' }>(
+      `SELECT status FROM outbox WHERE target = ? AND subject = ? ORDER BY id DESC LIMIT 1`,
+      conversationId,
+      subject,
+    )?.status;
+  }
+
   hasSubject(conversationId: string, subject: string): boolean {
     return this.db.get(SQL.hasSubject, conversationId, subject, conversationId, subject) !== undefined;
   }

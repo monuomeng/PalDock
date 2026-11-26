@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { MessageRecord } from './records.js';
 import type { PlanDetail } from './plans.js';
 import type { GitOpRecord } from './git-ops.js';
+import type { QuestionRecord } from './questions.js';
 
 /**
  * 协调助手主会话（P3-07）：每个项目一个或多个，消息持久化；唤醒循环把你的消息和任务事件变成一次次 Run。
@@ -87,4 +88,6 @@ export interface ConversationDetail {
   plans: PlanDetail[];
   /** 这个会话里提出的提交 / 推送 / 合并卡片（按时间升序）。 */
   gitOps: GitOpRecord[];
+  /** 协调助手在这个对话里问你的问题（0.3.8，按时间升序），按钮挂在问题那条消息下面。 */
+  questions: QuestionRecord[];
 }

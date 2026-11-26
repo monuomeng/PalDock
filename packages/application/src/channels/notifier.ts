@@ -14,6 +14,8 @@ import type {
 import { canApproveRemotely, canConfirmPlanRemotely, shouldEscalateApproval, subtaskMachine, type DesktopPresence, type P2Limits } from '@paldock/domain';
 import { approvalCard, approvalDecidedCard, approvalGroupCard, approvalGroupDecidedCard, coordinatorReplyCard, noticeCard, planCard, planDecidedCard, taskProgressCard } from './cards.js';
 import { P1_DEFAULTS } from '@paldock/domain';
+import type { ApprovalConversation } from '../approval-conversation.js';
+import { questionCard, questionClosedCard } from './cards.js';
 
 export interface NotifierDeps {
   store: StorePort;
@@ -27,6 +29,8 @@ export interface NotifierDeps {
   limits: P2Limits;
   /** 同一次 Run 多久之内的审批合并成一条消息（缺省 P1_DEFAULTS.approvalGroupMs）。 */
   approvalGroupMs?: number;
+  /** 协调助手在对话里问你的问题（0.3.8）：外部会话里的按钮按远程审批等级。 */
+  approvals?: () => ApprovalConversation | undefined;
 }
 
 /** 从外部建的任务在这些节点通知来源会话。 */
@@ -36,6 +40,8 @@ const NOTIFY_STATUSES = new Set<SubtaskStatus>(['running', 'review', 'blocked', 
 const approvalSubject = (approvalId: string) => `approval:${approvalId}`;
 /** 合并成一组的审批：一条消息，处理完后更新它。 */
 const groupSubject = (groupId: string) => `approval-group:${groupId}`;
+/** 协调助手的问题：一条消息，处理后更新它。 */
+const questionSubject = (questionId: string) => `question:${questionId}`;
 
 /**
  * 业务事件 → 外部渠道：
@@ -60,6 +66,8 @@ export class ChannelNotifier {
       else if (event.type === 'approval.decided') this.onApprovalDecided(event.aggregateId);
       else if (event.type === 'message.created' && event.payload.role === 'assistant') this.onAssistantMessage(event.payload.sessionId, Number(event.aggregateId));
       else if (event.type === 'plan.status_changed') this.onPlanDecided(event.aggregateId);
+      else if (event.type === 'question.created') this.onQuestionCreated(event.aggregateId);
+      else if (event.type === 'question.closed') this.onQuestionClosed(event.aggregateId);
     }
   }
 
@@ -110,12 +118,20 @@ export class ChannelNotifier {
     return this.channels.activeDirectConversations().filter((c) => this.deps.attached(c.provider));
   }
 
-  private action(conversation: ConversationRecord, kind: 'accept_review' | 'continue_task' | 'approve' | 'deny', targetId: string, version: number | null, ttlMs: number) {
+  private action(
+    conversation: ConversationRecord,
+    kind: 'accept_review' | 'continue_task' | 'approve' | 'deny' | 'question_accept' | 'question_reject' | 'question_item',
+    targetId: string,
+    version: number | null,
+    ttlMs: number,
+  ) {
     return this.channels.createAction({ conversationId: conversation.id, kind, targetId, targetVersion: version, ttlMs }).token;
   }
 
   /** 外部会话对应的主会话里，协调助手的回复发回那个会话（外部发起的任务做完后的汇总也走这里）。 */
   private onAssistantMessage(sessionId: string, messageId: number): void {
+    // 问题那条消息由问题卡片发（带按钮），不再另发一条一样的
+    if (this.deps.store.questions.byMessage(messageId)) return;
     const conversation = this.channels.conversationOfMainSession(sessionId);
     const message = conversation && this.deps.store.messages.get(messageId);
     if (!conversation || !message || !this.reachable(conversation)) return;
@@ -201,12 +217,16 @@ export class ChannelNotifier {
     if (targets.length === 0) return;
     const presence = this.deps.presence();
     const nowMs = this.deps.now().getTime();
+    this.trackQuestionDelivery();
+    // 已经在对话里问过（问题还开着、没有投递失败）的审批只通知那一次，不再另外外发
     const candidates = this.channels
       .escalationCandidates()
+      .filter((c) => !this.askedInConversation(c.approval.questionId))
       .filter((c) => shouldEscalateApproval(Date.parse(c.approval.requestedAt), nowMs, presence, this.limits.escalationWaitMs));
     const providers = [...new Set(targets.map((t) => t.provider))] as ChannelProvider[];
     this.escalateNotices(targets, providers, presence, nowMs);
     this.escalatePlans(targets, providers, presence, nowMs);
+    this.escalateQuestions(targets, presence, nowMs);
     // 同一组的审批合在一起发一条；组还在收（第一条到达后不到 approvalGroupMs）时先不发，免得拆成几条
     const groupMs = this.deps.approvalGroupMs ?? P1_DEFAULTS.approvalGroupMs;
     const groups = new Map<string, EscalationCandidate[]>();
@@ -259,5 +279,76 @@ export class ChannelNotifier {
       ? null
       : `这个项目的远程审批等级是 ${c.remoteApprovalLevel}，${approval.riskLevel === 'high' ? '高风险（含权限扩展、敏感路径的读取）' : '这类'}审批在这里只能拒绝；请到电脑上批，或把项目的远程审批等级调到 ${approval.riskLevel === 'high' ? 'L2' : 'L1 或 L2'}。`;
     this.deps.send(conversation, approvalCard(c, buttons, why), approvalSubject(approval.id));
+  }
+
+  // ---- 协调助手在对话里问你的问题（0.3.8） ----
+
+  private askedInConversation(questionId: string | null): boolean {
+    if (!questionId) return false;
+    const q = this.deps.store.questions.get(questionId);
+    return !!q && q.status === 'open' && q.delivery !== 'failed';
+  }
+
+  /** 外部会话里的问题：发一张问题卡片（敏感路径只说要到电脑上确认）；按钮按远程审批等级。 */
+  private onQuestionCreated(questionId: string): void {
+    const q = this.deps.store.questions.get(questionId);
+    if (!q) return;
+    const conversation = this.channels.conversationOfMainSession(q.sessionId);
+    if (!conversation || !this.reachable(conversation)) {
+      if (q.delivery === 'pending') this.deps.store.questions.setDelivery(q.id, 'failed');
+      return;
+    }
+    this.sendQuestion(conversation, q.id);
+  }
+
+  private sendQuestion(conversation: ConversationRecord, questionId: string): void {
+    const q = this.deps.store.questions.get(questionId)!;
+    const approvals = this.deps.approvals?.();
+    const session = this.deps.store.coordinator.getMainSession(q.sessionId);
+    const refusal = (item: (typeof q.items)[number]) => (approvals && session ? approvals.remoteRefusal(item, conversation.provider, session.workspaceId) : '请到电脑上处理');
+    const ttlMs = 30 * 60 * 1000;
+    const allowed = q.items.filter((i) => !refusal(i));
+    const buttons = {
+      accept: allowed.length === q.items.length ? this.action(conversation, 'question_accept', q.id, q.version, ttlMs) : null,
+      reject: this.action(conversation, 'question_reject', q.id, q.version, ttlMs),
+      items: q.items.length > 1 ? allowed.filter((i) => i.highImpact).map((i) => ({ label: i.target ?? i.label, token: this.action(conversation, 'question_item', `${q.id}|${i.ref}`, q.version, ttlMs) })) : [],
+    };
+    const blocked = q.items.filter((i) => refusal(i)).map((i) => (i.sensitive ? '有一项需要到电脑上确认' : `${i.label}：${refusal(i)}`));
+    this.deps.send(conversation, questionCard(q, buttons, blocked), questionSubject(q.id));
+  }
+
+  /** 问题结束（文字回复、按钮、别处处理、被改写）：作废按钮，更新那张卡片。 */
+  private onQuestionClosed(questionId: string): void {
+    const q = this.deps.store.questions.get(questionId);
+    if (!q) return;
+    this.channels.voidActions(q.id);
+    for (const item of q.items) this.channels.voidActions(`${q.id}|${item.ref}`);
+    const subject = questionSubject(q.id);
+    for (const conversation of this.channels.activeDirectConversations()) {
+      if (this.deps.store.outbox.hasSubject(conversation.id, subject)) this.deps.send(conversation, questionClosedCard(q), subject);
+    }
+    const bound = this.channels.conversationOfMainSession(q.sessionId);
+    if (bound && bound.kind !== 'dm' && this.deps.store.outbox.hasSubject(bound.id, subject)) this.deps.send(bound, questionClosedCard(q), subject);
+  }
+
+  /** 外部会话里问题的投递结果：送达记 sent；失败记 failed（之后这些审批照常按规则提醒，桌面一直可以处理）。 */
+  private trackQuestionDelivery(): void {
+    for (const q of this.deps.store.questions.allOpen()) {
+      if (q.delivery !== 'pending') continue;
+      const conversation = this.channels.conversationOfMainSession(q.sessionId);
+      const status = conversation ? this.deps.store.outbox.subjectStatus(conversation.id, questionSubject(q.id)) : 'failed';
+      if (status === 'sent') this.deps.store.questions.setDelivery(q.id, 'sent');
+      else if (status === 'failed' || status === 'unknown') this.deps.store.questions.setDelivery(q.id, 'failed');
+    }
+  }
+
+  /** 桌面对话里的问题：你不在电脑前（锁屏、空闲、或几分钟没处理）时，发一条问题卡片到已绑定的单聊，只发一次。 */
+  private escalateQuestions(targets: ConversationRecord[], presence: DesktopPresence, nowMs: number): void {
+    for (const q of this.deps.store.questions.allOpen()) {
+      if (q.delivery !== 'desktop' || q.escalatedAt) continue;
+      if (!shouldEscalateApproval(Date.parse(q.createdAt), nowMs, presence, this.limits.escalationWaitMs)) continue;
+      if (!this.deps.store.questions.markEscalated(q.id)) continue;
+      for (const conversation of targets) this.sendQuestion(conversation, q.id);
+    }
   }
 }

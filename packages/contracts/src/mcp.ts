@@ -63,6 +63,54 @@ export const MCP_TOOLS = {
       })
       .strict(),
   },
+  suggest_decision: {
+    roles: COORDINATOR,
+    description:
+      '在这个对话里问用户一个需要他决定的问题（审批或 Git 卡片），登记你的明确建议；问题下面会出现按钮。一次只问一件事；' +
+      '推送、合并、敏感路径、项目外写入要在 text 里写明目标。对话里已经有问题在等回答时，只能在回应用户的这一轮里把它改成范围更小的版本。',
+    args: z
+      .object({
+        text: z.string().trim().min(1).max(1000).describe('给用户的一两句话：哪个助手在做什么、为什么需要他决定、你建议怎么处理'),
+        items: z
+          .array(
+            z
+              .object({
+                ref: z.string().min(1).max(100).describe('审批编号或 Git 卡片编号'),
+                decision: z.enum(['allow', 'deny', 'confirm', 'cancel']).describe('你的建议：审批 allow / deny，Git 卡片 confirm / cancel'),
+                hunkIds: z.array(z.string().min(1).max(40)).max(200).optional().describe('提交卡片：要提交的改动块'),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(20),
+      })
+      .strict(),
+  },
+  resolve_approvals: {
+    roles: COORDINATOR,
+    description:
+      '用户在这个对话里回答了你的问题时，把他的决定交给 PalDock 执行。读懂整句再交：提问、带否定或还没决定的话不算同意，先追问。' +
+      '可以只处理问题里的一部分（例如「第一张可以」只放行第一张）；问题之外的事项不能顺带处理。',
+    args: z
+      .object({
+        questionId: z.string().min(1).max(100),
+        items: z
+          .array(
+            z
+              .object({
+                ref: z.string().min(1).max(100),
+                decision: z.enum(['allow', 'deny', 'confirm', 'cancel']),
+                hunkIds: z.array(z.string().min(1).max(40)).max(200).optional().describe('提交卡片：用户说要提交的块'),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(20),
+        userMessageId: z.number().int().positive().describe('用户这条回复的消息编号（唤醒里给出）'),
+        decisionQuote: z.string().trim().min(1).max(500).describe('用户那条消息里表示决定的原话（原样引用）'),
+      })
+      .strict(),
+  },
   write_summary: {
     roles: [...COORDINATOR, ...SPECIALISTS],
     description:

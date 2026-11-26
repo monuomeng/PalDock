@@ -58,6 +58,9 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
   }),
   /** 提交 / 推送 / 合并卡片提出、结束；聚合 ID 为卡片 ID。 */
   z.object({ type: z.literal('git.proposed'), payload: z.object({ kind: z.enum(['commit', 'push', 'merge', 'index']), workspaceId: Id, sessionId: Id.nullable() }) }),
+  // 协调助手在对话里问你的问题（0.3.8）
+  z.object({ type: z.literal('question.created'), payload: z.object({ sessionId: Id, author: z.enum(['coordinator', 'host']) }) }),
+  z.object({ type: z.literal('question.closed'), payload: z.object({ sessionId: Id, status: z.enum(['replaced', 'done', 'void']) }) }),
   z.object({ type: z.literal('git.finished'), payload: z.object({ status: z.enum(['done', 'failed', 'cancelled', 'stale']) }) }),
   /** 项目的工作区方式改了，或因为切了分支暂停 / 恢复了写入；聚合 ID 为 workspaceId。 */
   z.object({ type: z.literal('workspace.mode_changed'), payload: z.object({ mode: z.enum(['current', 'worktree']), pausedReason: z.string().nullable() }) }),

@@ -16,6 +16,7 @@ import type { MainSessionRecord, NoticeKind, NoticeRecord, SummaryRecord, WakeRe
 import type { AutoDecisionRecord, AutoPolicy, PlanNodeEdit, RecoveryItem } from './plans.js';
 import type { RoleSessionStorePort } from './role-sessions.js';
 import type { ProjectSettingsStorePort } from './project-settings.js';
+import type { QuestionStorePort } from './questions.js';
 import type { GitStorePort } from './git-ops.js';
 import type { GateStage, GraphNode, MergeOpRecord, MergePhase, PlanNodeInput, PlanNodeRecord, PlanRecord } from './plans.js';
 import type {
@@ -307,6 +308,7 @@ export interface RunStorePort {
   /** 交给协调助手判断，或回到你这里（to 为 null）；只改还在等待的，已处理的返回 undefined。 */
   routeApproval(id: string, to: 'coordinator' | null, reason?: string): Change<ApprovalRecord> | undefined;
   approvalsOfGroup(groupId: string): ApprovalRecord[];
+  pendingApprovalsOfWorkspace(workspaceId: string): ApprovalRecord[];
   getApproval(id: string): ApprovalRecord | undefined;
   cancelPendingApprovals(runId: string): Change<ApprovalRecord[]>;
   expiredApprovals(): ApprovalRecord[];
@@ -435,6 +437,8 @@ export interface OutboxPort {
   markFinal(id: number, status: 'unknown' | 'failed', error: string): void;
   /** 渠道停用：待发送的一律失败，不在重新启用时补发。 */
   failPending(provider: ChannelProvider, error: string): number;
+  /** 这个会话里该主题最近一张卡片的投递状态（没有时 undefined）。 */
+  subjectStatus(conversationId: string, subject: string): 'pending' | 'sending' | 'sent' | 'failed' | 'unknown' | undefined;
 }
 
 export interface InboxPort {
@@ -465,6 +469,7 @@ export interface StorePort {
   roleSessions: RoleSessionStorePort;
   projectSettings: ProjectSettingsStorePort;
   git: GitStorePort;
+  questions: QuestionStorePort;
   /** 多个写入合成一个事务（内层用 SAVEPOINT）。 */
   transaction<T>(fn: () => T): T;
   interruptActiveWork(reason: string): RecoveryReport;

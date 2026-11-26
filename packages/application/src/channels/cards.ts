@@ -1,4 +1,5 @@
 import type {
+  QuestionRecord,
   Card,
   CardButton,
   CardTone,
@@ -313,4 +314,31 @@ export function approvalDecidedCard(c: EscalationCandidate, status: keyof typeof
     clip(c.approval.summary, 200),
     `${VIA_TEXT[via ?? ''] ?? ''}${DECIDED_TEXT[status]}`,
   ]);
+}
+
+/**
+ * 协调助手在对话里问你的问题（0.3.8）：问题原文、各项；有敏感路径时不写原文和路径，只说要到电脑上确认。
+ * 按钮：按建议处理、都不要、带目标的单项；渠道权限不够的项写明原因。
+ */
+export function questionCard(
+  q: QuestionRecord,
+  buttons: { accept: string | null; reject: string; items: { label: string; token: string }[] },
+  blocked: readonly string[],
+): Card {
+  const sensitive = q.items.some((i) => i.sensitive);
+  const lines = sensitive ? [`协调助手在等你决定 ${q.items.length} 项，其中有敏感路径。`] : [clip(q.text, 800)];
+  if (!sensitive && q.items.length > 1) lines.push(...q.items.map((i, n) => `${n + 1}. ${clip(i.label, 160)}`));
+  lines.push(...blocked);
+  const actions = [
+    ...(buttons.accept ? [button(q.author === 'host' ? '允许' : '按建议处理', buttons.accept, 'primary')] : []),
+    ...buttons.items.map((b) => button(clip(b.label, 30), b.token, 'default')),
+    button(q.author === 'host' ? '拒绝' : '都不要', buttons.reject, 'danger'),
+  ];
+  return card('协调助手在等你决定', q.items.some((i) => i.highImpact) ? 'danger' : 'warning', lines, actions);
+}
+
+export function questionClosedCard(q: QuestionRecord): Card {
+  const text = q.items.some((i) => i.sensitive) ? `${q.items.length} 项（含敏感路径）` : clip(q.text, 300);
+  const how = q.status === 'replaced' ? '已被新的问题取代' : q.status === 'void' ? '已在别处处理' : '已处理';
+  return card(`问题${how}`, 'info', [text, ...(q.result ? [clip(q.result, 300)] : [])]);
 }

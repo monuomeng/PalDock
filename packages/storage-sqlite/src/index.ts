@@ -6,6 +6,7 @@ import { AuditLog } from './audit-log.js';
 import { RoleSessionRepository } from './role-session-repository.js';
 import { ProjectSettingsRepository } from './project-settings-repository.js';
 import { GitRepository } from './git-repository.js';
+import { QuestionRepository } from './question-repository.js';
 import { backupDataRoot, type BackupResult } from './backup.js';
 import { ChannelRepository } from './channel-repository.js';
 import { Clock } from './clock.js';
@@ -61,6 +62,7 @@ export interface Store extends StorePort {
   roleSessions: RoleSessionRepository;
   projectSettings: ProjectSettingsRepository;
   git: GitRepository;
+  questions: QuestionRepository;
   migration: MigrateResult;
   /** 中断所有未结束的工作（启动恢复、正常退出前）。 */
   interruptActiveWork(reason: string): RecoveryReport;
@@ -99,6 +101,7 @@ export async function openStore(dataRoot: string | ':memory:', now: () => Date =
     roleSessions: new RoleSessionRepository(db, clock),
     projectSettings: new ProjectSettingsRepository(db, events, clock),
     git: new GitRepository(db, events, clock),
+    questions: new QuestionRepository(db, events, clock),
     migration,
     interruptActiveWork: (reason) => interruptActiveWork(db, events, clock, reason),
     recordRecovery: ({ kind, targetId, outcome, detail }) =>

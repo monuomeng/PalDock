@@ -1,4 +1,4 @@
-import type { AgentService, ChannelService, CoordinatorService, GitOpsService, IntegrationService, PlanService, RecoveryService, TaskService } from '@paldock/application';
+import type { AgentService, ApprovalConversation, ChannelService, CoordinatorService, GitOpsService, IntegrationService, PlanService, RecoveryService, TaskService } from '@paldock/application';
 import type { CommandArgs, CommandName, CommandResultOf } from '@paldock/contracts';
 import type { Store } from '@paldock/storage-sqlite';
 import type { z } from 'zod';
@@ -18,7 +18,7 @@ export function createHandlers(
   integration: IntegrationService,
   coordinator: CoordinatorService,
   recovery: RecoveryService,
-  channels: ChannelService, agents: AgentService, gitOps: GitOpsService, info: ServiceInfo): Handlers {
+  channels: ChannelService, agents: AgentService, gitOps: GitOpsService, approvals: ApprovalConversation, info: ServiceInfo): Handlers {
   return {
     'service.status': () => info,
     'recovery.report': () => recovery.report(),
@@ -61,6 +61,9 @@ export function createHandlers(
     'workspace.resume': ({ workspaceId, action }) => tasks.resumeWorkspace(workspaceId, action),
     'gitop.decide': async ({ opId, expectedVersion, decision, hunkIds }) => {
       await gitOps.decide(opId, expectedVersion, decision, hunkIds ?? []);
+    },
+    'question.decide': async ({ questionId, expectedVersion, action, ref }) => {
+      await approvals.decideByButton(questionId, expectedVersion, action, ref, 'desktop');
     },
     'workspace.setRemoteApprovalLevel': ({ workspaceId, expectedVersion, level }) => tasks.setRemoteApprovalLevel(workspaceId, expectedVersion, level),
     'workspace.setPrepareCommand': ({ workspaceId, expectedVersion, command }) => tasks.setPrepareCommand(workspaceId, expectedVersion, command),

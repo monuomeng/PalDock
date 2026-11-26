@@ -233,6 +233,15 @@ export class RunRepository implements RunStorePort {
     });
   }
 
+  /** 项目里还在等待的审批（按请求时间）。 */
+  pendingApprovalsOfWorkspace(workspaceId: string): ApprovalRecord[] {
+    return this.db.all<ApprovalRecord>(
+      `SELECT ${COLUMNS.approval('a.')} FROM approvals a JOIN runs r ON r.id = a.run_id JOIN subtasks s ON s.id = r.subtask_id JOIN tasks t ON t.id = s.task_id
+        WHERE a.status = 'pending' AND t.workspace_id = ? ORDER BY a.requested_at, a.rowid`,
+      workspaceId,
+    );
+  }
+
   /** 同一组的审批（按请求时间）。 */
   approvalsOfGroup(groupId: string): ApprovalRecord[] {
     return this.db.all<ApprovalRecord>(`SELECT ${COLUMNS.approval()} FROM approvals WHERE group_id = ? ORDER BY requested_at, rowid`, groupId);

@@ -6,6 +6,7 @@ export * from './mcp.js';
 export * from './role-sessions.js';
 export * from './project-settings.js';
 export * from './git-ops.js';
+export * from './questions.js';
 export * from './records.js';
 export * from './plans.js';
 export * from './conversations.js';

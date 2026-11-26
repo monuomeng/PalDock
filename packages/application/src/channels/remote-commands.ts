@@ -1,3 +1,4 @@
+import type { ApprovalConversation } from '../approval-conversation.js';
 import { randomBytes } from 'node:crypto';
 import {
   CodedError,
@@ -46,6 +47,8 @@ export interface RemoteCommandsDeps {
   coordinator?: CoordinatorService;
   /** 计划确认卡片上的确认 / 退回。 */
   plans?: PlanService;
+  /** 协调助手在对话里问你的问题（0.3.8）。 */
+  approvals?: () => ApprovalConversation | undefined;
   publish(events: PersistentEvent[]): void;
   /** 回复卡片；subject 非空时更新本会话里同主题的那张卡片。 */
   reply(conversation: ConversationRecord, card: Card, subject?: string): void;
@@ -377,6 +380,17 @@ export class RemoteCommands implements InboundHandler {
       case 'confirm_plan':
       case 'reject_plan':
         return this.decidePlan(ctx, action);
+      case 'question_accept':
+      case 'question_reject':
+      case 'question_item': {
+        // 问题卡片上的按钮：和桌面、文字回复共用同一次决定（问题带版本）；渠道权限由审批对话按远程审批等级核对
+        const approvals = this.deps.approvals?.();
+        if (!approvals) throw new CodedError('unavailable', '审批对话功能未启用');
+        const [questionId, ref] = action.targetId.split('|');
+        const kind = action.kind === 'question_accept' ? 'accept' : action.kind === 'question_reject' ? 'reject' : 'item';
+        await approvals.decideByButton(questionId!, action.targetVersion!, kind, ref, ctx.conversation.provider);
+        return;
+      }
     }
   }
 

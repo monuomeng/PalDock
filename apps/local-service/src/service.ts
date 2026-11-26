@@ -1,6 +1,6 @@
 import type { Server, Socket } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { AgentService, ChannelService, CoordinatorService, IntegrationService, RecoveryService, GitOpsService, McpGateway, PlanService, ReviewGate, RunSupervisor, TaskGraphScheduler, TaskService, type McpCaller, type AdapterFactory, type CredentialPort } from '@paldock/application';
+import { AgentService, ApprovalConversation, ChannelService, CoordinatorService, IntegrationService, RecoveryService, GitOpsService, McpGateway, PlanService, ReviewGate, RunSupervisor, TaskGraphScheduler, TaskService, type McpCaller, type AdapterFactory, type CredentialPort } from '@paldock/application';
 import {
   ClientFrame,
   CodedError,
@@ -47,6 +47,8 @@ export interface ServiceOptions {
   limits?: ConstructorParameters<typeof RunSupervisor>[0]['limits'];
   /** 协调助手唤醒循环的限额（测试用）。 */
   coordinatorLimits?: ConstructorParameters<typeof CoordinatorService>[0]['limits'];
+  /** 审批对话的聚合窗口和宿主兜底时间（测试用）。 */
+  approvalLimits?: ConstructorParameters<typeof ApprovalConversation>[0]['limits'];
   /** 外部渠道的适配器工厂、凭据库与默认值；缺省为飞书/Telegram 适配器与系统凭据库（测试注入假的）。 */
   channels?: { createAdapter?: AdapterFactory; credentials?: CredentialPort; limits?: Partial<P2Limits> };
 }
@@ -76,6 +78,7 @@ export class LocalService {
   private integration!: IntegrationService;
   private coordinator!: CoordinatorService;
   private plans!: PlanService;
+  private approvals!: ApprovalConversation;
 
   private constructor(
     private readonly store: Store,
@@ -113,6 +116,7 @@ export class LocalService {
         service.scheduler.onEvents(events);
         service.gate.onEvents(events);
         service.coordinator.onEvents(events);
+        service.approvals.onEvents(events);
       };
       // 计划用例依赖调度器，调度器依赖带这个网关的监管器：propose_plan 的后端延后取
       let plans: PlanService | undefined;
@@ -124,7 +128,7 @@ export class LocalService {
         indexChanged: (workspaceId) => void service.supervisor?.rebaseIndex(workspaceId).catch(() => {}),
         kick: () => service.supervisor?.kick(),
       });
-      service.mcp = new McpGateway({ store, publish, plans: () => plans, coordinator: () => service.coordinator, gitOps: () => gitOps });
+      service.mcp = new McpGateway({ store, publish, plans: () => plans, coordinator: () => service.coordinator, gitOps: () => gitOps, approvals: () => service.approvals });
       service.supervisor = new RunSupervisor({
         store,
         runtimes,
@@ -150,7 +154,24 @@ export class LocalService {
       const limits = options.limits ? { limits: options.limits } : {};
       const integration = new IntegrationService({ store, supervisor: service.supervisor, dataRoot, publish, log, ...limits });
       service.integration = integration;
-      service.coordinator = new CoordinatorService({ store, supervisor: service.supervisor, publish, log, ...(options.coordinatorLimits ? { limits: options.coordinatorLimits } : {}) });
+      service.coordinator = new CoordinatorService({
+        store,
+        supervisor: service.supervisor,
+        publish,
+        log,
+        questionContext: (sessionId) => service.approvals.openQuestionContext(sessionId),
+        ...(options.coordinatorLimits ? { limits: options.coordinatorLimits } : {}),
+      });
+      // 协调助手在发起的对话里找你批（0.3.8）
+      service.approvals = new ApprovalConversation({
+        store,
+        publish,
+        log,
+        supervisor: service.supervisor,
+        gitOps: () => gitOps,
+        poke: (sessionId) => service.coordinator.poke(sessionId),
+        ...(options.approvalLimits ? { limits: options.approvalLimits } : {}),
+      });
       service.gate = new ReviewGate({ store, supervisor: service.supervisor, publish, log, integration, ...limits });
       plans = new PlanService({ store, scheduler: service.scheduler, integration, supervisor: service.supervisor, publish, log });
       service.plans = plans;
@@ -160,6 +181,7 @@ export class LocalService {
         tasks,
         coordinator: service.coordinator,
         plans,
+        approvals: () => service.approvals,
         credentials: options.channels?.credentials ?? systemCredentials,
         createAdapter: options.channels?.createAdapter ?? createAdapter,
         publish,
@@ -179,7 +201,7 @@ export class LocalService {
         publish,
         log,
       });
-      service.handlers = createHandlers(store, tasks, plans, integration, service.coordinator, recovery, service.channels, agents, gitOps, {
+      service.handlers = createHandlers(store, tasks, plans, integration, service.coordinator, recovery, service.channels, agents, gitOps, service.approvals, {
         version: SERVICE_VERSION,
         startedAt: new Date().toISOString(),
         interruptedRuns,
@@ -316,6 +338,7 @@ export class LocalService {
   async stop(): Promise<void> {
     await this.channels.stop();
     this.coordinator.stop();
+    this.approvals.stop();
     this.plans.stop();
     await this.supervisor.stop();
     await this.integration.idle();

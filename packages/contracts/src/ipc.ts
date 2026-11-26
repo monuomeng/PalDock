@@ -105,6 +105,8 @@ export const CommandArgs = {
   'workspace.resume': z.object({ workspaceId: Id, action: z.enum(['continue', 'cancel']) }),
   /** 提交 / 推送 / 合并卡片：确认（提交卡片带勾选的改动块）或取消；只在桌面有入口。 */
   'gitop.decide': z.object({ opId: Id, expectedVersion: Version, decision: z.enum(['confirm', 'cancel']), hunkIds: z.array(z.string().max(50)).max(2000).optional() }),
+  /** 对话里问题下面的按钮（0.3.8）：按建议处理、都不要、只处理带目标的这一项（ref）。带版本，先到者为准。 */
+  'question.decide': z.object({ questionId: Id, expectedVersion: Version, action: z.enum(['accept', 'reject', 'item']), ref: Id.optional() }),
   /** 远程审批等级只能在桌面修改：这条命令只在管理窗口里有入口，外部渠道没有对应命令。 */
   'workspace.setRemoteApprovalLevel': z.object({ workspaceId: Id, expectedVersion: Version, level: RemoteApprovalLevel }),
   /** worktree 准备命令（例如安装依赖），null 为取消；和远程审批等级一样只在桌面有入口。 */
@@ -205,6 +207,7 @@ export interface CommandResults {
   'workspace.setMode': void;
   'workspace.resume': void;
   'gitop.decide': void;
+  'question.decide': void;
   'workspace.setRemoteApprovalLevel': void;
   'workspace.setPrepareCommand': void;
   'channel.overview': ChannelOverview[];

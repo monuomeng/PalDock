@@ -18,6 +18,7 @@ import { executorOfRole } from './agent-service.js';
 import { dirtyFiles } from './git.js';
 import { nodeTitle } from './task-graph-scheduler.js';
 import { errorText, MicroBatch } from './util.js';
+import { ASK_WAKE_MARK } from './approval-conversation.js';
 import type { RunPlan } from './run-supervisor.js';
 
 export interface CoordinatorDeps {
@@ -27,6 +28,8 @@ export interface CoordinatorDeps {
   log(message: string): void;
   now?: () => number;
   limits?: Partial<P3Limits>;
+  /** 对话里正在问用户的问题（0.3.8）：唤醒时附上，用户的话可能是在回答它。 */
+  questionContext?: (sessionId: string) => string | undefined;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -117,6 +120,7 @@ export class CoordinatorService {
       notices: coordinator.notices(sessionId, 20),
       wakes: coordinator.listWakes(sessionId, 10),
       summary: coordinator.latestSummary(sessionId) ?? null,
+      questions: this.store.questions.ofSession(sessionId, 20),
     };
   }
 
@@ -284,6 +288,8 @@ export class CoordinatorService {
       case 'approval.decided': {
         if (event.payload.status !== 'denied' && event.payload.status !== 'expired') return undefined;
         const approval = store.runs.getApproval(event.aggregateId);
+        // 在对话里问过的：结果已经在对话里了，不再另外唤醒
+        if (approval?.questionId) return undefined;
         const run = approval && store.runs.getRun(approval.runId);
         const node = run && this.nodeTitle(run.subtaskId);
         return node && at(node.taskId, `节点「${node.title}」的审批${event.payload.status === 'denied' ? '被拒绝' : '过期（自动拒绝）'}：${approval!.summary}`);
@@ -300,13 +306,19 @@ export class CoordinatorService {
     this.batch.add(sessionId);
   }
 
+  /** 别处给这个会话排了唤醒（审批对话）：尽快处理。 */
+  poke(sessionId: string): void {
+    this.schedule(sessionId);
+  }
+
   /** 会话空闲时取下一条唤醒；任务事件唤醒先过频率限制。 */
   private pump(sessionId: string): void {
     const { coordinator } = this.store;
     const session = coordinator.getMainSession(sessionId);
     if (!session || coordinator.runningWake(sessionId) || this.deps.supervisor.isActive(session.subtaskId)) return;
     for (let wake = coordinator.nextPendingWake(sessionId); wake; wake = coordinator.nextPendingWake(sessionId)) {
-      if (wake.trigger === 'task_event') {
+      // 等用户决定的事不能拖：审批唤醒不受任务事件唤醒的频率限制
+      if (wake.trigger === 'task_event' && !wake.summary.startsWith(ASK_WAKE_MARK)) {
         const gate = this.eventGate(session);
         if (gate === 'drop') {
           const note = `今天的自动唤醒已达 ${this.limits.eventWakesPerDay} 次`;
@@ -374,9 +386,10 @@ export class CoordinatorService {
     const boardText = board.join('\n');
     const boardChanged = !threadId || this.lastBoard.get(session.sessionId) !== boardText;
     this.lastBoard.set(session.sessionId, boardText);
+    const question = this.deps.questionContext?.(session.sessionId);
     const prompt = wakePrompt({
       project,
-      wake: { trigger: wake.trigger, summary: wake.summary },
+      wake: { trigger: wake.trigger, summary: question ? `${wake.summary}\n\n${question}` : wake.summary },
       board: boardChanged ? board : null,
       ...(threadId ? {} : { fresh: this.freshContext(session.sessionId, wake) }),
       askSummary,

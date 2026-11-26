@@ -147,6 +147,10 @@ export const CHANNEL_ACTION_KINDS = [
   /** 计划确认卡片上的「确认」「退回」（P3-10），受远程审批等级约束。 */
   'confirm_plan',
   'reject_plan',
+  /** 协调助手问题下面的按钮（0.3.8）：按建议处理、都不要、只处理带目标的这一项。 */
+  'question_accept',
+  'question_reject',
+  'question_item',
 ] as const;
 export const ChannelActionKind = z.enum(CHANNEL_ACTION_KINDS);
 export type ChannelActionKind = z.infer<typeof ChannelActionKind>;

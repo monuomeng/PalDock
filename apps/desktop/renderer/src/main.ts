@@ -153,6 +153,7 @@ function isRelevant(event: PersistentEvent): boolean {
       (event.type === 'message.created' && event.payload.sessionId === chatSession) ||
       event.type === 'plan.proposed' ||
       (event.type === 'git.proposed' && event.payload.sessionId === chatSession) ||
+      ((event.type === 'question.created' || event.type === 'question.closed') && event.payload.sessionId === chatSession) ||
       detailScope.has(event.aggregateId)
     );
   }

@@ -14,6 +14,7 @@ import {
 import { createToken } from '@paldock/platform';
 import type { CoordinatorService } from './coordinator.js';
 import type { PlanService } from './plan-service.js';
+import type { ApprovalConversation } from './approval-conversation.js';
 import type { GitOpsService } from './git-ops.js';
 import { handoffOf, nodeOf, upstreamOf } from './task-graph-scheduler.js';
 
@@ -30,6 +31,8 @@ export interface McpGatewayDeps {
   plans?: () => PlanService | undefined;
   /** 提交 / 推送 / 合并卡片（默认在当前仓库协作）；同样延后取。 */
   gitOps?: () => GitOpsService | undefined;
+  /** 审批对话（0.3.8）。 */
+  approvals?: () => ApprovalConversation | undefined;
   /** 主会话：请求计数、notify_user、write_summary 的后端；同样延后取。 */
   coordinator?: () => CoordinatorService | undefined;
   now?: () => number;
@@ -149,6 +152,12 @@ export class McpGateway {
         const { approvalId, decision, reason } = args as McpToolArgs<'decide_approval'>;
         return this.coordinatorService().decideApproval(caller.runId, approvalId, decision, reason);
       }
+      case 'suggest_decision': {
+        const { text, items } = args as McpToolArgs<'suggest_decision'>;
+        return this.approvalConversation().suggest(caller.runId, text, items);
+      }
+      case 'resolve_approvals':
+        return this.approvalConversation().resolve(caller.runId, args as McpToolArgs<'resolve_approvals'>);
       case 'write_summary': {
         const { summary } = args as McpToolArgs<'write_summary'>;
         if (caller.role === 'coordinator') return this.coordinatorService().writeSummary(caller.runId, summary);
@@ -182,6 +191,12 @@ export class McpGateway {
       }
     }
     throw new CodedError('bad_request', `没有工具 ${tool}`);
+  }
+
+  private approvalConversation(): ApprovalConversation {
+    const service = this.deps.approvals?.();
+    if (!service) throw new CodedError('unavailable', '审批对话功能未启用');
+    return service;
   }
 
   private coordinatorService(): CoordinatorService {

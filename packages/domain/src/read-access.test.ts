@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSensitivePath, routeRead } from './read-access.js';
+import { isSensitivePath, notAConsent, routeRead } from './read-access.js';
 
 const HOME = String.raw`C:\Users\me`;
 
@@ -33,5 +33,11 @@ describe('项目外只读的分层', () => {
     expect(routeRead({ ...base, paths: ['D:/tmp/run/a.png', 'D:/assets/b.png'] })).toBe('coordinator');
     expect(routeRead({ ...base, coordinatorAvailable: false, paths: ['D:/assets/b.png'] })).toBe('user');
     expect(routeRead({ ...base, paths: [] })).toBe('user');
+  });
+
+  it('一句话算不算同意（宿主兜底）：提问、带否定或还没决定的不算；明确的决定（含部分批准）算', () => {
+    for (const t of ['我还没说可以', '为什么要我点允许？', '可以吗?', '是不是都要读', '先别放行', '等等，我看一下'])
+      expect(notAConsent(t), t).toBeDefined();
+    for (const t of ['可以', '第一张可以', '第一张可以，第二张不用', '好，推吧', '都不要']) expect(notAConsent(t), t).toBeUndefined();
   });
 });

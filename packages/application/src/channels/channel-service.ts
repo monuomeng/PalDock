@@ -1,3 +1,4 @@
+import type { ApprovalConversation } from '../approval-conversation.js';
 import {
   CodedError,
   type Card,
@@ -57,6 +58,8 @@ export interface ChannelServiceDeps {
   /** 外部普通消息进协调助手主会话、计划确认卡片（P3-10）；缺省时按 P2 的规则。 */
   coordinator?: CoordinatorService;
   plans?: PlanService;
+  /** 协调助手在对话里问你的问题（0.3.8）：外部会话里问题卡片上的按钮。 */
+  approvals?: () => ApprovalConversation | undefined;
   credentials: CredentialPort;
   createAdapter: AdapterFactory;
   publish(events: PersistentEvent[]): void;
@@ -103,6 +106,7 @@ export class ChannelService {
       tasks: deps.tasks,
       ...(deps.coordinator ? { coordinator: deps.coordinator } : {}),
       ...(deps.plans ? { plans: deps.plans } : {}),
+      ...(deps.approvals ? { approvals: deps.approvals } : {}),
       reply: send,
     });
     const processor = new InboundProcessor({ ...common, handler: commands, reply: send });
@@ -112,7 +116,13 @@ export class ChannelService {
       log: deps.log,
       process: (envelope) => processor.process(envelope),
     });
-    this.notifier = new ChannelNotifier({ ...common, send, presence: () => this.presence, attached: (p) => this.hub.isAttached(p) });
+    this.notifier = new ChannelNotifier({
+      ...common,
+      send,
+      presence: () => this.presence,
+      attached: (p) => this.hub.isAttached(p),
+      ...(deps.approvals ? { approvals: deps.approvals } : {}),
+    });
   }
 
   /** 启动已启用的渠道（不阻塞服务启动）与升级扫描。 */

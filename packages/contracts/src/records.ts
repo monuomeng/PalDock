@@ -152,6 +152,8 @@ export interface ApprovalRecord {
   groupId: string | null;
   /** coordinator：交给协调助手判断中（它批不了、不确定或超时后回到你这里）。 */
   routedTo: 'coordinator' | null;
+  /** 正在（或曾经）在哪个对话问题里问你（0.3.8）。 */
+  questionId: string | null;
   version: number;
 }
 

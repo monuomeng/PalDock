@@ -5,6 +5,7 @@ import { noticeRef, time } from '../format.js';
 import { liveText } from '../live-output.js';
 import { chatLink, navigate } from '../router.js';
 import { gitCard } from './git-card.js';
+import { questionView } from './question-card.js';
 import { pausedBanner } from './paused.js';
 import { planView, type Act } from './plan-view.js';
 
@@ -84,6 +85,7 @@ export async function chatView(route: { workspaceId: string | undefined; session
     refresh();
   };
   const running = detail.wakes.find((w) => w.status === 'running');
+  const questionOf = (messageId: number) => detail.questions.find((q) => q.messageId === messageId);
   const live = running?.runId ? liveText(running.runId) : '';
 
   const element = h(
@@ -102,7 +104,9 @@ export async function chatView(route: { workspaceId: string | undefined; session
           ? h('div', { class: 'message message-plan' }, planView(item, act, { inChat: true }))
           : 'request' in item
             ? h('div', { class: 'message message-plan' }, gitCard(item, act))
-            : messageView(item),
+            : questionOf(item.id)
+              ? h('div', {}, messageView(item), questionView(questionOf(item.id)!, act))
+              : messageView(item),
       ),
       live ? h('div', { class: 'message message-assistant live' }, h('span', { class: 'hint' }, '协调助手 · 正在回复'), h('pre', { 'data-live-run': running!.runId! }, live)) : null,
     ),
@@ -130,6 +134,8 @@ export async function chatView(route: { workspaceId: string | undefined; session
   const ids = new Set([
     ...detail.plans.flatMap((p) => [p.plan.id, p.plan.taskId, ...p.nodes.flatMap((n) => (n.subtask ? [n.subtask.id] : []))]),
     ...detail.gitOps.map((op) => op.id),
+    ...detail.questions.map((q) => q.id),
+    ...detail.questions.flatMap((q) => q.items.map((i) => i.ref)),
     session.workspaceId,
   ]);
   return { element, sessionId: session.sessionId, ids };
