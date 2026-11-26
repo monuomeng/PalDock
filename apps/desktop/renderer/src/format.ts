@@ -73,3 +73,6 @@ export function duration(fromIso: string, toIso: string | null): string {
   const s = Math.max(0, Math.round(ms / 1000));
   return s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${s % 60} 秒`;
 }
+
+/** 通知编号（和 contracts 的 noticeRef 一致）。渲染进程没有打包器，只能引用 @paldock/* 的类型，值要在这里各写一份。 */
+export const noticeRef = (id: number) => `Q${id}`;

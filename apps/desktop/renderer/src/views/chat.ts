@@ -1,7 +1,7 @@
-import { noticeRef, type ConversationDetail, type MainSessionRecord, type WakeRecord, type WorkspaceRecord } from '@paldock/contracts';
+import type { ConversationDetail, MainSessionRecord, WakeRecord, WorkspaceRecord } from '@paldock/contracts';
 import { bridge, call } from '../api.js';
 import { h } from '../dom.js';
-import { time } from '../format.js';
+import { noticeRef, time } from '../format.js';
 import { liveText } from '../live-output.js';
 import { chatLink, navigate } from '../router.js';
 
