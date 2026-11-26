@@ -79,5 +79,13 @@ export function createHandlers(
     'agent.setExecutor': ({ role, expectedVersion, executor }) => agents.setExecutor(role, expectedVersion, executor),
     'agent.overrides': ({ workspaceId }) => agents.overrides(workspaceId),
     'agent.setOverride': ({ workspaceId, role, executor }) => agents.setOverride(workspaceId, role, executor),
+    'project.assistants': ({ workspaceId }) => agents.projectAssistants(workspaceId),
+    'project.setMode': ({ workspaceId, expectedVersion, confirmDirect, ...patch }) => agents.setProjectMode(workspaceId, expectedVersion, definedOnly(patch), confirmDirect),
+    'project.setRole': ({ workspaceId, role, expectedVersion, confirmDirect, ...patch }) => agents.setProjectRole(workspaceId, role, expectedVersion, definedOnly(patch), confirmDirect),
   };
+}
+
+/** 去掉没给的字段（可选参数在 exactOptionalPropertyTypes 下不能带 undefined）。 */
+function definedOnly<T extends Record<string, unknown>>(patch: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  return Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) as { [K in keyof T]?: Exclude<T[K], undefined> };
 }

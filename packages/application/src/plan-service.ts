@@ -48,6 +48,14 @@ export class PlanService {
     return new Set(this.deps.store.agents.listProfiles().map((p) => p.role).filter((role) => role !== 'coordinator'));
   }
 
+  /** 项目里没启用的角色不能派单（2026-11-26 已定，项目级助手设置）；提出和确认时都查。 */
+  private assertEnabled(workspaceId: string, nodes: readonly { key: string; role: string }[]): void {
+    const disabled = nodes.filter((n) => !this.deps.store.projectSettings.role(workspaceId, n.role).enabled);
+    if (disabled.length === 0) return;
+    const names = [...new Set(disabled.map((n) => this.deps.store.agents.listProfiles().find((p) => p.role === n.role)?.displayName ?? n.role))];
+    throw new CodedError('bad_request', `这个项目没有启用这些角色：${names.join('、')}（节点 ${disabled.map((n) => n.key).join('、')}）。请换成已启用的角色，或请用户在「项目 → 助手」里启用`);
+  }
+
   /** 协调助手这次 Run 所在的项目里提出计划；带 taskId 时给那个草稿任务提新一版。 */
   propose(proposedByRunId: string, args: McpToolArgs<'propose_plan'>): PlanRecord {
     const { store } = this.deps;
@@ -55,7 +63,11 @@ export class PlanService {
     const subtask = run && store.tasks.getSubtask(run.subtaskId);
     const task = subtask && store.tasks.getTask(subtask.taskId);
     if (!task) throw new CodedError('not_found', '找不到这次 Run 所在的任务');
+    if (store.projectSettings.get(task.workspaceId).mode === 'solo') {
+      throw new CodedError('bad_request', '这个项目是单人模式：不拆计划，直接在工作目录里动手做');
+    }
     validatePlan(args.nodes, this.specialistRoles());
+    this.assertEnabled(task.workspaceId, args.nodes);
     const { record, events } = store.plans.propose({
       workspaceId: task.workspaceId,
       title: args.title,
@@ -144,6 +156,7 @@ export class PlanService {
     if (plan.version !== expectedVersion || plan.status !== 'proposed') throw new CodedError('conflict', '计划已被修改或已处理，请刷新');
     validatePlan(store.plans.nodes(planId), this.specialistRoles());
     const task = store.tasks.getTask(plan.taskId)!;
+    this.assertEnabled(task.workspaceId, store.plans.nodes(planId));
     if (this.deps.integration && task.status === 'draft') await this.deps.integration.ensureBranch(task);
     const { record, events } = store.plans.confirm(planId, expectedVersion, note?.trim() || null, via);
     this.deps.publish(events);

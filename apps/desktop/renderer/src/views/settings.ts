@@ -70,9 +70,6 @@ export async function settingsView(rerender: () => void): Promise<HTMLElement> {
     pairingSection(pairings, act),
     accountSection(accounts, act),
     groupSection(groups, act),
-    workspaceSection(workspaces, act),
-    prepareSection(workspaces, act),
-    autoSection(workspaces, agents.agents.map((a) => a.profile), act),
   );
 }
 
@@ -147,28 +144,7 @@ function agentSection({ agents, runtimes }: AgentSettings, workspaces: Workspace
         ),
       ),
     ),
-    ...workspaces.map((w, i) => {
-      const byRole = new Map((overrides[i] ?? []).map((o) => [o.role, o.executor]));
-      return h(
-        'details',
-        {},
-        h('summary', {}, `「${w.name}」的执行器覆盖（${byRole.size} 项）`),
-        h(
-          'dl',
-          { class: 'facts' },
-          ...agents.flatMap(({ profile }) => [
-            h('dt', {}, profile.displayName),
-            h(
-              'dd',
-              {},
-              executorSelect(`${w.name} 里${profile.displayName}的执行器`, byRole.get(profile.role) ?? '', true, (executor) =>
-                void act(() => call('agent.setOverride', { workspaceId: w.id, role: profile.role, executor }))(),
-              ),
-            ),
-          ]),
-        ),
-      );
-    }),
+    h('p', { class: 'hint' }, '这里是默认值。每个项目用哪种工作模式、启用哪些角色、每个角色的执行器、隔离方式和审批严格度，在「项目」页里按项目设置。'),
   );
 }
 
@@ -339,123 +315,5 @@ function groupSection(groups: ConversationRecord[], act: Act): HTMLElement {
   );
 }
 
-/**
- * 自动处理：按项目勾选哪些角色的节点可以跳过审阅（默认都不勾）。没有「跳过计划确认」：每个计划都要你确认。
- */
-function autoSection(workspaces: WorkspaceRecord[], profiles: AgentSettings['agents'][number]['profile'][], act: Act): HTMLElement {
-  const roles = profiles.filter((p) => p.role !== 'coordinator' && p.role !== 'reviewer');
-  return h(
-    'div',
-    {},
-    h('h3', {}, '自动处理'),
-    h(
-      'p',
-      { class: 'hint' },
-      '勾选的角色交付后，只要改动在交付范围内、检查命令通过，就不送审阅助手、直接合进任务集成分支。简单计划（新任务、只有 1 个节点、不带检查命令）提出 30 秒后自动确认，这段时间里可以在对话页撤回；其他计划都要你确认。每次都记进「自动处理记录」。',
-    ),
-    workspaces.length === 0
-      ? h('p', { class: 'empty' }, '还没有项目。')
-      : h(
-          'div',
-          {},
-          ...workspaces.map((w) =>
-            h(
-              'fieldset',
-              {},
-              h('legend', { title: w.rootPath }, w.name),
-              (() => {
-                const box = h('input', { type: 'checkbox', checked: w.autoPolicy.autoConfirmSimplePlans, 'aria-label': `${w.name} 简单计划自动确认` }) as HTMLInputElement;
-                box.addEventListener('change', () => {
-                  void act(() => call('workspace.setAutoPolicy', { workspaceId: w.id, expectedVersion: w.version, policy: { skipReviewRoles: w.autoPolicy.skipReviewRoles, autoConfirmSimplePlans: box.checked } }))();
-                });
-                return h('label', { class: 'inline' }, box, ' 简单计划自动确认');
-              })(),
-              h('span', { class: 'hint' }, ' · 这些角色跳过审阅：'),
-              ...roles.map((p) => {
-                const box = h('input', { type: 'checkbox', checked: w.autoPolicy.skipReviewRoles.includes(p.role), 'aria-label': `${w.name} 跳过${p.displayName}的审阅` }) as HTMLInputElement;
-                box.addEventListener('change', () => {
-                  const next = box.checked ? [...w.autoPolicy.skipReviewRoles, p.role] : w.autoPolicy.skipReviewRoles.filter((r) => r !== p.role);
-                  void act(() => call('workspace.setAutoPolicy', { workspaceId: w.id, expectedVersion: w.version, policy: { skipReviewRoles: next } }))();
-                });
-                return h('label', { class: 'inline' }, box, ` ${p.displayName}`);
-              }),
-            ),
-          ),
-        ),
-  );
-}
 
-/**
- * worktree 准备命令：新建的 worktree（计划节点、合并候选）跑检查命令前先执行一次，例如安装依赖。
- * 和检查命令一样是「可执行文件 + 每行一个参数」，不经 shell，以你的账户权限运行。
- */
-function prepareSection(workspaces: WorkspaceRecord[], act: Act): HTMLElement {
-  return h(
-    'div',
-    {},
-    h('h3', {}, 'worktree 准备命令'),
-    h(
-      'p',
-      { class: 'hint' },
-      '新建的 worktree 没有安装依赖。这里的命令会在跑检查命令前先执行一次（例如 pnpm，参数 install、--frozen-lockfile），失败时按检查失败处理。命令以你的账户权限运行，可以联网。留空表示不需要。',
-    ),
-    workspaces.length === 0
-      ? h('p', { class: 'empty' }, '还没有项目。')
-      : h(
-          'div',
-          {},
-          ...workspaces.map((w) => {
-            const exe = h('input', { type: 'text', value: w.prepareCommand?.executable ?? '', placeholder: 'pnpm', 'aria-label': `${w.name} 的准备命令` }) as HTMLInputElement;
-            const args = h('textarea', { rows: 2, placeholder: '每行一个参数', 'aria-label': `${w.name} 的准备命令参数` }, (w.prepareCommand?.args ?? []).join('\n')) as HTMLTextAreaElement;
-            const save = () => {
-              const executable = exe.value.trim();
-              const command = executable ? { executable, args: args.value.split(/\r?\n/).filter((line) => line !== '') } : null;
-              return act(() => call('workspace.setPrepareCommand', { workspaceId: w.id, expectedVersion: w.version, command }))();
-            };
-            return h(
-              'fieldset',
-              {},
-              h('legend', { title: w.rootPath }, w.name),
-              exe,
-              args,
-              h('div', { class: 'actions' }, h('button', { type: 'button', onclick: () => void save() }, '保存')),
-            );
-          }),
-        ),
-  );
-}
 
-function workspaceSection(workspaces: WorkspaceRecord[], act: Act): HTMLElement {
-  return h(
-    'div',
-    {},
-    h('h3', {}, '远程审批'),
-    h(
-      'p',
-      { class: 'hint' },
-      '审批先在桌面等待；桌面 3 分钟无人处理、或锁屏、空闲时才发到已绑定的单聊。等级决定外部渠道能批准哪些操作；权限类审批始终只能在桌面处理。',
-    ),
-    workspaces.length === 0
-      ? h('p', { class: 'empty' }, '还没有项目。')
-      : h(
-          'div',
-          { class: 'facts' },
-          ...workspaces.flatMap((w) => {
-            const select = h(
-              'select',
-              { 'aria-label': `${w.name} 的远程审批等级` },
-              ...(['L0', 'L1', 'L2'] as const).map((level) => h('option', { value: level, selected: level === w.remoteApprovalLevel }, LEVEL_LABEL[level])),
-            );
-            select.addEventListener('change', () => {
-              const level = select.value as RemoteApprovalLevel;
-              if (level === 'L2' && !window.confirm(`确定让外部渠道也能批准「${w.name}」的高风险操作吗？`)) {
-                select.value = w.remoteApprovalLevel;
-                return;
-              }
-              void act(() => call('workspace.setRemoteApprovalLevel', { workspaceId: w.id, expectedVersion: w.version, level }))();
-            });
-            return [h('dt', { title: w.rootPath }, w.name), h('dd', {}, select)];
-          }),
-        ),
-  );
-}

@@ -15,6 +15,7 @@ import type { PersistentEvent, RunNoticeCode } from './events.js';
 import type { MainSessionRecord, NoticeKind, NoticeRecord, SummaryRecord, WakeRecord, WakeStatus, WakeTrigger } from './conversations.js';
 import type { AutoDecisionRecord, AutoPolicy, PlanNodeEdit, RecoveryItem } from './plans.js';
 import type { RoleSessionStorePort } from './role-sessions.js';
+import type { ProjectSettingsStorePort } from './project-settings.js';
 import type { GateStage, GraphNode, MergeOpRecord, MergePhase, PlanNodeInput, PlanNodeRecord, PlanRecord } from './plans.js';
 import type {
   AgentOverrideRecord,
@@ -448,6 +449,7 @@ export interface StorePort {
   outbox: OutboxPort;
   inbox: InboxPort;
   roleSessions: RoleSessionStorePort;
+  projectSettings: ProjectSettingsStorePort;
   /** 多个写入合成一个事务（内层用 SAVEPOINT）。 */
   transaction<T>(fn: () => T): T;
   interruptActiveWork(reason: string): RecoveryReport;

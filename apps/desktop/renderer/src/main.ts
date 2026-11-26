@@ -7,6 +7,7 @@ import { attentionView } from './views/attention.js';
 import { autoDecisionsView } from './views/auto-decisions.js';
 import { chatView } from './views/chat.js';
 import { newTaskView } from './views/new-task.js';
+import { projectView } from './views/project.js';
 import { settingsView } from './views/settings.js';
 import { taskDetailView } from './views/task-detail.js';
 import { tasksView } from './views/tasks.js';
@@ -85,6 +86,8 @@ async function buildView(route: Route): Promise<HTMLElement> {
       return newTaskView(route.fromTaskId);
     case 'settings':
       return settingsView(scheduleRender);
+    case 'project':
+      return projectView(route.workspaceId, scheduleRender);
     case 'task': {
       const { element, ids } = await taskDetailView(route.taskId, route.runId, scheduleRender);
       detailScope = ids;
@@ -154,6 +157,7 @@ function isRelevant(event: PersistentEvent): boolean {
   }
   if (event.type === 'message.created') return false;
   if (route.view === 'settings') return isSettingsEvent(event);
+  if (route.view === 'project') return isSettingsEvent(event) || event.type === 'project.settings_changed' || event.type === 'workspace.agent_override_changed' || event.type === 'agent.profile_changed';
   if (route.view === 'auto') return event.type === 'auto.decided';
   if (route.view !== 'task') return LIST_EVENTS.has(event.type);
   return (

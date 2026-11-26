@@ -44,6 +44,8 @@ export interface RunStartRequest {
    * 续用会话时不再重发，免得每一轮都像新会话开头。
    */
   instructions?: string;
+  /** 只读（项目设置的隔离方式为只读）：Codex 用 read-only 沙箱；Claude 的写文件请求由宿主拒绝。 */
+  readOnly?: boolean;
 }
 
 /** stdio MCP 服务器的启动方式。env 里带这次 Run 的一次性令牌，只能调用这个角色的编排工具。 */

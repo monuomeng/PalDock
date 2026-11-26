@@ -46,7 +46,8 @@ export function planNodePrompt(task: { goal: string }, node: { title: string; go
 
 /** 审阅助手看的交付：被审的提交、基线、改动统计和开发助手的交接。 */
 export interface ReviewSubject {
-  commitSha: string;
+  /** 被审的提交；直接在项目目录里改的节点没有提交（null），审工作区里还没提交的改动。 */
+  commitSha: string | null;
   baseCommit: string;
   diffStat: string | null;
   handoff: string | null;
@@ -59,7 +60,9 @@ export interface ReviewSubject {
 export function reviewPrompt(node: { title: string; goal: string; paths: readonly string[] }, subject: ReviewSubject): string {
   const parts = [
     `请审阅子任务「${node.title}」的交付。子任务的目标：\n${node.goal}`,
-    `被审的提交：${subject.commitSha}（基线 ${subject.baseCommit}），用 git diff ${subject.baseCommit} ${subject.commitSha} 查看改动。`,
+    subject.commitSha
+      ? `被审的提交：${subject.commitSha}（基线 ${subject.baseCommit}），用 git diff ${subject.baseCommit} ${subject.commitSha} 查看改动。`
+      : '这个子任务直接在项目目录里改，改动还没提交：用 git status 和 git diff 查看工作区里的改动（开始前就有的改动不算这次的交付）。',
   ];
   if (subject.diffStat) parts.push(`改动统计：\n${subject.diffStat}`);
   if (node.paths.length > 0) parts.push(`相关路径：\n${node.paths.map((p) => `- ${p}`).join('\n')}`);
@@ -170,4 +173,29 @@ export function roleTurnPrompt(turn: { worktree: string; packet: string; inherit
     parts.push('这个会话用得比较久了，之后会换新会话。这一轮结束前请调用 write_summary，写一份角色摘要：这个项目的约定、常用命令、踩过的坑、还要注意的事（不写具体任务的细节）。');
   }
   return parts.join('\n\n');
+}
+
+const SOLO_WORKDIR: Record<'direct' | 'worktree' | 'readonly', string> = {
+  direct: '工作目录就是项目目录本身：你的改动直接出现在用户当前分支的工作区里。不要提交、推送或切换分支，改完告诉用户改了哪些文件。',
+  worktree: '工作目录是这个项目专门给你的独立 worktree（分支 paldock/solo-…）：可以提交到这个分支，不要推送；用户会自己合并。',
+  readonly: '这个项目把你设成只读：只能看代码、跑不改文件的命令，不能修改文件。',
+};
+
+/** 单人模式（2026-11-26 已定）：一个助手全权接管，主会话直接读代码、改代码、跑测试，不拆计划。只在新开会话时发一次。 */
+export function soloInstructions(project: { name: string; rootPath: string }, isolation: 'direct' | 'worktree' | 'readonly'): string {
+  return [
+    `你是 PalDock 在项目 ${project.name}（${project.rootPath}）里的单人助手，全权负责这个项目：直接读代码、改代码、跑测试，不需要拆成计划，也不要用 propose_plan。`,
+    `- ${SOLO_WORKDIR[isolation]}`,
+    '- 需要用户决定、或要在用户不在电脑前时告诉他的事，用 notify_user。',
+    '- 你在这里写的回复就是对话里的消息：说清楚改了什么、怎么验证的、还剩什么。',
+  ].join('\n');
+}
+
+/** 单人模式改完后的审阅：只读，看工作目录里还没提交的改动，结论写在回复里（作为一条消息出现在对话里，不卡流程）。 */
+export function soloReviewPrompt(cwd: string): string {
+  return [
+    `请审阅单人助手刚才在 ${cwd} 里做的改动：用 git status 和 git diff 查看还没提交的改动（独立 worktree 时也看最近的提交）。`,
+    '你只读：不要修改、提交或删除任何文件。',
+    '最后用一段话给出结论：通过，或者列出需要改的地方和原因。',
+  ].join('\n');
 }

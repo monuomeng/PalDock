@@ -242,6 +242,37 @@ describe.skipIf(process.env.PALDOCK_LIVE_P3 !== '1')('P3 真实执行器', () =>
     }
   });
 
+  it('单人模式：一个助手直接在项目目录里改代码、跑测试，不拆计划', { timeout: 30 * MINUTE }, async () => {
+    prepare('solo');
+    const s = await boot();
+    const t0 = Date.now();
+    const workspace = await call(s, 'workspace.add', { rootPath: repo });
+    await call(s, 'project.setMode', { workspaceId: workspace.id, expectedVersion: 0, mode: 'solo', confirmDirect: true });
+    const [session] = await call(s, 'chat.sessions', { workspaceId: workspace.id });
+    await call(s, 'chat.send', {
+      sessionId: session!.sessionId,
+      text: '在 math.js 里加 export function mul(a, b) { return a * b; }，再运行 node --test 确认测试通过。只改 math.js，不要提交。',
+      idempotencyKey: `solo-${Date.now()}`,
+    });
+    const reply = await until(
+      async () => {
+        const detail = await call(s, 'chat.get', { sessionId: session!.sessionId, limit: 20 });
+        return detail.wakes[0]?.status === 'done' && detail.messages.findLast((m) => m.role === 'assistant');
+      },
+      '单人助手做完',
+      20 * MINUTE,
+    );
+    const math = readFileSync(join(repo, 'math.js'), 'utf8');
+    const status = git(repo, 'status', '--porcelain');
+    const tasks = await call(s, 'task.list', { limit: 20 });
+    await shutdown(s);
+    await report('solo', { totalMs: Date.now() - t0, reply: reply.body.slice(0, 500), status, tasks: tasks.length });
+    expect(math).toContain('mul');
+    // 直接改在你的工作区里，没有提交、没有拆计划
+    expect(status).toContain('math.js');
+    expect(tasks).toHaveLength(0);
+  });
+
   it('开发节点运行中强杀本地服务后重启：检查残留进程，按 checkTurn 恢复', { timeout: 40 * MINUTE }, async () => {
     prepare('restart');
     let s = await boot();

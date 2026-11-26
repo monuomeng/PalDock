@@ -127,3 +127,26 @@ export async function removeWorktree(repo: string, path: string): Promise<void> 
   rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   await git(repo, ['worktree', 'prune']);
 }
+
+/**
+ * 工作区里有改动的文件（已跟踪的改动和未跟踪的新文件，相对仓库根，`/` 分隔）。只读：不暂存、不提交，
+ * 用于「直接在项目目录里改」（改的是用户自己的工作区，不能动他的暂存区）。
+ */
+export async function dirtyFiles(repo: string): Promise<string[]> {
+  const out = await git(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  const files: string[] = [];
+  const entries = out.split('\0');
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]!;
+    if (entry.length < 4) continue;
+    files.push(entry.slice(3));
+    // 重命名 / 复制后面跟着原路径，跳过
+    if (entry[0] === 'R' || entry[0] === 'C') i++;
+  }
+  return files;
+}
+
+/** 已跟踪文件相对 HEAD 的改动统计（不含未跟踪文件，它们单独列出）。只读。 */
+export async function workingDiffStat(repo: string): Promise<string> {
+  return (await git(repo, ['diff', '--stat', 'HEAD'])).trimEnd();
+}

@@ -56,6 +56,8 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
     type: z.literal('workspace.auto_policy_changed'),
     payload: z.object({ skipReviewRoles: z.array(AgentRole), autoConfirmSimplePlans: z.boolean().optional() }),
   }),
+  /** 项目级助手设置变了；聚合 ID 为 workspaceId，role 为空表示工作模式那一组。 */
+  z.object({ type: z.literal('project.settings_changed'), payload: z.object({ role: z.string().nullable() }) }),
   /** 简单计划排定或撤回了自动确认；聚合 ID 为 planId，at 为 null 表示撤回。 */
   z.object({ type: z.literal('plan.auto_confirm_changed'), payload: z.object({ at: z.iso.datetime().nullable() }) }),
   /** 计划被确认、退回或被新一版取代；聚合 ID 为 planId。 */

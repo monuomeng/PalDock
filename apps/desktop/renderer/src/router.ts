@@ -9,6 +9,7 @@ export type Route =
   | { view: 'tasks' }
   | { view: 'new'; fromTaskId: string | undefined }
   | { view: 'settings' }
+  | { view: 'project'; workspaceId: string | undefined }
   | { view: 'task'; taskId: string; runId: string | undefined };
 
 export function currentRoute(): Route {
@@ -18,6 +19,7 @@ export function currentRoute(): Route {
     return { view: 'task', taskId: decodeURIComponent(parts[1]), runId: new URLSearchParams(query).get('run') ?? undefined };
   }
   if (parts[0] === 'auto') return { view: 'auto', workspaceId: new URLSearchParams(query).get('ws') ?? undefined };
+  if (parts[0] === 'project') return { view: 'project', workspaceId: new URLSearchParams(query).get('ws') ?? undefined };
   if (parts[0] === 'chat') {
     const q = new URLSearchParams(query);
     return { view: 'chat', workspaceId: q.get('ws') ?? undefined, sessionId: q.get('session') ?? undefined, taskId: q.get('task') ?? undefined };
@@ -40,6 +42,9 @@ export function chatLink(target: { workspaceId?: string; sessionId?: string; tas
   const s = q.toString();
   return `#/chat${s ? `?${s}` : ''}`;
 }
+
+/** 「项目 → 助手」页。 */
+export const projectLink = (workspaceId?: string) => `#/project${workspaceId ? `?ws=${encodeURIComponent(workspaceId)}` : ''}`;
 
 /** 自动处理记录，可按项目筛选。 */
 export const autoLink = (workspaceId?: string) => `#/auto${workspaceId ? `?ws=${encodeURIComponent(workspaceId)}` : ''}`;

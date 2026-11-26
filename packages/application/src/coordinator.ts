@@ -11,7 +11,9 @@ import {
   type WakeRecord,
 } from '@paldock/contracts';
 import { P3_DEFAULTS, runMachine, taskRef, type P3Limits } from '@paldock/domain';
-import { coordinatorInstructions, wakePrompt } from './prompts.js';
+import { coordinatorInstructions, soloInstructions, soloReviewPrompt, wakePrompt } from './prompts.js';
+import { executorOfRole } from './agent-service.js';
+import { dirtyFiles } from './git.js';
 import { nodeTitle } from './task-graph-scheduler.js';
 import { errorText, MicroBatch } from './util.js';
 import type { RunPlan } from './run-supervisor.js';
@@ -40,6 +42,8 @@ export class CoordinatorService {
   private readonly timers = new Map<string, NodeJS.Timeout>();
   /** 每个主会话上次发给协调助手的任务板（续用会话时没变就不重发）。 */
   private readonly lastBoard = new Map<string, string>();
+  /** 每个主会话上次用的工作模式（团队 / 单人和隔离方式）；变了就新开会话，换一套角色说明。 */
+  private readonly lastMode = new Map<string, string>();
   private readonly batch: MicroBatch<string>;
   /** 当天已就「自动唤醒达到上限」通知过的会话（不重复通知）。 */
   private readonly capNoticeDay = new Map<string, number>();
@@ -193,6 +197,14 @@ export class CoordinatorService {
         return;
       }
       if (wake) this.wakeEnded(wake, run.status, run.failureReason);
+      // 单人模式「改完让审阅助手看一遍」：这一轮成功、工作目录里有未提交的改动，先审再处理下一条消息
+      if (wake && run.status === 'succeeded' && run.purpose === 'work') {
+        const settings = store.projectSettings.get(session.workspaceId);
+        if (settings.mode === 'solo' && settings.soloReview && settings.soloIsolation !== 'readonly') {
+          void this.soloReview(session).finally(() => this.schedule(session.sessionId));
+          return;
+        }
+      }
       return this.schedule(session.sessionId);
     }
     const found = this.taskEvent(event);
@@ -321,8 +333,16 @@ export class CoordinatorService {
     const { store } = this;
     this.deps.publish(store.coordinator.setWake(wake.id, 'running').events);
     const latest = store.runs.latestRun(session.subtaskId);
-    // 沿用上一次的原生会话；上次续做失败或从没有过，就新开并注入摘要和最近的消息
-    const threadId = latest?.nativeThreadId && !latest.failureReason?.startsWith(RESUME_FAILED) ? latest.nativeThreadId : undefined;
+    // 工作模式（2026-11-26 已定，项目级助手设置）：单人模式的主会话换一套说明和执行器；模式或执行器变了就新开会话
+    const settings = store.projectSettings.get(session.workspaceId);
+    const solo = settings.mode === 'solo';
+    const modeKey = solo ? `solo:${settings.soloIsolation}` : 'team';
+    const executor = (solo ? settings.soloExecutor : null) ?? executorOfRole(store, session.workspaceId, 'coordinator');
+    const modeChanged = this.lastMode.has(session.sessionId) && this.lastMode.get(session.sessionId) !== modeKey;
+    this.lastMode.set(session.sessionId, modeKey);
+    // 沿用上一次的原生会话；上次续做失败、从没有过、或者换了模式 / 执行器，就新开并注入摘要和最近的消息
+    const reusable = latest?.nativeThreadId && !latest.failureReason?.startsWith(RESUME_FAILED) && !modeChanged && latest.runtime === executor;
+    const threadId = reusable ? latest.nativeThreadId! : undefined;
     const done = store.coordinator.doneWakes(session.sessionId);
     const summary = store.coordinator.latestSummary(session.sessionId);
     const askSummary = (!threadId && done > 0) || done - (summary?.wakesDone ?? 0) >= this.limits.summaryEveryWakes;
@@ -340,7 +360,17 @@ export class CoordinatorService {
       askSummary,
     });
     // 角色说明只在新开会话时给；续用时会话里已经有了
-    this.deps.supervisor.enqueue(session.subtaskId, threadId ? { prompt, threadId } : { prompt, instructions: coordinatorInstructions(project) });
+    const instructions = solo ? soloInstructions(project, settings.soloIsolation) : coordinatorInstructions(project);
+    this.deps.supervisor.enqueue(session.subtaskId, threadId ? { prompt, threadId } : { prompt, instructions });
+  }
+
+  /** 单人模式改完后：工作目录（独立 worktree 或项目目录）有未提交的改动时，审阅助手在只读会话里看一遍，结论作为一条消息。 */
+  private async soloReview(session: MainSessionRecord): Promise<void> {
+    const { store } = this;
+    const cwd = store.tasks.getSubtask(session.subtaskId)?.worktreePath ?? store.tasks.getWorkspace(session.workspaceId)!.rootPath;
+    const changed = await dirtyFiles(cwd).catch(() => []);
+    if (changed.length === 0) return;
+    this.deps.supervisor.enqueue(session.subtaskId, { prompt: soloReviewPrompt(cwd), review: { sessionId: session.sessionId, role: 'reviewer' } });
   }
 
   /** 本项目任务板：本项目最近的 10 个任务（不含对话任务），每行一个。 */

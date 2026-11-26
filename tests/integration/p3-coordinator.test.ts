@@ -390,3 +390,35 @@ describe('协调助手主会话', () => {
     expect(wakes().map((w) => w.status)).toEqual(['done', 'done', 'done', 'done']);
   });
 });
+
+describe('单人模式（项目级助手设置，2026-11-26 已定）', () => {
+  it('主会话直接在项目目录里工作：换一套单人说明、不能提计划；改完审阅助手在只读会话里看一遍，结论作为一条消息', async () => {
+    await setup();
+    // 团队模式下协调助手只读
+    say('看看');
+    const team = await nthRun(1);
+    expect(team.request).toMatchObject({ cwd: repo, readOnly: true });
+    team.reply('看过了');
+    await waitIdle();
+
+    store.projectSettings.set(session.workspaceId, 0, { mode: 'solo', soloReview: true });
+    say('在 README 里加一行说明');
+    const solo = await nthRun(2);
+    // 换了模式：新开会话，单人说明只发这一次；工作目录就是项目目录，可写
+    expect(solo.request.resumeThreadId).toBeUndefined();
+    expect(solo.request.instructions).toContain('单人助手');
+    expect(solo.request).toMatchObject({ cwd: repo });
+    expect(solo.request.readOnly).toBeUndefined();
+    expect(() => solo.call('propose_plan', { title: 't', goal: 'g', nodes: [{ key: 'a', role: 'developer', title: 'a', goal: 'a' }] })).toThrow(/单人模式/);
+    writeFileSync(join(repo, 'README.md'), '# demo\n说明\n');
+    solo.reply('加好了');
+
+    // 工作区有未提交的改动：审阅助手看一遍（只读，审阅助手自己的会话），结论成为对话里的一条消息
+    const review = await nthRun(3);
+    expect(review.request.prompt).toContain('请审阅单人助手');
+    expect(review.request).toMatchObject({ cwd: repo, readOnly: true });
+    review.reply('通过，改动合理');
+    await until(() => store.coordinator.recentMessages(session.sessionId, 10).map((m) => m.body), (b) => b.includes('审阅助手：通过，改动合理'), '审阅结论进对话');
+    expect(store.runs.getRun(review.request.runId)).toMatchObject({ purpose: 'review' });
+  });
+});

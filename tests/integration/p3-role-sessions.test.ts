@@ -17,6 +17,8 @@ interface FakeRun {
   threadId: string;
   ended: boolean;
   succeed(): void;
+  /** 像 Claude 一样请求改文件 / 跑命令，返回宿主的决定（待审批时一直不返回）。 */
+  ask(request: { kind: 'file_change'; path: string } | { kind: 'command'; command: string }): Promise<string>;
 }
 
 class FakeRuntime implements RuntimeAdapter {
@@ -35,11 +37,22 @@ class FakeRuntime implements RuntimeAdapter {
     if (request.resumeThreadId && this.broken.has(request.resumeThreadId)) throw new Error(`No conversation found with session ID: ${request.resumeThreadId}`);
     const threadId = request.resumeThreadId ?? `thr_${this.runs.length + 1}`;
     const title = /你负责的子任务：(.+)/.exec(request.prompt)?.[1] ?? '?';
+    const decisions = new Map<string, (decision: string) => void>();
     const run: FakeRun = {
       request,
       title,
       threadId,
       ended: false,
+      ask: (what) =>
+        new Promise<string>((resolve) => {
+          const id = `perm_${Math.random()}`;
+          decisions.set(id, resolve);
+          const req =
+            what.kind === 'file_change'
+              ? { nativeRequestId: id, kind: 'file_change' as const, summary: `Edit：${what.path}`, paths: [what.path] }
+              : { nativeRequestId: id, kind: 'command' as const, summary: what.command, command: what.command };
+          onEvent({ type: 'approval_request', request: req });
+        }),
       succeed: () => {
         if (run.ended) return;
         run.ended = true;
@@ -53,7 +66,7 @@ class FakeRuntime implements RuntimeAdapter {
       onEvent({ type: 'turn', turnId: `turn_${request.runId}` });
     });
     return {
-      respondApproval: () => {},
+      respondApproval: (id: string, decision: string) => decisions.get(id)?.(decision),
       cancel: async () => {
         run.ended = true;
         onEvent({ type: 'interrupted' });
@@ -249,5 +262,93 @@ describe('角色会话复用', () => {
     expect(sessions().map((s) => s.status)).toEqual(['retired', 'idle']);
     expect(store.db.all(`SELECT seq FROM events WHERE type = 'run.notice' AND json_extract(payload, '$.code') = 'resume_failed'`)).toHaveLength(1);
     logs.length = 0; // 「续不上」的日志是预期的
+  });
+});
+
+describe('项目级助手设置（2026-11-26 已定）', () => {
+  const repo = () => store.tasks.getWorkspace(workspaceId)!.rootPath;
+  const setRole = (role: string, patch: Parameters<Store['projectSettings']['setRole']>[3]) =>
+    store.projectSettings.setRole(workspaceId, role, store.projectSettings.role(workspaceId, role).version, patch);
+  const pending = () => store.db.all<{ kind: string; risk_level: string }>(`SELECT kind, risk_level FROM approvals WHERE status = 'pending'`);
+  const auto = () => store.db.all<{ result: string }>(`SELECT result FROM audit_log WHERE action = 'approval.auto' ORDER BY id`).map((r) => r.result);
+
+  it('项目里没启用的角色不能派单', async () => {
+    await setup();
+    setRole('tester', { enabled: false });
+    await expect(runPlan([{ key: 't', role: 'tester' }, { key: 'd', role: 'developer' }])).rejects.toThrow(/没有启用这些角色：测试助手/);
+  });
+
+  it('直接在项目目录里改：工作目录是项目根目录，不建 worktree、不动你的暂存区；同一时刻只有一个写入者；交付按新改动核对，不提交', async () => {
+    await setup();
+    setRole('developer', { isolation: 'direct' });
+    // 你自己还没提交的改动：不算交付
+    writeFileSync(join(repo(), 'README.md'), '# demo\n我自己的改动\n');
+    await runPlan([
+      { key: 'd1', role: 'developer' },
+      { key: 'd2', role: 'developer' },
+    ]);
+    const first = await until(() => runtime.runs[0], (r) => r !== undefined, '第一个写入者开始');
+    expect(first.request.cwd).toBe(repo());
+    await new Promise((r) => setTimeout(r, 100));
+    expect(runtime.runs).toHaveLength(1); // 另一个直接写入者在排队
+    // 改项目目录里的文件：工作目录内自动批准
+    expect(await first.ask({ kind: 'file_change', path: join(repo(), `${first.title}.txt`) })).toBe('allow_once');
+    first.succeed();
+    const second = await until(() => runtime.runs[1], (r) => r !== undefined, '第二个写入者开始');
+    expect(second.request.cwd).toBe(repo());
+    const subtask = store.tasks.listSubtasks(store.tasks.getSubtask(store.runs.getRun(first.request.runId)!.subtaskId)!.taskId).find((s) => s.nodeKey === first.title)!;
+    expect(subtask.worktreePath).toBeNull();
+    const result = store.runs.getResult(first.request.runId)!;
+    expect(result).toMatchObject({ commitSha: null, outOfScope: [] });
+    expect(git(repo(), 'diff', '--cached', '--name-only').trim()).toBe('');
+    expect(git(repo(), 'status', '--porcelain')).toContain('README.md');
+    second.succeed();
+    await idle();
+  });
+
+  it('只读：Codex 用只读沙箱，写文件的请求一律拒绝并记审计', async () => {
+    await setup();
+    await runPlan([
+      { key: 'r', role: 'researcher' },
+      { key: 'x', role: 'developer' },
+    ]);
+    const r = await started('r');
+    expect(r.request.readOnly).toBe(true);
+    expect(await r.ask({ kind: 'file_change', path: join(r.request.cwd, 'notes.md') })).toBe('deny');
+    expect(auto()).toContain('deny:readonly');
+    const x = await started('x');
+    expect(x.request.readOnly).toBeUndefined();
+  });
+
+  it('审批严格度：工作目录内自动批准（默认）、每条都审批、只审批高风险', async () => {
+    await setup({ maxRunsPerTask: 1 });
+    await runPlan([
+      { key: 'a', role: 'developer' },
+      { key: 'b', role: 'developer' },
+      { key: 'c', role: 'developer' },
+    ]);
+    // 默认：工作目录内的改动和普通命令自动批准，装依赖要审批
+    const a = await started('a');
+    expect(await a.ask({ kind: 'file_change', path: join(a.request.cwd, 'a.ts') })).toBe('allow_once');
+    expect(await a.ask({ kind: 'command', command: 'node --test' })).toBe('allow_once');
+    void a.ask({ kind: 'command', command: 'pnpm install' });
+    await until(pending, (p) => p.length === 1, '装依赖要审批');
+    setRole('developer', { approval: 'all' });
+    a.succeed();
+
+    // 每条都审批：工作目录里改文件也要问
+    const b = await started('b');
+    void b.ask({ kind: 'file_change', path: join(b.request.cwd, 'b.ts') });
+    await until(pending, (p) => p.some((x) => x.kind === 'file_change'), '每条都审批');
+    setRole('developer', { approval: 'high_only' });
+    b.succeed();
+
+    // 只审批高风险：装依赖（中风险）自动批准，写到工作目录外（高风险）要问
+    const c = await started('c');
+    expect(await c.ask({ kind: 'command', command: 'pnpm install' })).toBe('allow_once');
+    void c.ask({ kind: 'file_change', path: join(root, 'outside.txt') });
+    await until(pending, (p) => p.some((x) => x.risk_level === 'high'), '高风险要问');
+    expect(auto()).toEqual(['allow:write_in_worktree', 'allow:run_command_in_worktree', 'allow:install_dependencies:high_only']);
+    c.succeed();
   });
 });

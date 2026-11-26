@@ -64,9 +64,10 @@ export class ReviewGate {
     const result = subtask && store.runs.getResult(runId);
     if (!subtask || !result) return;
     const role = AgentRole.safeParse(subtask.role);
-    const writable = role.success && store.agents.getProfile(role.data)?.workspaceAccess === 'worktree_write';
-    const decision = gateAfterWork({ outOfScope: result.outOfScope ?? [], checkStatus: result.checkStatus, prepareStatus: result.prepareStatus, writable });
     const task = store.tasks.getTask(subtask.taskId)!;
+    // 按项目设置的隔离方式（只读角色没有改动要审）
+    const writable = store.projectSettings.role(task.workspaceId, subtask.role).isolation !== 'readonly';
+    const decision = gateAfterWork({ outOfScope: result.outOfScope ?? [], checkStatus: result.checkStatus, prepareStatus: result.prepareStatus, writable });
     switch (decision.outcome) {
       case 'human':
         return this.deps.publish(store.tasks.setGateStage(subtask.id, subtask.version, 'human', { stage: 'check', outcome: 'human', runId, reason: decision.reason }).events);
@@ -104,7 +105,7 @@ export class ReviewGate {
     const node = nodeOf(store, subtask) ?? { title: subtask.goal.slice(0, 40), goal: subtask.goal, paths: [] };
     const session = store.tasks.createSession(REVIEWER);
     const prompt = reviewPrompt(node, {
-      commitSha: result.commitSha ?? 'HEAD',
+      commitSha: result.commitSha,
       baseCommit: subtask.baseCommit ?? 'HEAD',
       diffStat: result.diffStat,
       handoff: handoffOf(store, work.id),

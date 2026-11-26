@@ -171,7 +171,7 @@ class CodexRun implements RuntimeRun {
     });
     const timeout = this.options.requestTimeoutMs;
     try {
-      const threadParams = { cwd: request.cwd, ...THREAD_POLICY, ...mcpConfig(request.mcpServer) };
+      const threadParams = { cwd: request.cwd, ...THREAD_POLICY, ...(request.readOnly ? { sandbox: 'read-only' } : {}), ...mcpConfig(request.mcpServer) };
       const { thread } = request.resumeThreadId
         ? await this.rpc.request<{ thread: { id: string } }>('thread/resume', { threadId: request.resumeThreadId, ...threadParams }, timeout)
         : await this.rpc.request<{ thread: { id: string } }>(

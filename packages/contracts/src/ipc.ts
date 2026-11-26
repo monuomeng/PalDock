@@ -10,6 +10,7 @@ import {
 import { CheckCommand, type AgentOverrideRecord, type AgentSettings, type AttentionItem, type MessageRecord, type TaskDetail, type TaskSummary, type WorkspaceRecord } from './records.js';
 import type { ConversationDetail, MainSessionRecord } from './conversations.js';
 import type { AutoDecisionRecord, RecoveryItem } from './plans.js';
+import { ApprovalStrictness, RoleIsolation, WorkMode, type ProjectAssistantsView } from './project-settings.js';
 import { AgentRole, ApprovalDecision, AttentionKind, Executor, RemoteApprovalLevel, ReviewDecision, SCHEMA_VERSION } from './states.js';
 
 /** 单帧上限；超长帧直接断开，防止本机客户端撑爆内存。 */
@@ -138,6 +139,27 @@ export const CommandArgs = {
   'agent.overrides': z.object({ workspaceId: Id }),
   /** executor 为 null 时取消该项目对这个角色的覆盖。 */
   'agent.setOverride': z.object({ workspaceId: Id, role: AgentRole, executor: Executor.nullable() }),
+  /** 项目级助手设置（2026-11-26 已定）：只在桌面有入口。改成「直接在项目目录里改」要带 confirmDirect。 */
+  'project.assistants': z.object({ workspaceId: Id }),
+  'project.setMode': z.object({
+    workspaceId: Id,
+    expectedVersion: z.number().int().nonnegative(),
+    mode: WorkMode.optional(),
+    soloExecutor: Executor.nullable().optional(),
+    soloIsolation: RoleIsolation.optional(),
+    soloApproval: ApprovalStrictness.optional(),
+    soloReview: z.boolean().optional(),
+    confirmDirect: z.boolean().optional(),
+  }),
+  'project.setRole': z.object({
+    workspaceId: Id,
+    role: AgentRole,
+    expectedVersion: z.number().int().nonnegative(),
+    enabled: z.boolean().optional(),
+    isolation: RoleIsolation.optional(),
+    approval: ApprovalStrictness.optional(),
+    confirmDirect: z.boolean().optional(),
+  }),
 } as const;
 export type CommandName = keyof typeof CommandArgs;
 export const COMMAND_NAMES = Object.keys(CommandArgs) as [CommandName, ...CommandName[]];
@@ -188,6 +210,9 @@ export interface CommandResults {
   'agent.setExecutor': void;
   'agent.overrides': AgentOverrideRecord[];
   'agent.setOverride': void;
+  'project.assistants': ProjectAssistantsView;
+  'project.setMode': void;
+  'project.setRole': void;
 }
 export type CommandResultOf<N extends CommandName> = CommandResults[N];
 

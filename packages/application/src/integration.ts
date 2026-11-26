@@ -165,6 +165,10 @@ export class IntegrationService {
     const work = store.runs.latestRun(subtask.id);
     const runId = work?.id ?? subtask.id;
     if (!task.integrationBranch || !task.integrationWorktree) return this.succeed(subtask, { stage: 'merge', outcome: 'passed', runId, reason: '任务没有集成分支' });
+    // 直接在项目目录里改的节点（没有 worktree、交付没有提交）：改动已经在你的工作区里，不走集成分支合并
+    if (!subtask.worktreePath && work && store.runs.getResult(work.id)?.commitSha === null) {
+      return this.succeed(subtask, { stage: 'merge', outcome: 'passed', runId, reason: '直接在项目目录里改，不走集成分支合并' });
+    }
 
     const repo = store.tasks.getWorkspace(task.workspaceId)!.rootPath;
     // 节点分支当前的提交：通常就是交付时提交、检查和审阅过的那个；人工处理冲突后是你在节点 worktree 里新提交的
