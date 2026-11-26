@@ -241,6 +241,8 @@ describe('发布条件', () => {
     // 部分放行：只放行第一张，第二张继续等
     const msg = say('第一张可以');
     const t4 = await coordinatorTurn(4);
+    // 唤醒里给出你这条消息的编号（交决定时要带上）
+    expect(t4.request.prompt).toContain(`用户最新这条消息的编号是 ${msg}`);
     const result = (await tools(t4).async('resolve_approvals', { questionId, items: [{ ref: a, decision: 'allow' }], userMessageId: msg, decisionQuote: '第一张可以' })) as { results: string[]; remaining: string[] };
     t4.succeed('第一张已放行，测试继续了；第二张还在等你。');
     expect(await answers[0]).toBe('allow_once');

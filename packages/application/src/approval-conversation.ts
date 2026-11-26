@@ -409,8 +409,15 @@ export class ApprovalConversation {
   openQuestionContext(sessionId: string): string | undefined {
     const q = this.store.questions.openOf(sessionId);
     if (!q) return undefined;
+    // 触发这一轮的那条用户消息（在问题之后的才算回答）：编号给协调助手，交决定时要带上
+    const lastUser = this.store.coordinator
+      .recentMessages(sessionId, 20)
+      .filter((m) => m.role === 'user')
+      .at(-1);
+    const answer = lastUser && lastUser.createdAt >= q.createdAt ? `用户最新这条消息的编号是 ${lastUser.id}（交决定时 userMessageId 填它）。\n` : '';
     return (
       `当前在等用户回答的问题 ${q.id}：「${q.text.slice(0, 300)}」\n` +
+      answer +
       q.items.map((i) => `- ${i.ref}：${i.label}（建议 ${i.decision}${i.hunkIds ? `，块 ${i.hunkIds.join('、')}` : ''}）`).join('\n') +
       '\n用户的话如果是在回答它：读懂整句再决定。明确同意或拒绝时用 resolve_approvals（带上用户消息编号和表示决定的原话，可以只处理其中几项）；' +
       '是在追问或意思不清楚时先回答 / 追问一句，问题继续挂着；他只说「继续」「可以」而对象不明确时问清楚，不要猜。问题之外的新事项排在后面。'

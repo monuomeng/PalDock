@@ -52,7 +52,7 @@ function prepare(name: string): void {
 }
 
 /** 和桌面一样 fork 本地服务子进程并连上 IPC。 */
-async function boot(): Promise<Running> {
+async function boot(options: { autoApprove?: boolean } = {}): Promise<Running> {
   const dataRoot = join(root, 'data');
   const ipcPath = createIpcPath(dataRoot);
   const token = createToken();
@@ -69,7 +69,7 @@ async function boot(): Promise<Running> {
   // 测试里由脚本代你批准执行器的请求（都在临时 worktree 里，例如写文件），批准次数记进报告
   const client: IpcClient = new IpcClient((e) => {
     events.push(e);
-    if (e.type === 'approval.requested') {
+    if (e.type === 'approval.requested' && options.autoApprove !== false) {
       approvals.push(e.payload.kind);
       void client.request('approval.decide', { approvalId: e.aggregateId, expectedVersion: 0, decision: 'allow_once' }).catch(() => {});
     }
@@ -275,6 +275,92 @@ describe.skipIf(process.env.PALDOCK_LIVE_P3 !== '1')('P3 真实执行器', () =>
     expect(tasks).toHaveLength(0);
   });
 
+  it('在发起的对话里找你批（0.3.8）：真实 Claude 测试助手读项目外两张图，追问一次；回答时来了推送请求；「第一张可以」只放行第一张、第二张仍待决、没有推送', { timeout: 60 * MINUTE }, async () => {
+    prepare('ask');
+    git(repo, 'config', 'user.name', 'tester');
+    git(repo, 'config', 'user.email', 't@t');
+    const remote = join(root, 'remote.git');
+    execFileSync('git', ['init', '-q', '--bare', remote]);
+    git(repo, 'remote', 'add', 'origin', remote);
+    git(repo, 'push', '-q', '-u', 'origin', 'main');
+    writeFileSync(join(repo, 'math.js'), '// 加法（本地新提交，还没推送）\nexport function add(a, b) {\n  return a + b;\n}\n');
+    git(repo, 'commit', '-q', '-am', '本地提交');
+    const remoteHead0 = execFileSync('git', ['-C', remote, 'rev-parse', 'main'], { encoding: 'utf8' }).trim();
+    // 项目外的两张参考图（1×1 PNG），运行前就有
+    const assets = join(root, 'assets');
+    mkdirSync(assets);
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    const imgA = join(assets, 'login-before.png');
+    const imgB = join(assets, 'login-after.png');
+    writeFileSync(imgA, png);
+    writeFileSync(imgB, png);
+
+    const s = await boot({ autoApprove: false });
+    const t0 = Date.now();
+    const workspace = await call(s, 'workspace.add', { rootPath: repo });
+    await call(s, 'agent.setOverride', { workspaceId: workspace.id, role: 'tester', executor: 'claude' });
+    const [chat] = await call(s, 'chat.sessions', { workspaceId: workspace.id });
+    const sessionId = chat!.sessionId;
+    const detail = () => call(s, 'chat.get', { sessionId, limit: 50 });
+    const assistantCount = async () => (await detail()).messages.filter((m) => m.role !== 'user').length;
+    // 你说一句话，等协调助手这一轮结束（多了一条回复）
+    const say = async (text: string, what: string) => {
+      const before = await assistantCount();
+      await call(s, 'chat.send', { sessionId, text, idempotencyKey: `ask-${Date.now()}` });
+      await until(async () => (await assistantCount()) > before && !(await detail()).wakes.some((w) => w.status === 'running' || w.status === 'pending'), what, 10 * MINUTE);
+    };
+    const timeline: { at: number; what: string }[] = [];
+    const mark = (what: string) => timeline.push({ at: Date.now() - t0, what });
+
+    await say('以后助手要读项目外的文件，你都先在这里问我，不要自己批。', '协调助手答应');
+    const plan = {
+      title: '比对登录页截图',
+      goal: '比对两张参考图',
+      nodes: [{ key: 't', role: 'tester', title: '比对截图', goal: `用 Read 工具读取这两张项目外的参考图：${imgA} 和 ${imgB}，说出它们各自的尺寸和颜色。只用 Read，不要用 shell，不要改任何文件。` }],
+    };
+    await say(`请直接调用 PalDock 的 propose_plan 工具提出下面这份计划，参数原样照抄，不要读代码、不要做别的，提完用一句话告诉我：\n${JSON.stringify(plan)}`, '提出计划');
+    const task = await until(async () => (await call(s, 'task.list', { limit: 20 })).find((t) => t.task.status === 'draft'), '计划', 5 * MINUTE);
+    await confirm(s, await call(s, 'task.get', { taskId: task.task.id })).catch(() => {});
+    mark('确认计划');
+    // 协调助手在原对话里问你（测试助手挂着等审批）
+    const q1 = await until(async () => (await detail()).questions.find((q) => q.status === 'open'), '协调助手发出问题', 15 * MINUTE);
+    mark(`协调助手发出问题（${q1.items.length} 项）`);
+    const questionText = q1.text;
+    // 追问
+    await say('图片在哪？', '回答追问');
+    const afterFollowUp = (await detail()).questions.find((q) => q.id === q1.id)!.status;
+    const answerToFollowUp = (await detail()).messages.filter((m) => m.role === 'assistant').at(-1)!.body;
+    mark('回答追问');
+    // 回答期间来了推送请求（同一个对话里你顺口一说）
+    await say('顺便把当前分支推送到 origin。', '推送请求');
+    const pushCard = (await detail()).gitOps.find((o) => o.kind === 'push');
+    const openAfterPush = (await detail()).questions.find((q) => q.status === 'open');
+    mark(`推送请求：卡片 ${pushCard ? pushCard.status : '没有'}，当前问题 ${openAfterPush?.id === q1.id ? '没变' : (openAfterPush?.id ?? '无')}`);
+    // 「第一张可以」
+    const q = (await detail()).questions.find((x) => x.status === 'open') ?? q1;
+    await say('第一张可以', '部分放行');
+    mark('部分放行');
+    await new Promise((r) => setTimeout(r, 5_000));
+    const final = await detail();
+    const replies = final.messages.filter((m) => m.role !== 'user').map((m) => `${m.role}: ${m.body.slice(0, 300)}`);
+    const pushAfter = final.gitOps.find((o) => o.kind === 'push');
+    const remoteHead = execFileSync('git', ['-C', remote, 'rev-parse', 'main'], { encoding: 'utf8' }).trim();
+    const questions = final.questions.map((x) => ({ id: x.id, author: x.author, status: x.status, text: x.text, items: x.items.map((i) => ({ ref: i.ref, label: i.label, decision: i.decision })), result: x.result }));
+    await shutdown(s);
+    const store = await openStore(join(root, 'data'));
+    const appr = store.db.all<{ id: string; summary: string; status: string; decided_via: string | null; question_id: string | null }>('SELECT id, summary, status, decided_via, question_id FROM approvals ORDER BY requested_at');
+    const audit = store.db.all<{ action: string; target: string; result: string }>(`SELECT action, target, result FROM audit_log WHERE action LIKE 'approval.%' ORDER BY id`);
+    store.close();
+    await report('ask-in-conversation', { totalMs: Date.now() - t0, timeline, questionText, afterFollowUp, answerToFollowUp, pushCard: pushAfter?.status ?? null, remoteMoved: remoteHead !== remoteHead0, questions, approvals: appr, audit, replies });
+    // 第一张放行、第二张仍待决（或者还没请求）、没有推送
+    const first = appr.find((a) => a.id === q.items[0]!.ref)!;
+    expect(first.status).toBe('approved');
+    expect(appr.filter((a) => a.summary.includes('login-after.png') && a.status === 'approved')).toHaveLength(0);
+    expect(afterFollowUp).toBe('open');
+    expect(remoteHead).toBe(remoteHead0);
+    expect(pushAfter?.status ?? 'proposed').not.toBe('done');
+  });
+
   it('只提交这次、只推送看过的（0.3.7）：同项目两个任务改同一文件的不同块（A 用 Codex、B 用 Claude），在 B 的对话里只提交 B，再推到临时远端；之后在 A 的对话里提交 A', { timeout: 60 * MINUTE }, async () => {
     prepare('scope');
     // 一个文件里两个相隔很远的函数：A 改上面那个，B 改下面那个
@@ -354,8 +440,7 @@ describe.skipIf(process.env.PALDOCK_LIVE_P3 !== '1')('P3 真实执行器', () =>
     expect(hunksA).toHaveLength(1);
     expect(hunksA[0]!.patch).toContain('Math.round(w * h)');
     // Codex 有时用 shell 命令改文件（没有 fileChange 写入记录）：那时 A 的块列出但不勾，宁可少勾（实测 3 次里 2 次如此）
-    const { writes } = JSON.parse(readFileSync(REPORT, 'utf8').trim().split('
-').at(-1)!) as { writes: { kind: string }[] };
+    const { writes } = JSON.parse(readFileSync(REPORT, 'utf8').trim().split('\n').at(-1)!) as { writes: { kind: string }[] };
     expect(hunksA[0]!.evidenced).toBe(writes.some((w) => w.kind === 'patch'));
   });
 
