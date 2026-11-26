@@ -101,6 +101,8 @@ export const CommandArgs = {
   'workspace.add': z.object({ rootPath: z.string().min(1).max(1000) }),
   /** 工作区方式：当前工作区（大家共用项目目录）/ 独立 worktree；只在桌面有入口。 */
   'workspace.setMode': z.object({ workspaceId: Id, expectedVersion: Version, mode: z.enum(['current', 'worktree']) }),
+  /** 切了分支暂停后：在新分支上继续，或取消这个项目里还没结束的计划任务。 */
+  'workspace.resume': z.object({ workspaceId: Id, action: z.enum(['continue', 'cancel']) }),
   /** 提交 / 推送 / 合并卡片：确认（提交卡片带勾选的改动块）或取消；只在桌面有入口。 */
   'gitop.decide': z.object({ opId: Id, expectedVersion: Version, decision: z.enum(['confirm', 'cancel']), hunkIds: z.array(z.string().max(50)).max(2000).optional() }),
   /** 远程审批等级只能在桌面修改：这条命令只在管理窗口里有入口，外部渠道没有对应命令。 */
@@ -201,6 +203,7 @@ export interface CommandResults {
   'workspace.list': WorkspaceRecord[];
   'workspace.add': WorkspaceRecord;
   'workspace.setMode': void;
+  'workspace.resume': void;
   'gitop.decide': void;
   'workspace.setRemoteApprovalLevel': void;
   'workspace.setPrepareCommand': void;

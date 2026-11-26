@@ -10,6 +10,8 @@
 export const currentWorkspaceSchema = /* sql */ `
 ALTER TABLE workspaces ADD COLUMN workspace_mode TEXT NOT NULL DEFAULT 'worktree' CHECK (workspace_mode IN ('current', 'worktree'));
 ALTER TABLE workspaces ADD COLUMN paused_reason TEXT;
+-- 你选「在新分支上继续」的时间：这之前的 Run 不再拿来核对分支
+ALTER TABLE workspaces ADD COLUMN resumed_at TEXT;
 ALTER TABLE merge_ops ADD COLUMN checked_at TEXT;
 
 CREATE TABLE run_snapshots (

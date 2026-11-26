@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { childEnv } from '@paldock/platform';
@@ -193,4 +193,26 @@ export function gitInput(cwd: string, args: readonly string[], input: string, en
     );
     child.stdin?.end(input);
   });
+}
+
+/** 仓库的 git 目录（项目本身是 worktree 时 `.git` 是指向 gitdir 的文件）。同步读，用于分支监视。 */
+export function gitDirOf(repo: string): string {
+  const dotGit = join(repo, '.git');
+  try {
+    const text = readFileSync(dotGit, 'utf8');
+    const match = /^gitdir:\s*(.+)$/m.exec(text);
+    if (match) return resolve(repo, match[1]!.trim());
+  } catch {
+    // .git 是目录
+  }
+  return dotGit;
+}
+
+/** HEAD 的内容（`ref: refs/heads/x` 或分离时的提交），同步读；读不到时为空串。 */
+export function readHeadRef(gitDir: string): string {
+  try {
+    return readFileSync(join(gitDir, 'HEAD'), 'utf8').trim();
+  } catch {
+    return '';
+  }
 }

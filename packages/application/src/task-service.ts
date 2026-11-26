@@ -160,6 +160,19 @@ export class TaskService {
     return record;
   }
 
+  /**
+   * 切了分支暂停后（只在桌面有入口）：continue 在新分支上继续（解除暂停，排队的接着跑；被中断的节点在任务页「重新开始」）；
+   * cancel 解除暂停并取消这个项目里还没结束的计划任务。
+   */
+  resumeWorkspace(workspaceId: string, action: 'continue' | 'cancel'): void {
+    if (!this.store.tasks.getWorkspace(workspaceId)) throw new CodedError('not_found', '项目不存在');
+    if (action === 'cancel') {
+      for (const taskId of this.store.plans.openPlanTasks()) if (this.store.tasks.getTask(taskId)?.workspaceId === workspaceId) this.cancelTask(taskId);
+    }
+    this.publish(this.store.tasks.setPaused(workspaceId, null).events);
+    this.deps.supervisor.kick();
+  }
+
   /** 工作区方式（只在桌面有入口）：当前工作区 / 独立 worktree。 */
   setWorkspaceMode(workspaceId: string, expectedVersion: number, mode: 'current' | 'worktree'): void {
     this.publish(this.store.tasks.setWorkspaceMode(workspaceId, expectedVersion, mode).events);

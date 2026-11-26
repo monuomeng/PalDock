@@ -26,6 +26,8 @@ export const P1_DEFAULTS = {
   checkOutputMaxBytes: 1024 * 1024,
   /** PalDock 生成的 worktree 分支前缀（统一小写）。 */
   branchPrefix: 'paldock/',
+  /** 分支保护：运行中每隔多久读一次 HEAD（fs.watch 之外的兜底）。 */
+  branchPollMs: 1000 as number,
 } as const;
 
 /**

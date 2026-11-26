@@ -58,6 +58,7 @@ export function createHandlers(
     'workspace.list': () => store.tasks.listWorkspaces(),
     'workspace.add': ({ rootPath }) => tasks.addWorkspace(rootPath),
     'workspace.setMode': ({ workspaceId, expectedVersion, mode }) => tasks.setWorkspaceMode(workspaceId, expectedVersion, mode),
+    'workspace.resume': ({ workspaceId, action }) => tasks.resumeWorkspace(workspaceId, action),
     'gitop.decide': async ({ opId, expectedVersion, decision, hunkIds }) => {
       await gitOps.decide(opId, expectedVersion, decision, hunkIds ?? []);
     },

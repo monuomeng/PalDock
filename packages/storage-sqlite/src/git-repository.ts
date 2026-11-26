@@ -65,6 +65,14 @@ export class GitRepository implements GitStorePort {
     return this.db.all<RunSnapshotRecord>(SQL.snapshotsSince, workspaceId, since);
   }
 
+  lastSnapshotOfTask(taskId: string): RunSnapshotRecord | undefined {
+    return this.db.get<RunSnapshotRecord>(
+      `SELECT ${SNAPSHOT.replace(/(^|, |\n\s*)(?=\w)/g, '$1n.')} FROM run_snapshots n JOIN runs r ON r.id = n.run_id JOIN subtasks s ON s.id = r.subtask_id
+        WHERE s.task_id = ? ORDER BY n.created_at DESC LIMIT 1`,
+      taskId,
+    );
+  }
+
   addWrite(input: Omit<RunWriteRecord, 'id' | 'createdAt'>): void {
     this.db.run(SQL.addWrite, input.runId, input.path, input.kind, input.detail.slice(0, 200_000), this.clock.iso());
   }

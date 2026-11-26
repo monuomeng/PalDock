@@ -17,7 +17,7 @@ const cols = (list: string) => (alias = '') =>
 export const COLUMNS = {
   workspace: cols(
     `id, name, root_path AS rootPath, remote_approval_level AS remoteApprovalLevel, prepare_command AS prepareCommand,
-     auto_policy AS autoPolicy, workspace_mode AS workspaceMode, paused_reason AS pausedReason, version`,
+     auto_policy AS autoPolicy, workspace_mode AS workspaceMode, paused_reason AS pausedReason, resumed_at AS resumedAt, version`,
   ),
   task: cols(
     `id, workspace_id AS workspaceId, title, goal, status, check_command AS checkCommand,

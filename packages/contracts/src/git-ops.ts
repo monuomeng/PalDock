@@ -66,6 +66,8 @@ export interface GitStorePort {
   snapshot(runId: string): RunSnapshotRecord | undefined;
   /** 项目里 since 之后开始的 Run 的快照（按时间）。 */
   snapshotsSince(workspaceId: string, since: string | null): RunSnapshotRecord[];
+  /** 同一任务里最近一次 Run 的快照（分支保护：每轮开始前核对分支）。 */
+  lastSnapshotOfTask(taskId: string): RunSnapshotRecord | undefined;
   addWrite(input: Omit<RunWriteRecord, 'id' | 'createdAt'>): void;
   writesOfRuns(runIds: readonly string[]): RunWriteRecord[];
   proposeOp(input: { workspaceId: string; sessionId: string | null; runId: string | null; request: GitOpRequest }): Change<GitOpRecord>;

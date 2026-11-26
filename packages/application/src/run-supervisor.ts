@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, watch, writeFileSync, type FSWatcher } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { AgentRole } from '@paldock/contracts';
 import type {
@@ -27,7 +27,7 @@ import type {
 } from '@paldock/contracts';
 import { checkCapability, isAutoApproved, isGitWrite, outOfScope, P1_DEFAULTS, taskKey } from '@paldock/domain';
 import { runCheck } from './check-runner.js';
-import { addWorktree, branchAndHead, branchCommit, changedFiles, commitStaged, headCommit, snapshotTree, stageAndDiffStat, treeChangedFiles, workingDiffStat } from './git.js';
+import { addWorktree, branchAndHead, branchCommit, changedFiles, commitStaged, gitDirOf, headCommit, readHeadRef, snapshotTree, stageAndDiffStat, treeChangedFiles, workingDiffStat } from './git.js';
 import { accessOf, runPolicy, worksInProject, type RunPolicy } from './project-policy.js';
 import { redact } from './redact.js';
 import { operationOf, riskOf } from './risk.js';
@@ -107,6 +107,8 @@ interface LiveRun {
   inProject: boolean;
   /** 在项目目录里干活时，开始时的工作区快照（tree）和分支、HEAD；结束快照记下后清掉 startTree 以外的部分。 */
   snapshot: { startTree: string; branch: string | null; head: string; ended: boolean } | undefined;
+  /** 分支保护：开始时 HEAD 的内容（`ref: refs/heads/x`）、git 目录、停止监视的函数；检测到切换后为真。 */
+  guard: { headRef: string; gitDir: string; stop: () => void; tripped: boolean } | undefined;
 }
 
 /** 角色会话池的键和池大小（角色的 maxConcurrency）。 */
@@ -160,6 +162,7 @@ export class RunSupervisor {
     this.queue.length = 0;
     await Promise.all(
       [...this.live.values()].map(async (live) => {
+        live.guard?.stop();
         this.flushOutput(live);
         live.check.abort();
         await live.handle?.dispose();
@@ -266,6 +269,11 @@ export class RunSupervisor {
       return this.track(run, running.record, task, running.record.role);
     });
     this.background(this.finishSucceeded(live, finalMessage));
+  }
+
+  /** 项目恢复写入后，把排着队的再推一次。 */
+  kick(): void {
+    queueMicrotask(() => this.dequeue());
   }
 
   /** 子任务有 Run 在执行或排队。 */
@@ -512,6 +520,7 @@ export class RunSupervisor {
       policy: { isolation: 'worktree', approval: 'worktree_auto' },
       inProject: false,
       snapshot: undefined,
+      guard: undefined,
       writeRequests: new Map(),
     };
     live.policy = this.policyOf(task, subtask, role, live.mode);
@@ -562,9 +571,88 @@ export class RunSupervisor {
    */
   private async startSnapshot(live: LiveRun, repo: string): Promise<void> {
     const { branch, head } = await branchAndHead(repo);
+    // 每轮开始前核对：同一任务上一轮在别的分支上，说明你中途切了分支，暂停，不在新分支上接着写
+    const previous = this.deps.store.git.lastSnapshotOfTask(live.task.id);
+    const resumedAt = this.deps.store.tasks.getWorkspace(live.task.workspaceId)?.resumedAt;
+    if (previous && previous.branch !== branch && !(resumedAt && previous.createdAt <= resumedAt)) {
+      const reason = `分支从 ${previous.branch ?? '分离 HEAD'} 变成了 ${branch ?? '分离 HEAD'}，已暂停这个项目的写入`;
+      this.publish(this.deps.store.tasks.setPaused(live.task.workspaceId, reason).events);
+      this.notifyBranch(live, reason, []);
+      throw new Error(reason);
+    }
+    if (!branch) throw new Error('当前是分离 HEAD：请先切到一个分支再让助手改');
     const startTree = await snapshotTree(repo, join(this.deps.dataRoot, 'tmp'));
     live.snapshot = { startTree, branch, head, ended: false };
     this.deps.store.git.startSnapshot({ runId: live.run.id, workspaceId: live.task.workspaceId, branch, head, startTree });
+    this.watchBranch(live, repo);
+  }
+
+  /**
+   * 分支保护（运行中）：监视 git 目录里的 HEAD（fs.watch 加每秒一次的轮询兜底，Windows 上 watch 可能漏事件）。
+   * 切了分支：暂停这个项目的写入，中止检查命令、中断这一轮并结束执行器的进程树（含正在跑的测试），列出这段时间变动的文件告诉你。
+   * 检测到之前已经启动的进程可能已经写了文件，无法撤销，只能报告。
+   */
+  private watchBranch(live: LiveRun, repo: string): void {
+    const gitDir = gitDirOf(repo);
+    const headRef = readHeadRef(gitDir);
+    const check = () => {
+      if (this.stopping || !live.guard || live.guard.tripped) return;
+      if (readHeadRef(gitDir) !== live.guard.headRef) this.branchChanged(live, repo);
+    };
+    let watcher: FSWatcher | undefined;
+    try {
+      watcher = watch(gitDir, (_event, file) => {
+        if (!file || String(file) === 'HEAD') check();
+      });
+      watcher.on('error', () => {});
+    } catch {
+      // 监视不了就只靠轮询
+    }
+    const timer = setInterval(check, this.limits.branchPollMs ?? 1000);
+    timer.unref();
+    live.guard = { headRef, gitDir, tripped: false, stop: () => (clearInterval(timer), watcher?.close()) };
+  }
+
+  /** 核对点（审批放行前、取证时）：分支变了就按切换处理。返回真表示已经变了。 */
+  private branchMoved(live: LiveRun): boolean {
+    if (!live.guard || !live.worktree) return false;
+    if (!live.guard.tripped && readHeadRef(live.guard.gitDir) !== live.guard.headRef) this.branchChanged(live, live.worktree);
+    return live.guard.tripped;
+  }
+
+  private branchChanged(live: LiveRun, repo: string): void {
+    const guard = live.guard!;
+    guard.tripped = true;
+    const now = readHeadRef(guard.gitDir);
+    const name = (ref: string) => ref.replace(/^ref: refs\/heads\//, '') || '（读不到）';
+    const reason = `分支从 ${name(guard.headRef)} 变成了 ${name(now)}，已暂停这个项目的写入`;
+    const detectedAt = Date.now();
+    this.publish(this.deps.store.tasks.setPaused(live.task.workspaceId, reason).events);
+    this.publish([this.deps.store.runs.addNotice(live.run.id, 'branch_changed', reason)]);
+    live.check.abort();
+    void live.handle?.cancel().catch(() => {});
+    // 中断不一定能让执行器马上停：稍后结束整棵进程树
+    setTimeout(() => void live.handle?.dispose().catch(() => {}), 2000).unref();
+    // 这段时间变动的文件（含切换后已经写进去的，无法撤销）
+    const start = live.snapshot?.startTree;
+    // 记进进行中的收尾：退出时等它做完，免得在数据库关闭后写入
+    this.background(
+      (async () => {
+        const changed = start ? await treeChangedFiles(repo, start, await snapshotTree(repo, join(this.deps.dataRoot, 'tmp'))).catch(() => []) : [];
+        if (this.stopping) return;
+        this.deps.log(`branch changed for run ${live.run.id} after ${Date.now() - detectedAt}ms; changed files: ${changed.join(', ')}`);
+        this.notifyBranch(live, reason, changed);
+      })(),
+    );
+  }
+
+  /** 在这个项目的主会话里留一条通知（桌面「待我处理」和对话里都看得到，没人看时按规则发到手机）。 */
+  private notifyBranch(live: LiveRun, reason: string, changed: readonly string[]): void {
+    const session = this.deps.store.coordinator.mainSessions(live.task.workspaceId)[0];
+    if (!session) return;
+    const files = changed.length > 0 ? `\n这段时间工作区里变动的文件（切换前后都有可能，已经写入的无法撤销）：\n${changed.slice(0, 50).map((f) => `- ${f}`).join('\n')}` : '';
+    const body = `${reason}。正在跑的执行已中断（含测试）。请在「项目」页选择「在新分支上继续」或「取消」。${files}`;
+    this.publish(this.deps.store.coordinator.addNotice({ sessionId: session.sessionId, runId: live.run.id, kind: 'info', body }).events);
   }
 
   /** 结束快照（取证时、或 Run 结束时）；返回这段时间改动的文件。 */
@@ -668,6 +756,8 @@ export class RunSupervisor {
     // 都是要越过沙箱的，照旧审批；不认识的执行器同样按越过沙箱对待。规则见 domain 的 classifyCommand / isAutoApproved。
     // 协调助手的对话 Run 不自动放行。每次记一条审计。
     // 项目设置（2026-11-26 已定）：只读时写文件一律拒绝；审批严格度决定哪些由宿主直接放行。直接在项目目录里改时，工作目录就是项目目录。
+    // 审批放行前核对分支：变了就不放行
+    if (this.branchMoved(live)) return this.reply(live, request.nativeRequestId, 'deny');
     if (live.worktree) {
       const operation = operationOf(request, live.worktree);
       const actor = `run:${live.run.id}`;
@@ -743,6 +833,7 @@ export class RunSupervisor {
   /** 让出并发名额（Run 与证据收集都结束后调用一次）。 */
   private release(live: LiveRun): void {
     this.deps.mcp?.gateway.revoke(live.run.id);
+    live.guard?.stop();
     // 没取证的 Run（单人主会话、审阅、失败的）也记下结束快照，提交时据此找「这次的改动」
     if (live.snapshot && !live.snapshot.ended && live.worktree) {
       this.background(this.endSnapshot(live, live.worktree).then(() => undefined).catch((error) => this.deps.log(`end snapshot ${live.run.id} failed: ${errorText(error)}`)));
@@ -792,7 +883,7 @@ export class RunSupervisor {
   /** 中断：用户要求的算取消，否则阻塞等用户选择恢复、重新开始或放弃。 */
   private finishInterrupted(live: LiveRun, reason: string): void {
     if (live.cancelRequested) this.finish(live, 'cancelled', 'cancelled', CANCELLED);
-    else this.finish(live, 'interrupted', 'blocked', reason);
+    else this.finish(live, 'interrupted', 'blocked', live.guard?.tripped ? '分支变了，已暂停' : reason);
   }
 
   /** 失败：用户已要求取消的仍记为取消，否则阻塞。 */
@@ -857,6 +948,8 @@ export class RunSupervisor {
     const base: Omit<NewRunResult, 'checkStatus'> = this.resultBase(live, finalMessage, inProject ? await workingDiffStat(worktree) : await stageAndDiffStat(worktree, baseCommit));
     let check: { command: TaskRecord['checkCommand']; confirmed: boolean } = { command: live.task.checkCommand, confirmed: live.task.checkConfirmedAt !== null };
     if (inProject) {
+      // 取证时核对分支（变了照样记下改动，但项目已暂停）
+      this.branchMoved(live);
       base.commitSha = null;
       if (node) {
         const parsed = AgentRole.safeParse(live.subtask.role);

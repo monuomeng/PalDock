@@ -27,6 +27,8 @@ class FakeRuntime implements RuntimeAdapter {
   /** 为真时审阅 Run 先不交结论，放进 held，由测试调用。 */
   holdReviews = false;
   readonly held: (() => void)[] = [];
+  /** 被中断的工作 Run（分支保护测试看「哪些进程实际停止了」）。 */
+  readonly cancelled: FakeRun[] = [];
   constructor(private readonly approve: (token: string) => void) {}
 
   async discover() {
@@ -64,7 +66,16 @@ class FakeRuntime implements RuntimeAdapter {
         else finish();
       }
     });
-    return { cancel: async () => {}, respondApproval: () => {}, dispose: async () => {} };
+    return {
+      cancel: async () => {
+        if (run.ended) return;
+        run.ended = true;
+        this.cancelled.push(run);
+        onEvent({ type: 'interrupted' });
+      },
+      respondApproval: () => {},
+      dispose: async () => {},
+    };
   }
 
   async checkTurn() {
@@ -410,3 +421,42 @@ describe('当前工作区方式（默认在当前仓库协作，2026-11-26 已�
 function subtaskWorktrees(taskId: string): (string | null)[] {
   return store.tasks.listSubtasks(taskId).map((s) => s.worktreePath);
 }
+
+describe('分支保护（默认在当前仓库协作，2026-11-26 已定）', () => {
+  it('执行中你在 IDE 里切了分支：中断这一轮（含正在跑的进程）、暂停项目写入、记下原因；在新分支上继续后接着跑', async () => {
+    await setup();
+    const ws = store.tasks.getWorkspace(workspaceId)!;
+    store.tasks.setWorkspaceMode(ws.id, ws.version, 'current');
+    const taskId = await confirmPlan([{ key: 'a', paths: ['src'] }, { key: 'b', paths: ['src'] }]);
+    const a = await started('做 a');
+    // 助手写到一半，你切了分支
+    writeFileSync(join(repo, 'src-half.txt'), 'half\n');
+    git(repo, 'checkout', '-q', '-b', 'other');
+    await until(() => node(taskId, 'a').status, (s) => s === 'blocked', 'a 被中断');
+    expect(node(taskId, 'a').statusReason).toBe('分支变了，已暂停');
+    expect(runtime.cancelled).toContain(a);
+    expect(store.tasks.getWorkspace(workspaceId)!.pausedReason).toMatch(/分支从 main 变成了 other/);
+    // 暂停期间 b 不开始
+    await new Promise((r) => setTimeout(r, 200));
+    expect(runtime.work('做 b')).toBeUndefined();
+    // 你选「在新分支上继续」：b 在 other 上开始
+    tasks.resumeWorkspace(workspaceId, 'continue');
+    const b = await started('做 b');
+    expect(b.request.cwd).toBe(repo);
+    expect(store.tasks.getWorkspace(workspaceId)!.pausedReason).toBeNull();
+    b.succeed({ 'src/b.ts': 'b\n' });
+    await until(() => node(taskId, 'b').status, (s) => s === 'succeeded', 'b 完成');
+  });
+
+  it('分离 HEAD 时不开始在项目目录里改', async () => {
+    await setup();
+    const ws = store.tasks.getWorkspace(workspaceId)!;
+    store.tasks.setWorkspaceMode(ws.id, ws.version, 'current');
+    git(repo, 'checkout', '-q', '--detach');
+    const taskId = await confirmPlan([{ key: 'a', paths: ['src'] }]);
+    await until(() => node(taskId, 'a').status, (s) => s === 'blocked', 'a 没开始');
+    expect(node(taskId, 'a').statusReason).toMatch(/分离 HEAD/);
+    expect(runtime.runs).toHaveLength(0);
+    logs.length = 0;
+  });
+});

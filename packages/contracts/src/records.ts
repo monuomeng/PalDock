@@ -48,6 +48,8 @@ export interface WorkspaceRecord {
   workspaceMode: 'current' | 'worktree';
   /** 切了分支等原因暂停了写入（为空表示没暂停）。 */
   pausedReason: string | null;
+  /** 上次解除暂停（在新分支上继续）的时间。 */
+  resumedAt: string | null;
   version: number;
 }
 

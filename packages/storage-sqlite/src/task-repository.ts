@@ -185,7 +185,11 @@ export class TaskRepository implements TaskStorePort {
 
   setPaused(id: string, reason: string | null): Change<WorkspaceRecord> {
     return this.db.transaction(() => {
-      const row = this.db.get<WorkspaceRow>(`UPDATE workspaces SET paused_reason = ?, version = version + 1 WHERE id = ? RETURNING ${COLUMNS.workspace()}`, reason, id);
+      const row = this.db.get<WorkspaceRow>(`UPDATE workspaces SET paused_reason = ?1, resumed_at = CASE WHEN ?1 IS NULL THEN ?3 ELSE resumed_at END, version = version + 1 WHERE id = ?2 RETURNING ${COLUMNS.workspace()}`,
+        reason,
+        id,
+        this.clock.iso(),
+      );
       if (!row) throw new CodedError('not_found', '项目不存在');
       const record = toWorkspace(row);
       return { record, events: [this.events.append(id, { type: 'workspace.mode_changed', payload: { mode: record.workspaceMode, pausedReason: reason } })] };
