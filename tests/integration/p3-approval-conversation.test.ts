@@ -601,6 +601,44 @@ describe('提交块限定在卡片和问题范围内（0.3.9）', () => {
     expect(gitCalls).toEqual([`${card.id}:confirm:1:0`]);
   });
 
+  /** 问题冻结 A、B 两块，你回「确认提交」。 */
+  async function twoBlockQuestion() {
+    say('提交这次的改动');
+    const t1 = await coordinatorTurn(1);
+    const card = proposeCommitCard();
+    const { questionId } = tools(t1).call('suggest_decision', { text: '提交「加一行」（两块 0:0、1:0）？', items: [{ ref: card.id, decision: 'confirm', hunkIds: ['0:0', '1:0'] }] }) as { questionId: string };
+    t1.succeed('');
+    const msg = say('确认提交');
+    const t2 = await coordinatorTurn(2);
+    return { card, questionId, msg, t2 };
+  }
+
+  it('预览 A+B、你回「确认提交」：派发 A+B（和点「按建议处理」结果一样）', async () => {
+    await setup();
+    const { card, questionId, msg, t2 } = await twoBlockQuestion();
+    await tools(t2).async('resolve_approvals', { questionId, items: [{ ref: card.id, decision: 'confirm' }], userMessageId: msg, decisionQuote: '确认提交' });
+    t2.succeed('');
+    expect(gitCalls).toEqual([`${card.id}:confirm:0:0,1:0`]);
+  });
+
+  it('同一预览点「按建议处理」：派发的集合和文字「确认提交」一样（A+B）', async () => {
+    await setup();
+    const { card, questionId, t2 } = await twoBlockQuestion();
+    t2.succeed('');
+    const q = store.questions.get(questionId)!;
+    await conversation.decideByButton(q.id, q.version, 'accept', undefined, 'desktop');
+    expect(gitCalls).toEqual([`${card.id}:confirm:0:0,1:0`]);
+  });
+
+  it('同一预览下助手只传 A：不执行，旧问题停止，Git 调用 0', async () => {
+    await setup();
+    const { card, questionId, msg, t2 } = await twoBlockQuestion();
+    await expect(tools(t2).async('resolve_approvals', { questionId, items: [{ ref: card.id, decision: 'confirm', hunkIds: ['0:0'] }], userMessageId: msg, decisionQuote: '确认提交' })).rejects.toThrow(/不一样.*整组/);
+    expect(store.questions.get(questionId)).toMatchObject({ status: 'void', result: expect.stringContaining('已改选') });
+    t2.succeed('');
+    expect(gitCalls).toEqual([]);
+  });
+
   it('服务重启后：同一条消息对同一个问题交过的决定（被拒的也算）不再执行', async () => {
     await setup();
     const tester = await startTester();

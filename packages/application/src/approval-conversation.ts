@@ -335,6 +335,15 @@ export class ApprovalConversation {
       if (i.hunkIds && !item.hunkIds) throw new CodedError('bad_request', `${i.ref} 不是提交卡片`);
       // 提交块只能是问题里列给用户看过的那些（0.3.9）；「只提交第二块」就只提交那一块
       const unseen = (i.hunkIds ?? []).filter((h) => !item.hunkIds!.includes(h));
+      // 确认时只执行问题冻结的整组块（0.3.11）：交上来的块和冻结集合不一样（多一块或少一块）都不执行，改选后重新问
+      const differs = !!i.hunkIds && i.decision === 'confirm' && (i.hunkIds.length !== item.hunkIds!.length || unseen.length > 0 || new Set(i.hunkIds).size !== i.hunkIds.length);
+      if (differs && unseen.length === 0) {
+        this.deps.publish(store.questions.close(q.id, q.version, 'void', `已改选：交上来的块（${i.hunkIds!.join('、')}）和问题里的（${item.hunkIds!.join('、')}）不一样，旧问题停止执行`, []).events);
+        throw new CodedError(
+          'conflict',
+          `交上来的块（${i.hunkIds!.join('、')}）和问题里冻结的（${item.hunkIds!.join('、')}）不一样：确认只会提交问题里的整组块。旧问题已停止执行、什么都没提交；用户要改选的话请用 suggest_decision 重新问`,
+        );
+      }
       if (unseen.length > 0) {
         // 用户改选了要提交的块（例如问题只含第一块，他说「提交第二块」）：旧问题停止执行，这条回复不能再拿去确认旧问题里的块；
         // 按他的新选择重新问，等他确认新问题后才提交（宿主不需要理解整句话，只要让旧问题不再执行）
@@ -364,7 +373,8 @@ export class ApprovalConversation {
     const results: string[] = [];
     for (const i of input.items) {
       const item = byRef.get(i.ref)!;
-      results.push(await this.execute(item, i.decision, i.hunkIds ?? item.hunkIds, via, session.workspaceId));
+      // 提交用宿主保存的冻结集合（和按钮同一个结果），不用协调助手传来的
+      results.push(await this.execute(item, i.decision, item.hunkIds, via, session.workspaceId));
       store.audit.append(`run:${runId}`, 'approval.conversation', item.label.slice(0, 200), JSON.stringify({ question: q.id, message: message.id, quote: quote.slice(0, 200), via, decision: i.decision }).slice(0, 500));
     }
     const remaining = q.items.filter((i) => !decided.includes(i.ref) && this.isPending(i.ref, i.kind)).map((i) => `${i.ref}：${i.label}`);
