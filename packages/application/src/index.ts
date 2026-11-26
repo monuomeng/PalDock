@@ -16,3 +16,4 @@ export * from './task-service.js';
 export * from './channels/index.js';
 export * from './role-sessions.js';
 export * from './git-ops.js';
+export * from './attribution.js';

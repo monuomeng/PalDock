@@ -445,8 +445,11 @@ describe('Codex 复审的修复（0.3.5）', () => {
     expect(g.request.cwd).toBe(repo());
     expect(await g.ask({ kind: 'command', command: 'git commit -am "顺手提交"' })).toBe('deny');
     expect(await g.ask({ kind: 'command', command: 'git push origin HEAD' })).toBe('deny');
+    // 暂存区也是你的（0.3.7）：git add / rm / restore --staged / reset 都拒绝
+    for (const command of ['git add -A', 'git add src/a.ts', 'git rm --cached a', 'git restore --staged a', 'git reset HEAD a', 'git update-index --add a'])
+      expect(await g.ask({ kind: 'command', command })).toBe('deny');
     expect(await g.ask({ kind: 'command', command: 'node --test' })).toBe('allow_once');
-    expect(store.db.all<{ result: string }>(`SELECT result FROM audit_log WHERE result = 'deny:git_write'`)).toHaveLength(2);
+    expect(store.db.all<{ result: string }>(`SELECT result FROM audit_log WHERE result = 'deny:git_write'`)).toHaveLength(8);
     g.succeed();
     (await until(() => runtime.runs[1], (r) => r !== undefined, '第二个')).succeed();
   });

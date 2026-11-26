@@ -216,3 +216,22 @@ export function readHeadRef(gitDir: string): string {
     return '';
   }
 }
+
+/**
+ * 暂存区（真实索引）的 tree：先把索引复制一份再 write-tree，不动你的索引文件（0.3.7，暂存区保护）。
+ * 有未解决的合并冲突时 write-tree 会失败：照实抛出，调用方不能把它当成「暂存区没变」。
+ */
+export async function indexTree(repo: string, scratchDir: string): Promise<string> {
+  const gitDir = resolve(repo, (await git(repo, ['rev-parse', '--git-dir'])).trim());
+  mkdirSync(scratchDir, { recursive: true });
+  const index = join(scratchDir, `index-copy-${randomUUID()}`);
+  try {
+    if (existsSync(join(gitDir, 'index'))) copyFileSync(join(gitDir, 'index'), index);
+    return (await git(repo, ['write-tree'], 60_000, { GIT_INDEX_FILE: index })).trim();
+  } catch (error) {
+    const detail = error instanceof GitError ? error.stderr.split('\n')[0] : String(error);
+    throw new Error(`读不出暂存区（git write-tree 失败：${detail}），可能有未解决的合并冲突`);
+  } finally {
+    rmSync(index, { force: true });
+  }
+}

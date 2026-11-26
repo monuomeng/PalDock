@@ -418,6 +418,47 @@ describe('当前工作区方式（默认在当前仓库协作，2026-11-26 已�
   });
 });
 
+describe('暂存区保护（0.3.7）', () => {
+  const setCurrent = () => {
+    const ws = store.tasks.getWorkspace(workspaceId)!;
+    store.tasks.setWorkspaceMode(ws.id, ws.version, 'current');
+  };
+
+  it('这一轮里暂存区变了（执行器沙箱里绕过拦截的 git add）：结束时暂停项目、记下通知，不自动恢复', async () => {
+    await setup();
+    setCurrent();
+    await confirmPlan([{ key: 'a', paths: ['src'] }]);
+    const a = await started('做 a');
+    writeFileSync(join(repo, 'staged-by-agent.txt'), 'x\n');
+    git(repo, 'add', 'staged-by-agent.txt');
+    a.succeed({ 'src/a.ts': 'a\n' });
+    await until(() => store.tasks.getWorkspace(workspaceId)!.pausedReason, (r) => r !== null, '暂停');
+    expect(store.tasks.getWorkspace(workspaceId)!.pausedReason).toMatch(/暂存区变了（staged-by-agent.txt）/);
+    // 不自动恢复：还在暂存区里
+    expect(git(repo, 'diff', '--cached', '--name-only')).toBe('staged-by-agent.txt');
+  });
+
+  it('有未解决的合并冲突（git write-tree 失败）：不开始这一轮，原因照实写明，不当成「暂存区没变」', async () => {
+    await setup();
+    setCurrent();
+    git(repo, 'checkout', '-q', '-b', 'side');
+    writeFileSync(join(repo, 'README.md'), 'side\n');
+    git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-am', 'side');
+    git(repo, 'checkout', '-q', 'main');
+    writeFileSync(join(repo, 'README.md'), 'main\n');
+    git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-am', 'main');
+    expect(() => git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'merge', 'side')).toThrow();
+    const taskId = await confirmPlan([{ key: 'a', paths: ['src'] }]);
+    const reason = await until(
+      () => store.tasks.listSubtasks(taskId)[0]!.statusReason,
+      (r) => r !== null && /暂存区/.test(r),
+      '节点停下并写明原因',
+    );
+    expect(reason).toMatch(/读不出暂存区（git write-tree 失败/);
+    expect(runtime.runs).toHaveLength(0);
+  });
+});
+
 function subtaskWorktrees(taskId: string): (string | null)[] {
   return store.tasks.listSubtasks(taskId).map((s) => s.worktreePath);
 }

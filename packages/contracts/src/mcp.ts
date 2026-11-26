@@ -78,13 +78,21 @@ export const MCP_TOOLS = {
   propose_commit: {
     roles: COORDINATOR,
     description:
-      '用户说「提交」时用：提出一张提交卡片，列出助手上次提交之后改的改动块（有写入记录的默认勾选），用户在桌面上勾选、确认后由 PalDock 提交到当前分支。' +
-      '只在「当前工作区」方式的项目里可用。不要自己运行 git commit。',
-    args: z.object({ message: z.string().trim().min(1).max(2000).describe('提交说明') }).strict(),
+      '用户说「提交」时用：提出一张提交卡片，只列这个对话发起的任务（或 taskId 指定的那个任务）还没提交的改动块，' +
+      '每一行都能和助手的写入记录核对上的块默认勾选；用户在桌面上勾选、确认后由 PalDock 提交到当前分支。' +
+      '用户说「只提交某个任务」时填 taskId；只有用户明确说要看整个项目的改动时才填 wholeProject。只在「当前工作区」方式的项目里可用。不要自己运行 git commit。',
+    args: z
+      .object({
+        message: z.string().trim().min(1).max(2000).describe('提交说明'),
+        taskId: z.string().min(1).max(100).optional().describe('只提交这个任务的改动（必须是这个对话发起的任务）'),
+        wholeProject: z.boolean().optional().describe('用户明确要求看整个项目的改动时才填 true'),
+      })
+      .strict(),
   },
   propose_push: {
     roles: COORDINATOR,
-    description: '用户说「推送」时用：提出一张推送卡片（远端、远端分支、要推的提交），用户确认后由 PalDock 推送当前分支，不强推。不要自己运行 git push。',
+    description:
+      '用户说「推送」时用：提出一张推送卡片（实际推送地址、远端分支、要推的提交），用户确认后由 PalDock 推送预览时的那个提交，远端变了就作废，不强推。不要自己运行 git push。',
     args: z
       .object({
         remote: z.string().trim().min(1).max(100).optional().describe('远端名，缺省为当前分支的上游远端或 origin'),

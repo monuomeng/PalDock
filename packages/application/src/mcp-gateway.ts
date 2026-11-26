@@ -161,7 +161,10 @@ export class McpGateway {
         if (!gitOps) throw new CodedError('unavailable', '提交 / 推送 / 合并功能未启用');
         const card =
           tool === 'propose_commit'
-            ? gitOps.proposeCommit(caller.runId, (args as McpToolArgs<'propose_commit'>).message)
+            ? gitOps.proposeCommit(caller.runId, (args as McpToolArgs<'propose_commit'>).message, {
+                ...((args as McpToolArgs<'propose_commit'>).taskId ? { taskId: (args as McpToolArgs<'propose_commit'>).taskId! } : {}),
+                wholeProject: (args as McpToolArgs<'propose_commit'>).wholeProject ?? false,
+              })
             : tool === 'propose_push'
               ? gitOps.proposePush(caller.runId, (args as McpToolArgs<'propose_push'>).remote, (args as McpToolArgs<'propose_push'>).branch)
               : gitOps.proposeMerge(caller.runId, (args as McpToolArgs<'propose_merge'>).source, (args as McpToolArgs<'propose_merge'>).target);

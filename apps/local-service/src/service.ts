@@ -116,7 +116,14 @@ export class LocalService {
       };
       // 计划用例依赖调度器，调度器依赖带这个网关的监管器：propose_plan 的后端延后取
       let plans: PlanService | undefined;
-      const gitOps = new GitOpsService({ store, dataRoot, publish, log });
+      const gitOps = new GitOpsService({
+        store,
+        dataRoot,
+        publish,
+        log,
+        indexChanged: (workspaceId) => void service.supervisor?.rebaseIndex(workspaceId).catch(() => {}),
+        kick: () => service.supervisor?.kick(),
+      });
       service.mcp = new McpGateway({ store, publish, plans: () => plans, coordinator: () => service.coordinator, gitOps: () => gitOps });
       service.supervisor = new RunSupervisor({
         store,
@@ -135,6 +142,7 @@ export class LocalService {
         publish,
         publishEphemeral: (event) => service.broadcastEphemeral(event),
         log,
+        gitOps: () => gitOps,
         ...(options.limits ? { limits: options.limits } : {}),
       });
       service.scheduler = new TaskGraphScheduler({ store, supervisor: service.supervisor, publish, log });

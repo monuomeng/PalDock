@@ -61,6 +61,8 @@ export interface RuntimeWrite {
   path: string;
   kind: 'patch' | 'replace' | 'content';
   detail: string;
+  /** 写之前文件的摘要；undefined 表示由宿主在批准时现读（Claude 的写入请求）；null 表示不知道（Codex 事后报告）。 */
+  beforeHash?: string | null;
 }
 
 export interface RuntimeApprovalRequest {

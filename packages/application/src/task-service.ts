@@ -169,6 +169,10 @@ export class TaskService {
     if (action === 'cancel') {
       for (const taskId of this.store.plans.openPlanTasks()) if (this.store.tasks.getTask(taskId)?.workspaceId === workspaceId) this.cancelTask(taskId);
     }
+    // 暂存区卡片还开着：在项目页选了继续 / 取消，就算保留现在的暂存区
+    for (const op of this.store.git.openOps(workspaceId)) {
+      if (op.kind === 'index') this.publish(this.store.git.finishOp(op.id, op.version, 'cancelled', '你在「项目」页选了继续，保留了现在的暂存区').events);
+    }
     this.publish(this.store.tasks.setPaused(workspaceId, null).events);
     this.deps.supervisor.kick();
   }

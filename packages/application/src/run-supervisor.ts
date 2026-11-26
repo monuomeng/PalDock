@@ -1,4 +1,4 @@
-import { mkdirSync, watch, writeFileSync, type FSWatcher } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, watch, writeFileSync, type FSWatcher } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { AgentRole } from '@paldock/contracts';
 import type {
@@ -25,9 +25,26 @@ import type {
   TaskRecord,
   TurnCheck,
 } from '@paldock/contracts';
-import { checkCapability, isAutoApproved, isGitWrite, outOfScope, P1_DEFAULTS, taskKey } from '@paldock/domain';
+import { checkCapability, isAutoApproved, isGitWrite, outOfScope, P1_DEFAULTS, taskKey, toLf } from '@paldock/domain';
+import { contentDigest } from './attribution.js';
+import type { GitOpsService } from './git-ops.js';
 import { runCheck } from './check-runner.js';
-import { addWorktree, branchAndHead, branchCommit, changedFiles, commitStaged, gitDirOf, headCommit, readHeadRef, snapshotTree, stageAndDiffStat, treeChangedFiles, workingDiffStat } from './git.js';
+import {
+  addWorktree,
+  branchAndHead,
+  branchCommit,
+  changedFiles,
+  commitStaged,
+  git,
+  gitDirOf,
+  headCommit,
+  indexTree,
+  readHeadRef,
+  snapshotTree,
+  stageAndDiffStat,
+  treeChangedFiles,
+  workingDiffStat,
+} from './git.js';
 import { accessOf, runPolicy, worksInProject, type RunPolicy } from './project-policy.js';
 import { redact } from './redact.js';
 import { operationOf, riskOf } from './risk.js';
@@ -56,6 +73,8 @@ export interface SupervisorDeps {
   publishEphemeral(event: EphemeralEvent): void;
   log(message: string): void;
   limits?: Partial<Limits>;
+  /** 提交 / 推送 / 合并卡片（暂存区保护在 Run 结束时提出「保留 / 恢复」卡片）；缺省时只暂停、不出卡片（测试）。 */
+  gitOps?: () => GitOpsService | undefined;
 }
 
 /** 一次 Run 的提示词与原生会话：续做或退回重做时沿用 thread，重新开始时不带。 */
@@ -106,7 +125,7 @@ interface LiveRun {
   /** 这次 Run 在项目目录里干活（同一项目同一时刻只有一个）。 */
   inProject: boolean;
   /** 在项目目录里干活时，开始时的工作区快照（tree）和分支、HEAD；结束快照记下后清掉 startTree 以外的部分。 */
-  snapshot: { startTree: string; branch: string | null; head: string; ended: boolean } | undefined;
+  snapshot: { startTree: string; branch: string | null; head: string; ended: boolean; index: string } | undefined;
   /** 分支保护：开始时 HEAD 的内容（`ref: refs/heads/x`）、git 目录、停止监视的函数；检测到切换后为真。 */
   guard: { headRef: string; gitDir: string; stop: () => void; tripped: boolean } | undefined;
 }
@@ -320,7 +339,10 @@ export class RunSupervisor {
     for (const write of writes) {
       const path = relative(live.worktree, resolve(live.worktree, write.path));
       if (!path || path.startsWith('..') || isAbsolute(path)) continue;
-      this.deps.store.git.addWrite({ runId: live.run.id, path: path.split(sep).join('/'), kind: write.kind, detail: write.detail });
+      // 整文件写入：记下写之前文件的样子，重放时据此确认助手是在它看到的内容上写的（期间有人改过就不算证据）
+      const full = join(live.worktree, path);
+      const beforeHash = write.kind === 'content' && write.beforeHash === undefined ? (existsSync(full) ? contentDigest(toLf(readFileSync(full, 'utf8'))) : 'absent') : (write.beforeHash ?? null);
+      this.deps.store.git.addWrite({ runId: live.run.id, path: path.split(sep).join('/'), kind: write.kind, detail: write.detail, beforeHash });
     }
   }
 
@@ -581,8 +603,12 @@ export class RunSupervisor {
       throw new Error(reason);
     }
     if (!branch) throw new Error('当前是分离 HEAD：请先切到一个分支再让助手改');
+    // 暂存区保护（0.3.7）：记下开始时的暂存区；读不出来（比如有未解决的合并冲突）就不开始，不能当成「没变」
+    const index = await indexTree(repo, join(this.deps.dataRoot, 'tmp')).catch((error: unknown) => {
+      throw new Error(`${errorText(error)}；没法核对暂存区，先解决之后再让助手改`);
+    });
     const startTree = await snapshotTree(repo, join(this.deps.dataRoot, 'tmp'));
-    live.snapshot = { startTree, branch, head, ended: false };
+    live.snapshot = { startTree, branch, head, ended: false, index };
     this.deps.store.git.startSnapshot({ runId: live.run.id, workspaceId: live.task.workspaceId, branch, head, startTree });
     this.watchBranch(live, repo);
   }
@@ -661,7 +687,40 @@ export class RunSupervisor {
     live.snapshot.ended = true;
     const endTree = await snapshotTree(repo, join(this.deps.dataRoot, 'tmp'));
     this.deps.store.git.endSnapshot(live.run.id, endTree);
+    await this.checkIndex(live, repo);
     return treeChangedFiles(repo, live.snapshot.startTree, endTree);
+  }
+
+  /**
+   * 暂存区保护（0.3.7）：这一轮结束时暂存区和开始时不一样（助手 git add 了、执行器沙箱里绕过了拦截，或你同时暂存了），
+   * 暂停这个项目，提出「保留 / 恢复」卡片，默认不自动恢复。读不出暂存区时也暂停并照实说明，不当成「没变」。
+   */
+  private async checkIndex(live: LiveRun, repo: string): Promise<void> {
+    const before = live.snapshot!.index;
+    let after: string;
+    try {
+      after = await indexTree(repo, join(this.deps.dataRoot, 'tmp'));
+    } catch (error) {
+      const reason = `${errorText(error)}；没法核对这一轮有没有改动暂存区，已暂停这个项目的写入。处理好之后在「项目」页选择继续`;
+      this.publish(this.deps.store.tasks.setPaused(live.task.workspaceId, reason).events);
+      this.publish([this.deps.store.runs.addNotice(live.run.id, 'index_changed', reason)]);
+      return;
+    }
+    if (after === before) return;
+    const paths = (await git(repo, ['-c', 'core.quotepath=false', 'diff-tree', '-r', '--name-only', '-z', before, after])).split('\0').filter((f) => f !== '');
+    this.deps.log(`index changed during run ${live.run.id}: ${paths.join(', ')}`);
+    const gitOps = this.deps.gitOps?.();
+    if (gitOps) gitOps.proposeIndexChange(live.task.workspaceId, live.run.id, before, after, paths);
+    else this.publish(this.deps.store.tasks.setPaused(live.task.workspaceId, `这一轮里暂存区变了（${paths.join('、')}），已暂停`).events);
+    this.publish([this.deps.store.runs.addNotice(live.run.id, 'index_changed', `这一轮里暂存区变了：${paths.slice(0, 20).join('、')}`)]);
+  }
+
+  /** 宿主自己改了暂存区（提交卡片、恢复卡片）：这个项目里正在跑的 Run 以现在的暂存区为准，免得结束时误报。 */
+  async rebaseIndex(workspaceId: string): Promise<void> {
+    for (const live of this.live.values()) {
+      if (live.task.workspaceId !== workspaceId || !live.snapshot || live.snapshot.ended || !live.worktree) continue;
+      live.snapshot.index = await indexTree(live.worktree, join(this.deps.dataRoot, 'tmp')).catch(() => live.snapshot!.index);
+    }
   }
 
   /** 单人模式的独立 worktree：每个项目一个（`paldock/solo-<项目>`），第一次用时从项目 HEAD 建，之后一直用；改动留在那里由你合。 */

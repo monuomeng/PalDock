@@ -6,6 +6,7 @@ import type {
   RuntimeDiscovery,
   RuntimeEvent,
   RuntimeRun,
+  RuntimeWrite,
   TurnCheck,
 } from '@paldock/contracts';
 import { codexVersion, commandEnv, meetsMinimum, MIN_CODEX_VERSION, resolveCodexCommand } from './discover.js';
@@ -263,12 +264,14 @@ class CodexRun implements RuntimeRun {
         return;
       case 'item/started':
       case 'item/completed': {
-        const item = params.item as { type?: string; id?: string; text?: string; status?: string; changes?: { path: string; diff?: string }[] } | undefined;
+        const item = params.item as
+          | { type?: string; id?: string; text?: string; status?: string; changes?: { path: string; diff?: string; kind?: { type?: string; move_path?: string | null } }[] }
+          | undefined;
         if (!item?.id || params.threadId !== this.threadId) return;
         if (item.type === 'fileChange' && item.changes) this.fileChanges.set(item.id, item.changes.map((c) => c.path));
         // 写完的文件改动：补丁作为写入证据（提交时据此决定哪些改动块默认勾选）
         if (method === 'item/completed' && item.type === 'fileChange' && item.status === 'completed' && item.changes?.length) {
-          this.emit({ type: 'file_written', writes: item.changes.filter((c) => typeof c.diff === 'string').map((c) => ({ path: c.path, kind: 'patch' as const, detail: c.diff! })) });
+          this.emit({ type: 'file_written', writes: codexWrites(item.changes) });
         }
         if (method === 'item/completed' && item.type === 'agentMessage' && typeof item.text === 'string') this.lastAgentMessage = item.text;
         return;
@@ -338,4 +341,18 @@ class CodexRun implements RuntimeRun {
   private release(waiters: (() => void)[]): void {
     for (const waiter of waiters.splice(0)) waiter();
   }
+}
+
+/**
+ * Codex 的 fileChange → 写入证据（事后报告，写之前的内容不知道）：新建文件是全文（以 @@ 开头时是补丁），修改是统一补丁；
+ * 删除、改名的没法逐行重放，不记。
+ */
+export function codexWrites(changes: readonly { path: string; diff?: string; kind?: { type?: string; move_path?: string | null } }[]): RuntimeWrite[] {
+  return changes.flatMap((c): RuntimeWrite[] => {
+    if (typeof c.diff !== 'string') return [];
+    const type = c.kind?.type ?? 'update';
+    if (type === 'add') return [{ path: c.path, kind: c.diff.startsWith('@@') ? 'patch' : 'content', detail: c.diff, beforeHash: null }];
+    if (type === 'update' && !c.kind?.move_path) return [{ path: c.path, kind: 'patch', detail: c.diff, beforeHash: null }];
+    return [];
+  });
 }

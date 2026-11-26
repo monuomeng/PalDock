@@ -19,6 +19,7 @@ import { planAutoConfirmSchema } from './014-plan-auto-confirm.js';
 import { roleSessionsSchema } from './015-role-sessions.js';
 import { projectSettingsSchema } from './016-project-settings.js';
 import { currentWorkspaceSchema } from './017-current-workspace.js';
+import { commitScopeSchema } from './018-commit-scope.js';
 
 export interface Migration {
   version: number;
@@ -45,6 +46,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 15, name: 'role-sessions', sql: roleSessionsSchema },
   { version: 16, name: 'project-settings', sql: projectSettingsSchema },
   { version: 17, name: 'current-workspace', sql: currentWorkspaceSchema },
+  { version: 18, name: 'commit-scope', sql: commitScopeSchema },
 ];
 
 export interface MigrateResult {

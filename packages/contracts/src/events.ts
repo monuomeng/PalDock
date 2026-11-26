@@ -22,7 +22,7 @@ import {
 const Id = z.string().min(1);
 const Reason = z.string().max(500).optional();
 
-export const RunNoticeCode = z.enum(['unknown_request', 'resume_failed', 'output_truncated', 'git_write_denied', 'branch_changed']);
+export const RunNoticeCode = z.enum(['unknown_request', 'resume_failed', 'output_truncated', 'git_write_denied', 'branch_changed', 'index_changed']);
 export type RunNoticeCode = z.infer<typeof RunNoticeCode>;
 
 const transition = <T extends z.ZodType>(status: T) => z.object({ from: status, to: status, reason: Reason });
@@ -57,7 +57,7 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
     payload: z.object({ skipReviewRoles: z.array(AgentRole), autoConfirmSimplePlans: z.boolean().optional() }),
   }),
   /** 提交 / 推送 / 合并卡片提出、结束；聚合 ID 为卡片 ID。 */
-  z.object({ type: z.literal('git.proposed'), payload: z.object({ kind: z.enum(['commit', 'push', 'merge']), workspaceId: Id, sessionId: Id.nullable() }) }),
+  z.object({ type: z.literal('git.proposed'), payload: z.object({ kind: z.enum(['commit', 'push', 'merge', 'index']), workspaceId: Id, sessionId: Id.nullable() }) }),
   z.object({ type: z.literal('git.finished'), payload: z.object({ status: z.enum(['done', 'failed', 'cancelled', 'stale']) }) }),
   /** 项目的工作区方式改了，或因为切了分支暂停 / 恢复了写入；聚合 ID 为 workspaceId。 */
   z.object({ type: z.literal('workspace.mode_changed'), payload: z.object({ mode: z.enum(['current', 'worktree']), pausedReason: z.string().nullable() }) }),
