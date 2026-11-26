@@ -102,3 +102,70 @@
 ### 后续决定
 
 - 实测时 Claude 跑 `node --test` 每次都来问。2026-11-26 你决定 worktree 内的普通命令也由宿主自动批准（安装依赖、push / merge / rebase / reset、网络下载、涉及 worktree 外、大范围删除仍审批），见 plan.md「已定的几点」第 10 条。
+
+## 对外 MCP 接口试验（2026-11-26，分支 `claude/external-mcp-spike`，Claude Code 2.1.325）
+
+Willem 的要求：「开放一些接口，让 Claude 按规范在 PalDock 中调用，可以测试一下」。结论：**可以实现，整条链路走通了。** 代码只在试验分支 `claude/external-mcp-spike` 的 `37617fa` 上，P3 分支只同步这一节文档；2026-11-26 你决定下一轮转为正式功能（见 [路线图](../../roadmap.md)）。
+
+### 做了什么（最小实现）
+
+- **外部客户端令牌**（迁移 014 `external_clients`）：在桌面「设置 → 对外接口（试验）」里生成。令牌 `pdx_` 开头，只在生成时显示一次；库里只存 sha256。每个令牌限定开放哪些项目，可以作废，每次调用都重新检查，作废立即生效。
+- **`apps/local-service/bridge/external-mcp.mjs`**：stdio MCP 服务器，不依赖任何包。它经本机 IPC 连到正在运行的本地服务，复用 MCP 桥的 `mcp_hello` / `mcp_list` / `mcp_call` 帧，服务端按 `pdx_` 前缀分流到对外工具。
+  - Windows 上管道名每次启动都随机，所以本地服务启动时在数据根写一个 `external-endpoint.json`（只有管道名和进程号，不含令牌），退出时删掉。
+  - 对外服务每次连接都重新读这个文件，PalDock 重启后下一次调用自动重连。
+- **六个工具**（`packages/contracts/src/external.ts`，每个都带说明和参数格式，Claude 接上后自己读得到，不用另外教）：
+  - `list_projects`
+  - `list_sessions(projectId)`
+  - `read_messages(sessionId, limit)`
+  - `send_message(sessionId, text, waitSeconds)`：以用户身份写进会话、唤醒协调助手，等这次唤醒处理完，返回回复；等不到返回 `status=processing`（消息已进会话）。
+  - `list_tasks(projectId)`
+  - `get_task(taskId)`：节点、状态、阶段、集成分支。
+  - 没有审批、确认计划、写文件的工具；越过令牌范围的项目、会话、任务一律回「不存在」。
+- **审计**：每次认证和调用一条 `ext.<工具>`，actor 为 `external:<客户端 ID>`，结果为 ok / denied / error。
+- **实测发现并修的问题**：外部客户端连着时 PalDock 退出会卡住（`server.close()` 要等所有连接断开，而外部客户端不会自己断）。现在退出时断开所有连接，1 秒后强制断开。
+- 离线集成测试 `tests/integration/external-mcp.test.ts` 覆盖令牌范围、六个工具、processing、作废、错误令牌、库里没有令牌原文、审计序列。真实实测脚本 `tests/live/external-mcp.live.test.ts`（`PALDOCK_LIVE_EXT=1`）。
+
+### 真实 claude CLI 实测
+
+临时数据根和临时仓库。命令：`claude -p … --mcp-config <临时 json> --strict-mcp-config --allowedTools mcp__paldock_ext`，在临时目录里运行，不改 `~/.claude`，也不改 Claude Desktop 的配置。提示词：列出项目和会话，给第一个会话发一句「你好，请用一句话介绍这个项目」，把回复原样读出来。
+
+| 协调助手 | 结果 | 整次调用用时 | 外部 Claude 费用（估算） |
+|---|---|---|---|
+| 模拟执行器 | ✅ ToolSearch → list_projects → list_sessions → send_message（直接 replied），读出模拟回复 | 26 秒 | 0.68 美元 |
+| 真实 Claude | ✅ 同样的调用顺序，读出协调助手的回复：「这个项目是一个名为"小演示"的演示仓库，目前只有一个 README.md……告诉我目标，我来拆成子任务给你确认。」 | 36 秒 | 0.29 美元 |
+
+- 两次审计都是 `ext.hello:ok → list_projects:ok → list_sessions:ok → send_message:ok:replied`。
+- 外部 Claude 先用 ToolSearch 加载工具定义，然后完全按工具说明调用，没有多余的尝试。
+- 协调助手按自己的规则回复，提到「拆成子任务给你确认」，计划确认仍在 PalDock。
+
+### 限制
+
+- **`send_message` 的等待时长**：默认等 45 秒，最多 110 秒。真实协调助手回一句话大约 10 秒（P3-11 实测的协调 Run 是 9–12 秒）；这次整次调用 36 秒里大部分是外部 Claude 自己的几轮推理。协调助手要提计划、读代码时可能超过 45 秒，这时返回 processing，外部 Claude 按工具说明稍后用 `read_messages` 再读。
+- **Claude Desktop 的工具调用超时**：没有实测。MCP 官方 TypeScript SDK 的请求默认超时是 60 秒，Desktop 很可能沿用，所以默认等待取 45 秒留余量。claude CLI 的超时可以用环境变量 `MCP_TOOL_TIMEOUT` 调大。Desktop 里如果遇到超时，把 `waitSeconds` 调小或者设成 0，再配合 `read_messages`。
+- **单向**：只能由外部客户端发起。PalDock 没法主动叫醒 Desktop，计划待确认、审批、任务完成这些事，外部客户端只有被问到时才会去读；主动提醒仍走桌面和飞书。
+- **PalDock 要先开着**：Desktop 启动时如果 PalDock 没在运行，`tools/list` 会报「PalDock 没有在运行」，Desktop 可能把这个服务器标成出错，要在 Desktop 里重新连接一次。
+- **装好的版本里用不了**：外部客户端用普通 `node` 运行 `external-mcp.mjs`，而安装包把它打在 `app.asar` 里，普通 `node` 读不到。要正式用，打包时得把它放到 `asar` 外（`asarUnpack`），或者让用户用 `PalDock.exe` 加 `ELECTRON_RUN_AS_NODE=1` 运行。现在只能用仓库里的那份。
+- 消息在 PalDock 里显示为普通的「你」说的话，没有标「来自外部客户端」；来源只记在审计里（`messages.channel` 的检查约束只认飞书 / Telegram，要标来源得改表）。
+
+### Claude Desktop 里手动添加（示例，我没有替你改）
+
+1. 先在 PalDock「设置 → 对外接口（试验）」生成令牌，勾选要开放的项目。
+2. 编辑 `%APPDATA%\Claude\claude_desktop_config.json`（Desktop「设置 → 开发者 → 编辑配置」打开的就是它），在 `mcpServers` 里加一项，然后重启 Desktop：
+
+```json
+{
+  "mcpServers": {
+    "paldock": {
+      "command": "node",
+      "args": ["D:\PalDock\apps\local-service\bridge\external-mcp.mjs"],
+      "env": {
+        "PALDOCK_DATA_ROOT": "D:\software\PalDockCache",
+        "PALDOCK_EXTERNAL_TOKEN": "pdx_……（在 PalDock 设置里生成的令牌）"
+      }
+    }
+  }
+}
+```
+
+- 前提是 PalDock 是含这个试验的版本（分支 `claude/external-mcp-spike`），并且正在运行。
+- 令牌是明文写在这个配置文件里的，不要把文件发给别人；不用了就在 PalDock 里作废。
