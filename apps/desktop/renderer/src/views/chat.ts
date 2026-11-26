@@ -1,9 +1,11 @@
-import type { ConversationDetail, MainSessionRecord, MessageRecord, PlanDetail, WakeRecord, WorkspaceRecord } from '@paldock/contracts';
+import type { ConversationDetail, GitOpRecord, MainSessionRecord, MessageRecord, PlanDetail, WakeRecord, WorkspaceRecord } from '@paldock/contracts';
 import { bridge, call } from '../api.js';
 import { h } from '../dom.js';
 import { noticeRef, time } from '../format.js';
 import { liveText } from '../live-output.js';
 import { chatLink, navigate } from '../router.js';
+import { gitCard } from './git-card.js';
+import { pausedBanner } from './paused.js';
 import { planView, type Act } from './plan-view.js';
 
 const CHANNEL_NAME = { feishu: '飞书', telegram: 'Telegram' } as const;
@@ -89,12 +91,19 @@ export async function chatView(route: { workspaceId: string | undefined; session
     { class: 'chat', 'aria-labelledby': 'chat-title' },
     h('h2', { id: 'chat-title' }, '对话'),
     header(workspaces, sessions, session),
+    pausedBanner(workspaces.find((w) => w.id === session.workspaceId), act),
     error,
     h(
       'section',
       { class: 'messages', 'aria-label': '消息' },
-      detail.messages.length === 0 && detail.plans.length === 0 ? h('p', { class: 'empty' }, '还没有消息。') : null,
-      ...timeline(detail).map((item) => ('plan' in item ? h('div', { class: 'message message-plan' }, planView(item, act, { inChat: true })) : messageView(item))),
+      detail.messages.length === 0 && detail.plans.length === 0 && detail.gitOps.length === 0 ? h('p', { class: 'empty' }, '还没有消息。') : null,
+      ...timeline(detail).map((item) =>
+        'plan' in item
+          ? h('div', { class: 'message message-plan' }, planView(item, act, { inChat: true }))
+          : 'request' in item
+            ? h('div', { class: 'message message-plan' }, gitCard(item, act))
+            : messageView(item),
+      ),
       live ? h('div', { class: 'message message-assistant live' }, h('span', { class: 'hint' }, '协调助手 · 正在回复'), h('pre', { 'data-live-run': running!.runId! }, live)) : null,
     ),
     h('label', { for: 'chat-input' }, '你的消息'),
@@ -118,14 +127,18 @@ export async function chatView(route: { workspaceId: string | undefined; session
       detail.summary ? h('p', { class: 'hint' }, `滚动摘要第 ${detail.summary.version} 版：${detail.summary.body.slice(0, 300)}`) : null,
     ),
   );
-  const ids = new Set(detail.plans.flatMap((p) => [p.plan.id, p.plan.taskId, ...p.nodes.flatMap((n) => (n.subtask ? [n.subtask.id] : []))]));
+  const ids = new Set([
+    ...detail.plans.flatMap((p) => [p.plan.id, p.plan.taskId, ...p.nodes.flatMap((n) => (n.subtask ? [n.subtask.id] : []))]),
+    ...detail.gitOps.map((op) => op.id),
+    session.workspaceId,
+  ]);
   return { element, sessionId: session.sessionId, ids };
 }
 
 /** 消息和计划卡片按时间排在一起：计划卡片出现在协调助手提出它的那一刻。 */
-function timeline({ messages, plans }: ConversationDetail): (MessageRecord | PlanDetail)[] {
-  const at = (item: MessageRecord | PlanDetail) => ('plan' in item ? item.plan.createdAt : item.createdAt);
-  return [...messages, ...plans].sort((a, b) => at(a).localeCompare(at(b)));
+function timeline({ messages, plans, gitOps }: ConversationDetail): (MessageRecord | PlanDetail | GitOpRecord)[] {
+  const at = (item: MessageRecord | PlanDetail | GitOpRecord) => ('plan' in item ? item.plan.createdAt : item.createdAt);
+  return [...messages, ...plans, ...gitOps].sort((a, b) => at(a).localeCompare(at(b)));
 }
 
 function messageView(m: MessageRecord): HTMLElement {

@@ -152,12 +152,13 @@ function isRelevant(event: PersistentEvent): boolean {
       event.aggregateId === chatSession ||
       (event.type === 'message.created' && event.payload.sessionId === chatSession) ||
       event.type === 'plan.proposed' ||
+      (event.type === 'git.proposed' && event.payload.sessionId === chatSession) ||
       detailScope.has(event.aggregateId)
     );
   }
   if (event.type === 'message.created') return false;
   if (route.view === 'settings') return isSettingsEvent(event);
-  if (route.view === 'project') return isSettingsEvent(event) || event.type === 'project.settings_changed' || event.type === 'workspace.agent_override_changed' || event.type === 'agent.profile_changed';
+  if (route.view === 'project') return isSettingsEvent(event) || event.type === 'project.settings_changed' || event.type === 'workspace.agent_override_changed' || event.type === 'agent.profile_changed' || event.type === 'workspace.mode_changed';
   if (route.view === 'auto') return event.type === 'auto.decided';
   if (route.view !== 'task') return LIST_EVENTS.has(event.type);
   return (

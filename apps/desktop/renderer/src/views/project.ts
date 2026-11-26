@@ -2,6 +2,7 @@ import type { ApprovalStrictness, CommandArgsOf, Executor, Isolation, ProjectAss
 import { bridge, call } from '../api.js';
 import { h } from '../dom.js';
 import { navigate, projectLink } from '../router.js';
+import { pausedBanner } from './paused.js';
 
 type Act = (run: () => Promise<unknown>) => () => Promise<void>;
 type ModePatch = Omit<CommandArgsOf<'project.setMode'>, 'workspaceId' | 'expectedVersion' | 'confirmDirect'>;
@@ -63,6 +64,8 @@ export async function projectView(workspaceId: string | undefined, rerender: () 
     h('h2', { id: 'project-title' }, '项目'),
     h('div', { class: 'row' }, picker, h('span', { class: 'hint' }, workspace.rootPath)),
     error,
+    pausedBanner(view.workspace, act),
+    workspaceModeSection(view.workspace, act),
     modeSection(view, act),
     view.settings.mode === 'team' ? rolesSection(view, act) : null,
     autoSection(view, act),
@@ -236,4 +239,18 @@ function remoteSection(workspace: WorkspaceRecord, act: Act): HTMLElement {
     h('p', { class: 'hint' }, '审批先在桌面等待；桌面 3 分钟无人处理、或锁屏、空闲时才发到已绑定的单聊。权限类审批始终只能在桌面处理。'),
     level,
   );
+}
+
+/**
+ * 工作区方式（2026-11-26 已定）：当前工作区（新项目默认）——所有助手直接改这个目录，你在 IDE 里马上看到改动，
+ * 提交、推送由你在对话里指挥；独立 worktree——每个子任务一个 worktree，做完合进任务集成分支，显示「待合并」。
+ */
+function workspaceModeSection(workspace: WorkspaceRecord, act: Act): HTMLElement {
+  const el = select('工作区方式', { current: '当前工作区：助手直接改这个目录，提交和推送由你指挥', worktree: '独立 worktree：每个子任务一个 worktree，做完合进集成分支' }, workspace.workspaceMode, (mode) => {
+    if (mode === 'current' && !window.confirm('改成当前工作区：助手会直接改这个目录（你当前的分支和工作区），同一项目同一时刻只跑一个助手。确定吗？')) {
+      return rerenderSelect(el, workspace.workspaceMode);
+    }
+    void act(() => call('workspace.setMode', { workspaceId: workspace.id, expectedVersion: workspace.version, mode }))();
+  });
+  return h('div', {}, h('h3', {}, '工作区'), el);
 }

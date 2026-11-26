@@ -76,6 +76,10 @@ function planTaskView(detail: TaskDetail, error: HTMLElement, act: Act): Rendere
     h('details', {}, h('summary', {}, '目标'), h('pre', { class: 'goal' }, task.goal)),
     error,
     // 全部节点通过：合进你自己的分支由你用 git 做，PalDock 不碰它
+    // 当前工作区方式：没有集成分支，改动就在你的工作区里，提交由你在对话里指挥
+    task.status === 'succeeded' && !task.integrationBranch && plan
+      ? h('section', { class: 'panel review', 'aria-label': '改动在你的工作区里' }, h('p', {}, h('strong', {}, '改动在你的工作区里，还没提交：'), '在 IDE 里看 diff；要提交、推送时在对话里告诉协调助手。'))
+      : null,
     task.status === 'succeeded' && task.integrationBranch
       ? h(
           'section',
