@@ -126,14 +126,14 @@ describe('风险分级（只看客观内容）', () => {
     [{ kind: 'command', command: `Set-Content -Path '${join(outside, 'tests', 'x.txt')}' -Value hi`, cwd: wt }, 'write_outside_worktree'],
     [{ kind: 'command', command: `type "${inside}"`, cwd: wt }, 'run_command_in_worktree'],
     // 网址、cmd 开关、开头的程序路径不算越界；.. 跳出算越界
-    [{ kind: 'command', command: 'curl https://registry.npmjs.org/x', cwd: wt }, 'run_command_in_worktree'],
+    [{ kind: 'command', command: 'curl https://registry.npmjs.org/x', cwd: wt }, 'network_in_worktree'],
     [{ kind: 'command', command: 'cmd /c pnpm install', cwd: wt }, 'install_dependencies'],
     [{ kind: 'command', command: '"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command npm ci', cwd: wt }, 'install_dependencies'],
     [{ kind: 'command', command: 'Remove-Item -Recurse ..\\..\\other-repo', cwd: wt }, 'write_outside_worktree'],
     [{ kind: 'command', command: 'rm -rf ../x', cwd: wt }, 'write_outside_worktree'],
     [{ kind: 'command', command: 'git push origin main', cwd: wt }, 'push_remote'],
     [{ kind: 'command', command: 'ls', cwd: outside }, 'write_outside_worktree'],
-    [{ kind: 'command', command: 'curl example.com', cwd: wt }, 'run_command_in_worktree'],
+    [{ kind: 'command', command: 'curl example.com', cwd: wt }, 'network_in_worktree'],
     [{ kind: 'permissions' }, 'expand_permissions'],
   ] as const)('%j → %s', (request, expected) => {
     expect(operationOf({ nativeRequestId: '1', summary: '', ...request } as never, wt)).toBe(expected);

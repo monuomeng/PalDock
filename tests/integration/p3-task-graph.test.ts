@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { McpGateway, PlanService, RunSupervisor, TaskGraphScheduler, TaskService } from '@paldock/application';
-import type { PersistentEvent, RunStartRequest, RuntimeAdapter, RuntimeEvent, SubtaskRecord, TaskDetail } from '@paldock/contracts';
+import type { PersistentEvent, RunStartRequest, RuntimeAdapter, RuntimeApprovalRequest, RuntimeEvent, SubtaskRecord, TaskDetail } from '@paldock/contracts';
 import { openStore, type Store } from '@paldock/storage-sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -21,6 +21,8 @@ interface FakeRun {
   fail(message: string): void;
   /** 像 Claude 的 Edit 一样请求改文件，返回宿主的决定。 */
   askFileChange(path: string): Promise<string>;
+  /** 像 Claude 的 Bash 一样请求运行命令（不带工作目录），返回宿主的决定。 */
+  askCommand(command: string): Promise<string>;
 }
 
 class FakeRuntime implements RuntimeAdapter {
@@ -34,17 +36,19 @@ class FakeRuntime implements RuntimeAdapter {
 
   async start(request: RunStartRequest, onEvent: (event: RuntimeEvent) => void) {
     const decisions = new Map<string, (decision: string) => void>();
+    const ask = (request: Omit<RuntimeApprovalRequest, 'nativeRequestId'>) =>
+      new Promise<string>((resolve) => {
+        const id = `perm_${Math.random()}`;
+        decisions.set(id, resolve);
+        onEvent({ type: 'approval_request', request: { nativeRequestId: id, ...request } as RuntimeApprovalRequest });
+      });
     const title = /你负责的子任务：(.+)/.exec(request.prompt)?.[1] ?? '?';
     const run: FakeRun = {
       request,
       title,
       ended: false,
-      askFileChange: (path) =>
-        new Promise((resolve) => {
-          const id = `perm_${Math.random()}`;
-          decisions.set(id, resolve);
-          onEvent({ type: 'approval_request', request: { nativeRequestId: id, kind: 'file_change', summary: `Edit：${path}`, paths: [path] } });
-        }),
+      askFileChange: (path) => ask({ kind: 'file_change', summary: `Edit：${path}`, paths: [path] }),
+      askCommand: (command) => ask({ kind: 'command', summary: command, command }),
       succeed: (message = `${title} 完成`) => {
         if (run.ended) return;
         run.ended = true;
@@ -183,18 +187,27 @@ async function finishNode(taskId: string, key: string, title: string) {
 }
 
 describe('P3 任务图调度', () => {
-  it('写自己 worktree 里的文件由宿主直接批准并记审计；worktree 外的照旧要审批', async () => {
+  it('写自己 worktree 里的文件、Claude 在 worktree 内跑普通命令由宿主直接批准并记审计；越界、装依赖、push 照旧要审批', async () => {
     await setup();
     const { planId } = propose();
     await confirm(planId);
     await until(() => runtime.active(), (x) => x.length === 1, 'A 开始');
     const a = runtime.latest('加记住我-a');
     expect(await a.askFileChange(join(a.request.cwd, 'src', 'a.ts'))).toBe('allow_once');
-    expect(store.db.all<{ action: string; result: string }>(`SELECT action, result FROM audit_log WHERE action = 'approval.auto'`)).toEqual([
+    expect(await a.askCommand('node --test')).toBe('allow_once');
+    expect(store.db.all<{ action: string; result: string }>(`SELECT action, result FROM audit_log WHERE action = 'approval.auto' ORDER BY id`)).toEqual([
       { action: 'approval.auto', result: 'allow:write_in_worktree' },
+      { action: 'approval.auto', result: 'allow:run_command_in_worktree' },
     ]);
     void a.askFileChange(join(root, 'outside.txt'));
-    await until(() => store.db.all(`SELECT id FROM approvals WHERE status = 'pending'`).length, (n) => n === 1, '越界写入要审批');
+    void a.askCommand('pnpm install');
+    void a.askCommand('git push origin main');
+    const pending = await until(
+      () => store.db.all<{ risk_level: string }>(`SELECT risk_level FROM approvals WHERE status = 'pending'`),
+      (rows) => rows.length === 3,
+      '越界写入、装依赖、push 要审批',
+    );
+    expect(pending.map((r) => r.risk_level).sort()).toEqual(['high', 'high', 'medium']);
   });
 
   beforeEach(() => {

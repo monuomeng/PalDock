@@ -51,8 +51,10 @@ export type OperationKind =
   | 'run_command_in_worktree'
   | 'install_dependencies'
   | 'network_in_worktree'
+  | 'delete_in_worktree'
   | 'push_remote'
   | 'merge_branch'
+  | 'rewrite_git_history'
   | 'write_outside_worktree'
   | 'delete_outside_worktree'
   | 'send_external_message'
@@ -66,8 +68,11 @@ const RISK_BY_OPERATION: Readonly<Record<OperationKind, RiskLevel>> = {
   run_command_in_worktree: 'medium',
   install_dependencies: 'medium',
   network_in_worktree: 'medium',
+  delete_in_worktree: 'medium',
   push_remote: 'high',
   merge_branch: 'high',
+  // reset / rebase 可能丢掉还没交付的改动
+  rewrite_git_history: 'high',
   write_outside_worktree: 'high',
   delete_outside_worktree: 'high',
   send_external_message: 'high',

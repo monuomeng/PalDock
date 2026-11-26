@@ -99,6 +99,6 @@
 - 真实飞书 / Telegram：按要求不接，见实测清单第 2 节。
 - macOS。
 
-### 待你决定
+### 后续决定
 
-- **Claude 运行命令仍逐条审批**：现在只自动批准 worktree 内的文件改动。Claude 开发、测试时跑 `node --test` 这类命令每次都会来问；Codex 在沙箱里跑命令不会问。要不要把「在 worktree 内运行命令」（非安装依赖、非 push / merge、不碰 worktree 外路径）也自动批准，需要你定。
+- 实测时 Claude 跑 `node --test` 每次都来问。2026-11-26 你决定 worktree 内的普通命令也由宿主自动批准（安装依赖、push / merge / rebase / reset、网络下载、涉及 worktree 外、大范围删除仍审批），见 plan.md「已定的几点」第 10 条。

@@ -24,7 +24,7 @@ import type {
   TaskRecord,
   TurnCheck,
 } from '@paldock/contracts';
-import { checkCapability, outOfScope, P1_DEFAULTS, taskKey } from '@paldock/domain';
+import { checkCapability, isAutoApproved, outOfScope, P1_DEFAULTS, taskKey } from '@paldock/domain';
 import { runCheck } from './check-runner.js';
 import { addWorktree, branchCommit, changedFiles, commitStaged, headCommit, stageAndDiffStat } from './git.js';
 import { redact } from './redact.js';
@@ -442,12 +442,16 @@ export class RunSupervisor {
   }
 
   private onApprovalRequest(live: LiveRun, request: RuntimeApprovalRequest): void {
-    // 写自己 worktree 里的文件由宿主直接批准（2026-11-25 已定：Windows 上可写角色「不隔离」，不逐条审批；
-    // Codex 的 workspace-write 沙箱本来就不会为这类写入来要审批，Claude 的 Edit / Write 会经宿主审批，两边在这里拉平）。
-    // 只认路径全在 worktree 内的文件改动；worktree 外、命令、权限扩展照旧走审批与风险分级。每次记一条审计。
-    if (live.worktree && live.mode !== 'conversation' && operationOf(request, live.worktree) === 'write_in_worktree') {
-      this.deps.store.audit.append(`run:${live.run.id}`, 'approval.auto', request.summary.slice(0, 200), 'allow:write_in_worktree');
-      return this.reply(live, request.nativeRequestId, 'allow_once');
+    // 宿主直接放行（2026-11-25 / 11-26 已定：Windows 上可写角色「不隔离」，不逐条审批）：worktree 内的文件改动，
+    // 以及 Claude 在 worktree 内跑的普通命令。Codex 的 workspace-write 沙箱本来就不会为这些来要审批，它来审批的命令
+    // 都是要越过沙箱的，照旧审批；不认识的执行器同样按越过沙箱对待。规则见 domain 的 classifyCommand / isAutoApproved。
+    // 协调助手的对话 Run 不自动放行。每次记一条审计。
+    if (live.worktree && live.mode !== 'conversation') {
+      const operation = operationOf(request, live.worktree);
+      if (isAutoApproved(operation, { commandsAreSandboxEscapes: live.run.runtime !== 'claude' })) {
+        this.deps.store.audit.append(`run:${live.run.id}`, 'approval.auto', request.summary.slice(0, 200), `allow:${operation}`);
+        return this.reply(live, request.nativeRequestId, 'allow_once');
+      }
     }
     const change = this.deps.store.runs.requestApproval({
       runId: live.run.id,
