@@ -77,6 +77,8 @@ export const P3_DEFAULTS = {
   contextMessages: 10,
   /** 新开原生会话时附上的 FTS5 历史片段条数。 */
   historySnippets: 5,
+  /** 简单计划提出后等多久自动确认（这段时间里可以撤回，2026-11-26 已定）。 */
+  autoConfirmDelayMs: 30 * 1000,
 } as const;
 
 export type P3Limits = typeof P3_DEFAULTS;

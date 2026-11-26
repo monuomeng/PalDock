@@ -262,7 +262,13 @@ export interface PlanStorePort {
    * 运行中确认新一版时：上一版 superseded，没变的节点沿用原子任务，改了的和新增的建新子任务，没了的和被替换的取消。
    * 返回新建的子任务和被取消的子任务（有 Run 在跑的由调用方中断）。
    */
-  confirm(id: string, expectedVersion: number, note?: string | null, via?: 'desktop' | 'feishu' | 'telegram'): Change<{ created: SubtaskRecord[]; cancelled: string[] }>;
+  confirm(id: string, expectedVersion: number, note?: string | null, via?: 'desktop' | 'feishu' | 'telegram' | null): Change<{ created: SubtaskRecord[]; cancelled: string[] }>;
+  /** 排定或撤回（at 为 null）待确认计划的自动确认；带计划版本。 */
+  setAutoConfirm(id: string, expectedVersion: number, at: string | null): Change<PlanRecord>;
+  /** 排定了自动确认、还在待确认的计划（重启后重新排定用）。 */
+  pendingAutoConfirms(): PlanRecord[];
+  /** 这个会话里的协调助手 Run 提出的计划，按提出时间升序，最多 limit 份（取最近的）。 */
+  plansOfSession(sessionId: string, limit: number): PlanRecord[];
   /** 确认前改一个节点（调用方先校验）；带计划版本，先到者为准。 */
   editNode(id: string, expectedVersion: number, edit: PlanNodeEdit): Change<PlanRecord>;
   /** 有确认过的计划、还没结束的任务（重启后重新推进用）。 */

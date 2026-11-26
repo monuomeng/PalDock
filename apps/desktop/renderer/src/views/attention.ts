@@ -3,6 +3,7 @@ import { call } from '../api.js';
 import { h } from '../dom.js';
 import { ATTENTION_LABEL, time } from '../format.js';
 import { chatLink, navigate, taskLink } from '../router.js';
+import { approvalView, type Act } from './approval-card.js';
 
 /**
  * 首页「待我处理」：审批、待命中、阻塞、执行状态待确认，按时间排序。
@@ -10,14 +11,25 @@ import { chatLink, navigate, taskLink } from '../router.js';
  */
 export async function attentionView(): Promise<HTMLElement> {
   const [items, recovered] = await Promise.all([call('attention.list', {}), call('recovery.report', {}).catch(() => [] as RecoveryItem[])]);
+  const error = h('p', { class: 'error', role: 'alert' });
+  // 处理完由事件重绘（审批决定后条目消失）；失败时把原因留在页面上
+  const act: Act = (action) => async () => {
+    error.textContent = '';
+    try {
+      await action();
+    } catch (e) {
+      error.textContent = (e as Error).message;
+    }
+  };
   return h(
     'section',
     { 'aria-labelledby': 'attention-title' },
     h('h2', { id: 'attention-title' }, `待我处理（${items.length}）`),
+    error,
     recovered.length > 0 ? recoveryPanel(recovered) : null,
     items.length === 0
       ? h('p', { class: 'empty' }, '没有需要你处理的事项。')
-      : h('ul', { class: 'attention-list' }, ...items.map(row)),
+      : h('ul', { class: 'attention-list' }, ...items.map((item) => row(item, act))),
   );
 }
 
@@ -33,7 +45,7 @@ function recoveryPanel(items: RecoveryItem[]): HTMLElement {
   );
 }
 
-function row(item: AttentionItem): HTMLElement {
+function row(item: AttentionItem, act: Act): HTMLElement {
   const open = async () => {
     if (!item.read) await call('attention.markRead', { itemKind: item.kind, itemId: item.itemId }).catch(() => {});
     // 协调助手的通知在对话页看；其余打开对应任务（和那次 Run）
@@ -50,5 +62,7 @@ function row(item: AttentionItem): HTMLElement {
       item.reason ? h('span', { class: 'reason' }, item.reason) : null,
       h('span', { class: 'meta' }, time(item.since), item.read ? '' : ' · 未读'),
     ),
+    // 审批直接在这里处理：P3 计划任务的详情页以前没有审批卡片，点进去找不到按钮（0.3.1 实测）
+    item.approval ? approvalView(item.approval, act) : null,
   );
 }

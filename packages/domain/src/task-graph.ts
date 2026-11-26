@@ -175,3 +175,12 @@ export function planDiff<N extends PlanNodeInput & { executor?: string | null; c
     drop: previous.filter((n) => !keys.has(n.key)).map((n) => n.key),
   };
 }
+
+/**
+ * 简单计划（2026-11-26 已定，可以自动确认）：给新任务提的第一版、只有 1 个节点、不带检查命令。
+ * 检查命令以你的权限运行，按高风险对待，带了就要人工确认；运行中提的新一版会替换已有节点，也要人工确认。
+ * 节点上指定执行器不影响判断。
+ */
+export function isSimplePlan(nodes: readonly { checkCommand: unknown }[], taskIsDraft: boolean): boolean {
+  return taskIsDraft && nodes.length === 1 && !nodes[0]!.checkCommand;
+}

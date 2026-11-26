@@ -109,13 +109,13 @@ describe('运行中改计划', () => {
 });
 
 describe('自动处理设置与记录单', () => {
-  it('默认全关；按版本修改并记事件', () => {
+  it('默认只开「简单计划自动确认」；按版本修改并记事件', () => {
     const { ws } = seed();
-    expect(ws.autoPolicy).toEqual({ skipReviewRoles: [] });
-    const { record, events } = store.tasks.setAutoPolicy(ws.id, ws.version, { skipReviewRoles: ['docs'] });
-    expect(record.autoPolicy).toEqual({ skipReviewRoles: ['docs'] });
-    expect(events[0]).toMatchObject({ type: 'workspace.auto_policy_changed', payload: { skipReviewRoles: ['docs'] } });
-    expect(() => store.tasks.setAutoPolicy(ws.id, ws.version, { skipReviewRoles: [] })).toThrow(/已被修改/);
+    expect(ws.autoPolicy).toEqual({ skipReviewRoles: [], autoConfirmSimplePlans: true });
+    const { record, events } = store.tasks.setAutoPolicy(ws.id, ws.version, { skipReviewRoles: ['docs'], autoConfirmSimplePlans: false });
+    expect(record.autoPolicy).toEqual({ skipReviewRoles: ['docs'], autoConfirmSimplePlans: false });
+    expect(events[0]).toMatchObject({ type: 'workspace.auto_policy_changed', payload: { skipReviewRoles: ['docs'], autoConfirmSimplePlans: false } });
+    expect(() => store.tasks.setAutoPolicy(ws.id, ws.version, { skipReviewRoles: [], autoConfirmSimplePlans: true })).toThrow(/已被修改/);
   });
 
   it('只追加；按项目筛选，新的在前；类别 CHECK 与契约一致；查询走索引', () => {

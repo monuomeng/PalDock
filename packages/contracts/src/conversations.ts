@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { MessageRecord } from './records.js';
+import type { PlanDetail } from './plans.js';
 
 /**
  * 协调助手主会话（P3-07）：每个项目一个或多个，消息持久化；唤醒循环把你的消息和任务事件变成一次次 Run。
@@ -81,4 +82,6 @@ export interface ConversationDetail {
   /** 最近几次唤醒，新的在前。 */
   wakes: WakeRecord[];
   summary: SummaryRecord | null;
+  /** 这个会话里协调助手提出的计划（每一版各一张卡片，按提出时间升序）；对话页在消息流里显示并可直接确认。 */
+  plans: PlanDetail[];
 }

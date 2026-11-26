@@ -199,7 +199,7 @@ export class TaskRepository implements TaskStorePort {
       if (!row) throw new CodedError(this.getWorkspace(id) ? 'conflict' : 'not_found', '项目不存在或已被修改');
       return {
         record: toWorkspace(row),
-        events: [this.events.append(id, { type: 'workspace.auto_policy_changed', payload: { skipReviewRoles: policy.skipReviewRoles } })],
+        events: [this.events.append(id, { type: 'workspace.auto_policy_changed', payload: { skipReviewRoles: policy.skipReviewRoles, autoConfirmSimplePlans: policy.autoConfirmSimplePlans } })],
       };
     });
   }

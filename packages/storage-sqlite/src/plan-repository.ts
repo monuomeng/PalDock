@@ -58,6 +58,14 @@ const SQL = {
   movePlan: `UPDATE subtasks SET plan_id = ?, version = version + 1 WHERE id = ?`,
   clearDeps: `DELETE FROM subtask_deps WHERE subtask_id = ?`,
   selectPlan: `SELECT ${COLUMNS.plan()} FROM plans WHERE id = ?`,
+  setAutoConfirm: `UPDATE plans SET auto_confirm_at = ?, version = version + 1 WHERE id = ? AND version = ? AND status = 'proposed' RETURNING ${COLUMNS.plan()}`,
+  // plans_auto_confirm，条件逐字一致
+  pendingAutoConfirms: `SELECT ${COLUMNS.plan()} FROM plans WHERE status = 'proposed' AND auto_confirm_at IS NOT NULL ORDER BY auto_confirm_at`,
+  // 会话里的协调助手 Run 提出的计划：每个会话的计划不多，按提出时间取最近的
+  plansOfSession: `
+    SELECT * FROM (SELECT ${COLUMNS.plan('p.')} FROM plans p JOIN runs r ON r.id = p.proposed_by_run_id
+                    WHERE r.session_id = ? ORDER BY p.created_at DESC, p.revision DESC LIMIT ?)
+     ORDER BY createdAt, revision`,
   latestPlan: `SELECT ${COLUMNS.plan()} FROM plans WHERE task_id = ? ORDER BY revision DESC LIMIT 1`,
   // 主键 (plan_id, position)：按节点顺序读，不排序
   nodes: `SELECT ${COLUMNS.planNode()} FROM plan_nodes WHERE plan_id = ? ORDER BY position`,
@@ -159,7 +167,7 @@ export class PlanRepository implements PlanStorePort {
    * 运行中的任务：上一版 superseded；没变的节点沿用原子任务（换挂到新版本），改了的、新增的建新子任务
    * （新建的一律先 waiting_dependency，由调度器按依赖放行），被替换的和没了的取消。依赖按新版本重建。
    */
-  confirm(id: string, expectedVersion: number, note: string | null = null, via: 'desktop' | 'feishu' | 'telegram' = 'desktop'): Change<{ created: SubtaskRecord[]; cancelled: string[] }> {
+  confirm(id: string, expectedVersion: number, note: string | null = null, via: 'desktop' | 'feishu' | 'telegram' | null = 'desktop'): Change<{ created: SubtaskRecord[]; cancelled: string[] }> {
     return this.db.transaction(() => {
       const plan0 = this.getPlan(id);
       const task = plan0 && this.tasks.getTask(plan0.taskId);
@@ -245,6 +253,22 @@ export class PlanRepository implements PlanStorePort {
       }
       return { record: plan, events: [this.events.append(id, { type: 'plan.edited', payload: { nodeKey: edit.nodeKey, kind: edit.kind } })] };
     });
+  }
+
+  setAutoConfirm(id: string, expectedVersion: number, at: string | null): Change<PlanRecord> {
+    return this.db.transaction(() => {
+      const plan = this.db.get<PlanRecord>(SQL.setAutoConfirm, at, id, expectedVersion);
+      if (!plan) throw new CodedError(this.getPlan(id) ? 'conflict' : 'not_found', '计划不存在、已确认或已被修改');
+      return { record: plan, events: [this.events.append(id, { type: 'plan.auto_confirm_changed', payload: { at } })] };
+    });
+  }
+
+  pendingAutoConfirms(): PlanRecord[] {
+    return this.db.all<PlanRecord>(SQL.pendingAutoConfirms);
+  }
+
+  plansOfSession(sessionId: string, limit: number): PlanRecord[] {
+    return this.db.all<PlanRecord>(SQL.plansOfSession, sessionId, limit);
   }
 
   reject(id: string, expectedVersion: number, note: string | null, via: 'desktop' | 'feishu' | 'telegram' = 'desktop'): Change<PlanRecord> {

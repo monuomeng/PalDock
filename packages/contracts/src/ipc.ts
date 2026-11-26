@@ -79,12 +79,14 @@ export const CommandArgs = {
   'workspace.setAutoPolicy': z.object({
     workspaceId: Id,
     expectedVersion: Version,
-    policy: z.object({ skipReviewRoles: z.array(AgentRole).max(6) }).strict(),
+    policy: z.object({ skipReviewRoles: z.array(AgentRole).max(6), autoConfirmSimplePlans: z.boolean().optional() }).strict(),
   }),
   /** 自动处理记录单，按项目筛选（不填为全部），新的在前。 */
   'auto.list': z.object({ workspaceId: Id.optional(), limit: z.number().int().positive().max(500).default(100) }),
   /** 退回计划，任务留在草稿，协调助手可以再提一版。 */
   'plan.reject': z.object({ planId: Id, expectedVersion: Version, note: z.string().trim().max(500).optional() }),
+  /** 撤回简单计划的自动确认：还没确认时计划留在待确认。 */
+  'plan.withdrawAuto': z.object({ planId: Id, expectedVersion: Version }),
   'events.since': z.object({
     afterSeq: z.number().int().nonnegative(),
     limit: z.number().int().positive().max(1000).default(200),
@@ -164,6 +166,7 @@ export interface CommandResults {
   'workspace.setAutoPolicy': void;
   'auto.list': AutoDecisionRecord[];
   'plan.reject': void;
+  'plan.withdrawAuto': void;
   'events.since': PersistentEvent[];
   'attention.list': AttentionItem[];
   'attention.markRead': void;

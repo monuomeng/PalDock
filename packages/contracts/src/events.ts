@@ -52,7 +52,12 @@ export const PersistentEventBody = z.discriminatedUnion('type', [
   /** 一个没经过用户的决定（跳过审阅、审阅助手放行……）；聚合 ID 为任务 ID。 */
   z.object({ type: z.literal('auto.decided'), payload: z.object({ decisionId: z.number().int().positive(), kind: AutoDecisionKind }) }),
   /** 项目的自动处理设置变更；聚合 ID 为 workspaceId。 */
-  z.object({ type: z.literal('workspace.auto_policy_changed'), payload: z.object({ skipReviewRoles: z.array(AgentRole) }) }),
+  z.object({
+    type: z.literal('workspace.auto_policy_changed'),
+    payload: z.object({ skipReviewRoles: z.array(AgentRole), autoConfirmSimplePlans: z.boolean().optional() }),
+  }),
+  /** 简单计划排定或撤回了自动确认；聚合 ID 为 planId，at 为 null 表示撤回。 */
+  z.object({ type: z.literal('plan.auto_confirm_changed'), payload: z.object({ at: z.iso.datetime().nullable() }) }),
   /** 计划被确认、退回或被新一版取代；聚合 ID 为 planId。 */
   z.object({ type: z.literal('plan.status_changed'), payload: transition(PlanStatus) }),
   z.object({

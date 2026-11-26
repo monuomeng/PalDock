@@ -71,7 +71,8 @@ export const COLUMNS = {
   agentOverride: cols(`workspace_id AS workspaceId, role, executor`),
   plan: cols(
     `id, task_id AS taskId, revision, status, proposed_by_run_id AS proposedByRunId, decision_note AS decisionNote,
-     version, created_at AS createdAt, decided_at AS decidedAt, escalated_at AS escalatedAt, decided_via AS decidedVia`,
+     version, created_at AS createdAt, decided_at AS decidedAt, escalated_at AS escalatedAt, decided_via AS decidedVia,
+     auto_confirm_at AS autoConfirmAt`,
   ),
   planNode: cols(`plan_id AS planId, position, node_key AS key, role, title, goal, paths, depends_on AS dependsOn, check_command AS checkCommand, executor`),
   autoDecision: cols(`id, workspace_id AS workspaceId, task_id AS taskId, plan_id AS planId, subtask_id AS subtaskId, kind, reason, created_at AS createdAt`),
@@ -101,7 +102,8 @@ export type WorkspaceRow = Omit<WorkspaceRecord, 'prepareCommand' | 'autoPolicy'
 export const toWorkspace = (row: WorkspaceRow): WorkspaceRecord => ({
   ...row,
   prepareCommand: row.prepareCommand === null ? null : (JSON.parse(row.prepareCommand) as CheckCommand),
-  autoPolicy: { skipReviewRoles: [], ...(JSON.parse(row.autoPolicy) as Partial<AutoPolicy>) },
+  // 迁移 014 之前存的设置没有 autoConfirmSimplePlans：按默认开（2026-11-26 已定）
+  autoPolicy: { skipReviewRoles: [], autoConfirmSimplePlans: true, ...(JSON.parse(row.autoPolicy) as Partial<AutoPolicy>) },
 });
 
 /** out_of_scope 以 JSON 文本存储，读出时还原。 */

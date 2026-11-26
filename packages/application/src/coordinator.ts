@@ -99,7 +99,8 @@ export class CoordinatorService {
     return session.id;
   }
 
-  detail(sessionId: string, limit: number): ConversationDetail {
+  /** 会话详情（计划卡片由 TaskService.sessionPlans 补上）。 */
+  detail(sessionId: string, limit: number): Omit<ConversationDetail, 'plans'> {
     const session = this.session(sessionId);
     const { coordinator } = this.store;
     return {

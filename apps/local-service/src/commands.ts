@@ -33,17 +33,25 @@ export function createHandlers(
     'run.checkOutput': ({ runId }) => tasks.checkOutput(runId),
     'chat.sessions': ({ workspaceId }) => coordinator.sessions(workspaceId),
     'chat.newSession': ({ workspaceId, title }) => coordinator.newSession(workspaceId, title),
-    'chat.get': ({ sessionId, taskId, limit }) => coordinator.detail(sessionId ?? coordinator.sessionOfConversation(taskId!), limit),
+    'chat.get': ({ sessionId, taskId, limit }) => {
+      const id = sessionId ?? coordinator.sessionOfConversation(taskId!);
+      return { ...coordinator.detail(id, limit), plans: tasks.sessionPlans(id) };
+    },
     'chat.send': ({ sessionId, text, idempotencyKey }) => coordinator.send(sessionId, text, idempotencyKey),
     'notice.ack': ({ sessionId }) => coordinator.ack(sessionId),
     'merge.redo': ({ subtaskId, expectedVersion }) => integration.redo(subtaskId, expectedVersion),
     'plan.confirm': ({ planId, expectedVersion, note }) => plans.confirm(planId, expectedVersion, note),
     'plan.editNode': ({ planId, expectedVersion, edit }) => plans.editNode(planId, expectedVersion, edit),
-    'workspace.setAutoPolicy': ({ workspaceId, expectedVersion, policy }) => tasks.setAutoPolicy(workspaceId, expectedVersion, policy),
+    'workspace.setAutoPolicy': ({ workspaceId, expectedVersion, policy }) => tasks.setAutoPolicy(workspaceId, expectedVersion, { skipReviewRoles: policy.skipReviewRoles, ...(policy.autoConfirmSimplePlans === undefined ? {} : { autoConfirmSimplePlans: policy.autoConfirmSimplePlans }) }),
     'auto.list': ({ workspaceId, limit }) => store.autoDecisions.list(workspaceId ?? null, limit),
     'plan.reject': ({ planId, expectedVersion, note }) => plans.reject(planId, expectedVersion, note),
+    'plan.withdrawAuto': ({ planId, expectedVersion }) => plans.withdrawAutoConfirm(planId, expectedVersion),
     'events.since': ({ afterSeq, limit }) => store.events.since(afterSeq, limit),
-    'attention.list': () => store.attention.list(),
+    'attention.list': () =>
+      store.attention.list().map((item) => {
+        const approval = item.kind === 'approval' ? store.runs.getApproval(item.itemId) : undefined;
+        return approval ? { ...item, approval } : item;
+      }),
     'attention.markRead': ({ itemKind, itemId }) => store.attention.markRead(itemKind, itemId),
     'messages.search': ({ query, limit }) => store.messages.search(query, limit),
     'maintenance.backup': () => store.backup(),

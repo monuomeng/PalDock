@@ -247,9 +247,16 @@ export class TaskService {
     };
   }
 
-  /** 自动处理设置（只能在桌面改）。 */
-  setAutoPolicy(workspaceId: string, expectedVersion: number, policy: AutoPolicy): void {
-    this.publish(this.store.tasks.setAutoPolicy(workspaceId, expectedVersion, policy).events);
+  /** 自动处理设置（只能在桌面改）；没给的项沿用现在的设置。 */
+  setAutoPolicy(workspaceId: string, expectedVersion: number, policy: Partial<AutoPolicy>): void {
+    const workspace = this.store.tasks.getWorkspace(workspaceId);
+    if (!workspace) throw new CodedError('not_found', '项目不存在');
+    this.publish(this.store.tasks.setAutoPolicy(workspaceId, expectedVersion, { ...workspace.autoPolicy, ...policy }).events);
+  }
+
+  /** 会话里协调助手提出的计划，每一版一张卡片（对话页在消息流里显示，可以直接确认）。 */
+  sessionPlans(sessionId: string, limit = 10): PlanDetail[] {
+    return this.store.plans.plansOfSession(sessionId, limit).map((plan) => this.planDetail(this.store.tasks.getTask(plan.taskId)!, plan));
   }
 
   /** 执行中的 Run 由监管器中断，收尾时置为 cancelled；其余状态直接取消。 */

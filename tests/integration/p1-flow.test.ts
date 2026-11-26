@@ -221,8 +221,11 @@ describe('审批', () => {
     expect(approval).toMatchObject({ kind: 'file_change', riskLevel: 'high' });
     expect(latest(waiting).run.status).toBe('waiting_approval');
     expect((await attention()).map((i) => [i.kind, i.itemId])).toEqual([['approval', approval.id]]);
+    // 「待我处理」的审批条目带着审批本身（内容、版本），在列表里就能直接批准或拒绝
+    const [item] = await attention();
+    expect(item!.approval).toMatchObject({ id: approval.id, version: approval.version, status: 'pending', riskLevel: 'high', summary: approval.summary });
 
-    await call('approval.decide', { approvalId: approval.id, expectedVersion: approval.version, decision: 'deny' });
+    await call('approval.decide', { approvalId: item!.approval!.id, expectedVersion: item!.approval!.version, decision: 'deny' });
     const reviewed = await until(created.task.id, (d) => d.subtask.status === 'review');
     expect(existsSync(join(reviewed.subtask.worktreePath!, 'approved.txt'))).toBe(false);
     expect((await attention()).map((i) => i.kind)).toEqual(['review']);

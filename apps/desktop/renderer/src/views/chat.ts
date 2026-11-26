@@ -1,9 +1,10 @@
-import type { ConversationDetail, MainSessionRecord, WakeRecord, WorkspaceRecord } from '@paldock/contracts';
+import type { ConversationDetail, MainSessionRecord, MessageRecord, PlanDetail, WakeRecord, WorkspaceRecord } from '@paldock/contracts';
 import { bridge, call } from '../api.js';
 import { h } from '../dom.js';
 import { noticeRef, time } from '../format.js';
 import { liveText } from '../live-output.js';
 import { chatLink, navigate } from '../router.js';
+import { planView, type Act } from './plan-view.js';
 
 const CHANNEL_NAME = { feishu: '飞书', telegram: 'Telegram' } as const;
 const WAKE_LABEL: Record<WakeRecord['status'], string> = { pending: '排队', running: '进行中', done: '完成', failed: '失败', dropped: '已跳过' };
@@ -13,6 +14,8 @@ export interface RenderedChat {
   element: HTMLElement;
   /** 这个页面关心的会话 ID（事件的聚合 ID 或 message.created 的 sessionId）。 */
   sessionId: string | null;
+  /** 页面上计划卡片涉及的计划、任务和子任务 ID：这些对象的事件也要重绘。 */
+  ids: Set<string>;
 }
 
 /**
@@ -38,6 +41,7 @@ export async function chatView(route: { workspaceId: string | undefined; session
     return {
       element: h('article', {}, h('h2', {}, '对话'), h('p', { class: 'empty' }, '还没有项目。先选一个项目目录（git 仓库根目录）。'), error, h('button', { type: 'button', class: 'primary', onclick: () => void pick() }, '选择项目目录…')),
       sessionId: null,
+      ids: new Set(),
     };
   }
   let detail: ConversationDetail;
@@ -67,6 +71,16 @@ export async function chatView(route: { workspaceId: string | undefined; session
     }
     refresh();
   };
+  const act: Act = (action) => async () => {
+    error.textContent = '';
+    try {
+      await action();
+    } catch (e) {
+      error.textContent = (e as Error).message;
+      return;
+    }
+    refresh();
+  };
   const running = detail.wakes.find((w) => w.status === 'running');
   const live = running?.runId ? liveText(running.runId) : '';
 
@@ -79,8 +93,8 @@ export async function chatView(route: { workspaceId: string | undefined; session
     h(
       'section',
       { class: 'messages', 'aria-label': '消息' },
-      detail.messages.length === 0 ? h('p', { class: 'empty' }, '还没有消息。') : null,
-      ...detail.messages.map((m) => h('div', { class: `message message-${m.role}` }, h('span', { class: 'hint' }, `${m.role === 'user' ? '你' : '协调助手'}${m.channel ? `（来自${CHANNEL_NAME[m.channel]}）` : ''} · ${time(m.createdAt)}`), h('pre', {}, m.body))),
+      detail.messages.length === 0 && detail.plans.length === 0 ? h('p', { class: 'empty' }, '还没有消息。') : null,
+      ...timeline(detail).map((item) => ('plan' in item ? h('div', { class: 'message message-plan' }, planView(item, act, { inChat: true })) : messageView(item))),
       live ? h('div', { class: 'message message-assistant live' }, h('span', { class: 'hint' }, '协调助手 · 正在回复'), h('pre', { 'data-live-run': running!.runId! }, live)) : null,
     ),
     h('label', { for: 'chat-input' }, '你的消息'),
@@ -104,7 +118,23 @@ export async function chatView(route: { workspaceId: string | undefined; session
       detail.summary ? h('p', { class: 'hint' }, `滚动摘要第 ${detail.summary.version} 版：${detail.summary.body.slice(0, 300)}`) : null,
     ),
   );
-  return { element, sessionId: session.sessionId };
+  const ids = new Set(detail.plans.flatMap((p) => [p.plan.id, p.plan.taskId, ...p.nodes.flatMap((n) => (n.subtask ? [n.subtask.id] : []))]));
+  return { element, sessionId: session.sessionId, ids };
+}
+
+/** 消息和计划卡片按时间排在一起：计划卡片出现在协调助手提出它的那一刻。 */
+function timeline({ messages, plans }: ConversationDetail): (MessageRecord | PlanDetail)[] {
+  const at = (item: MessageRecord | PlanDetail) => ('plan' in item ? item.plan.createdAt : item.createdAt);
+  return [...messages, ...plans].sort((a, b) => at(a).localeCompare(at(b)));
+}
+
+function messageView(m: MessageRecord): HTMLElement {
+  return h(
+    'div',
+    { class: `message message-${m.role}` },
+    h('span', { class: 'hint' }, `${m.role === 'user' ? '你' : '协调助手'}${m.channel ? `（来自${CHANNEL_NAME[m.channel]}）` : ''} · ${time(m.createdAt)}`),
+    h('pre', {}, m.body),
+  );
 }
 
 /** 选项目、选会话、新建会话。 */

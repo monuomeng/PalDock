@@ -15,6 +15,7 @@ import { prepareCommandSchema } from './010-prepare-command.js';
 import { coordinatorSchema } from './011-coordinator.js';
 import { planEditAutoSchema } from './012-plan-edit-auto.js';
 import { externalMainSessionSchema } from './013-external-main-session.js';
+import { planAutoConfirmSchema } from './014-plan-auto-confirm.js';
 
 export interface Migration {
   version: number;
@@ -37,6 +38,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 11, name: 'coordinator', sql: coordinatorSchema },
   { version: 12, name: 'plan-edit-auto', sql: planEditAutoSchema },
   { version: 13, name: 'external-main-session', sql: externalMainSessionSchema },
+  { version: 14, name: 'plan-auto-confirm', sql: planAutoConfirmSchema },
 ];
 
 export interface MigrateResult {

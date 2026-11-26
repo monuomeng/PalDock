@@ -208,6 +208,10 @@ describe('P3 任务图调度', () => {
       '越界写入、装依赖、push 要审批',
     );
     expect(pending.map((r) => r.risk_level).sort()).toEqual(['high', 'high', 'medium']);
+    // 计划任务的详情里，节点的执行记录带着待处理的审批（任务页在那一行直接显示批准 / 拒绝）
+    const detail = tasks.getTask(store.plans.getPlan(planId)!.taskId);
+    const nodeA = detail.plan!.nodes.find((n) => n.node.key === 'a')!;
+    expect(nodeA.runs.flatMap((r) => r.approvals).filter((x) => x.status === 'pending')).toHaveLength(3);
   });
 
   beforeEach(() => {

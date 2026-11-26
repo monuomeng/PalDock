@@ -74,8 +74,9 @@ async function buildView(route: Route): Promise<HTMLElement> {
     case 'auto':
       return autoDecisionsView(route.workspaceId);
     case 'chat': {
-      const { element, sessionId } = await chatView(route, scheduleRender);
+      const { element, sessionId, ids } = await chatView(route, scheduleRender);
       chatSession = sessionId;
+      detailScope = ids;
       return element;
     }
     case 'tasks':
@@ -142,8 +143,15 @@ const isSettingsEvent = (event: PersistentEvent) =>
 /** 只在事件涉及当前页面时重绘；流式输出的检查点只清空临时缓冲（文字已在屏幕上）。 */
 function isRelevant(event: PersistentEvent): boolean {
   const route = currentRoute();
-  // 对话页：这个会话的消息、唤醒、通知、摘要
-  if (route.view === 'chat') return event.aggregateId === chatSession || (event.type === 'message.created' && event.payload.sessionId === chatSession);
+  // 对话页：这个会话的消息、唤醒、通知、摘要，新提出的计划，以及页面上计划卡片涉及的计划、任务、子任务
+  if (route.view === 'chat') {
+    return (
+      event.aggregateId === chatSession ||
+      (event.type === 'message.created' && event.payload.sessionId === chatSession) ||
+      event.type === 'plan.proposed' ||
+      detailScope.has(event.aggregateId)
+    );
+  }
   if (event.type === 'message.created') return false;
   if (route.view === 'settings') return isSettingsEvent(event);
   if (route.view === 'auto') return event.type === 'auto.decided';

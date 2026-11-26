@@ -11,6 +11,8 @@ const KIND_LABEL: Record<AutoDecisionKind, string> = {
   wake_dropped: '唤醒被跳过',
   wake_aborted: '唤醒被中断',
   auto_approve: '自动批准',
+  plan_auto_confirmed: '计划自动确认',
+  plan_auto_withdrawn: '撤回自动确认',
 };
 
 /** 自动处理记录：没经过你的决定，按项目筛选，只读（补审和撤销以后再做）。 */

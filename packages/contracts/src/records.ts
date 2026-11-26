@@ -189,6 +189,8 @@ export interface AttentionItem {
   reason: string | null;
   since: string;
   read: boolean;
+  /** 审批条目带上审批本身，「待我处理」里直接批准或拒绝（P3 计划节点的审批以前只能在详情里找）。 */
+  approval?: ApprovalRecord;
 }
 
 export interface TaskSummary {

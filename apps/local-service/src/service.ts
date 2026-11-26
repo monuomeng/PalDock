@@ -21,7 +21,7 @@ import { openStore, type Store } from '@paldock/storage-sqlite';
 import { createAdapter, systemCredentials } from './channels.js';
 import { createHandlers, type Handlers } from './commands.js';
 
-export const SERVICE_VERSION = '0.3.1-p3';
+export const SERVICE_VERSION = '0.3.2-p3';
 const HELLO_TIMEOUT_MS = 5_000;
 const REPLAY_BATCH = 500;
 
@@ -75,6 +75,7 @@ export class LocalService {
   private gate!: ReviewGate;
   private integration!: IntegrationService;
   private coordinator!: CoordinatorService;
+  private plans!: PlanService;
 
   private constructor(
     private readonly store: Store,
@@ -141,7 +142,8 @@ export class LocalService {
       service.integration = integration;
       service.coordinator = new CoordinatorService({ store, supervisor: service.supervisor, publish, log, ...(options.coordinatorLimits ? { limits: options.coordinatorLimits } : {}) });
       service.gate = new ReviewGate({ store, supervisor: service.supervisor, publish, log, integration, ...limits });
-      plans = new PlanService({ store, scheduler: service.scheduler, integration, supervisor: service.supervisor, publish });
+      plans = new PlanService({ store, scheduler: service.scheduler, integration, supervisor: service.supervisor, publish, log });
+      service.plans = plans;
       const tasks = new TaskService({ store, supervisor: service.supervisor, scheduler: service.scheduler, integration, dataRoot, publish });
       service.channels = new ChannelService({
         store,
@@ -176,6 +178,8 @@ export class LocalService {
       service.supervisor.start();
       void recovery.recover(recoveryReport).catch((error) => log(`recovery failed: ${(error as Error).message}`));
       service.channels.start();
+      // 重启前排定的简单计划自动确认重新排上（过了点的马上确认）
+      plans.start();
       service.server = await listenIpc(ipcPath, (socket) => service.accept(socket));
       log(`migration v${store.migration.from}→v${store.migration.to}, interrupted runs: ${interruptedRuns}`);
       return service;
@@ -298,6 +302,7 @@ export class LocalService {
   async stop(): Promise<void> {
     await this.channels.stop();
     this.coordinator.stop();
+    this.plans.stop();
     await this.supervisor.stop();
     await this.integration.idle();
     this.broadcast(this.store.interruptActiveWork('应用退出').events);

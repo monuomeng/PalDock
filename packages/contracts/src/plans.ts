@@ -41,8 +41,10 @@ export interface PlanRecord {
   decidedAt: string | null;
   /** 计划确认卡片已升级到外部单聊的时间。 */
   escalatedAt: string | null;
-  /** 在哪一端确认或退回的。 */
+  /** 在哪一端确认或退回的；自动确认的为 null（见 autoConfirmAt）。 */
   decidedVia: 'desktop' | 'feishu' | 'telegram' | null;
+  /** 简单计划排定的自动确认时间；撤回后清空。确认后仍保留：status 为 confirmed 且 decidedVia 为 null 即「已自动确认」。 */
+  autoConfirmAt: string | null;
 }
 
 export interface PlanNodeRecord {
@@ -72,13 +74,15 @@ export type PlanNodeEdit =
 export interface AutoPolicy {
   /** 这些角色的节点交付在范围内且检查通过后不送审阅，直接合并。 */
   skipReviewRoles: AgentRole[];
+  /** 简单计划（新任务、只有 1 个节点、不带检查命令）稍等片刻后自动确认，期间可以撤回（2026-11-26 已定，默认开）。 */
+  autoConfirmSimplePlans: boolean;
 }
 
 /**
  * 没经过用户的决定：跳过审阅、审阅助手放行 / 退回、任务事件唤醒被跳过、唤醒因请求上限被中断；
  * auto_approve（按远程审批等级自动批准）P3 还没有，先留着。
  */
-export const AUTO_DECISION_KINDS = ['skip_review', 'review_passed', 'review_rework', 'wake_dropped', 'wake_aborted', 'auto_approve'] as const;
+export const AUTO_DECISION_KINDS = ['skip_review', 'review_passed', 'review_rework', 'wake_dropped', 'wake_aborted', 'auto_approve', 'plan_auto_confirmed', 'plan_auto_withdrawn'] as const;
 export const AutoDecisionKind = z.enum(AUTO_DECISION_KINDS);
 export type AutoDecisionKind = z.infer<typeof AutoDecisionKind>;
 

@@ -266,4 +266,88 @@ describe('P3 计划确认与自动处理记录', () => {
     await until(() => node(second.taskId, 'doc2').gateStage, (s) => s === 'human', '交给人');
     expect(store.autoDecisions.list(workspaceId, 10)).toHaveLength(2);
   });
+
+  describe('简单计划自动确认（2026-11-26 已定）', () => {
+    /** 换一个等待很短的 PlanService（setup 里的用默认 30 秒）。 */
+    const quick = (delayMs: number, now?: () => number) => {
+      plans.stop();
+      const scheduler = new TaskGraphScheduler({ store, supervisor, publish: () => {}, log: (m) => logs.push(m) });
+      plans = new PlanService({ store, scheduler, supervisor, publish: (batch) => scheduler.onEvents(batch), log: (m) => logs.push(m), autoConfirmDelayMs: delayMs, ...(now ? { now } : {}) });
+      return plans;
+    };
+    const decisions = () => store.db.all<{ kind: string; plan_id: string }>(`SELECT kind, plan_id FROM auto_decisions WHERE kind LIKE 'plan_%' ORDER BY id`);
+    afterEach(() => plans?.stop());
+
+    it('新任务、1 个节点、不带检查命令：过一会儿自动确认并记一条；对话页的计划卡片里能看到', async () => {
+      await setup();
+      quick(50);
+      const plan = propose([{ key: 'a' }]);
+      expect(plan.autoConfirmAt).not.toBeNull();
+      const sessionId = store.runs.getRun(proposerRunId)!.sessionId!;
+      expect(tasks.sessionPlans(sessionId).map((p) => [p.plan.id, p.plan.status, p.actions.confirm])).toEqual([[plan.id, 'proposed', true]]);
+      await until(() => store.plans.getPlan(plan.id)!.status, (s) => s === 'confirmed', '自动确认');
+      expect(store.plans.getPlan(plan.id)).toMatchObject({ decidedVia: null, autoConfirmAt: plan.autoConfirmAt });
+      expect(decisions()).toEqual([{ kind: 'plan_auto_confirmed', plan_id: plan.id }]);
+      await started('a');
+      expect(tasks.sessionPlans(sessionId)[0]!.plan.status).toBe('confirmed');
+    });
+
+    it('两个节点、带检查命令、确认前加了检查命令、运行中提的新一版：都不自动确认', async () => {
+      await setup();
+      quick(30);
+      const two = propose([{ key: 'a' }, { key: 'b', dependsOn: ['a'] }]);
+      const checked = propose([{ key: 'c', check: PASS }]);
+      const edited = propose([{ key: 'e' }]);
+      expect([two.autoConfirmAt, checked.autoConfirmAt]).toEqual([null, null]);
+      expect(edited.autoConfirmAt).not.toBeNull();
+      plans.editNode(edited.id, version(edited.id), { kind: 'check', nodeKey: 'e', check: PASS });
+      await until(() => store.plans.getPlan(edited.id)!.autoConfirmAt, (at) => at === null, '加了检查命令后取消排定');
+      await new Promise((r) => setTimeout(r, 100));
+      expect([two, checked, edited].map((p) => store.plans.getPlan(p.id)!.status)).toEqual(['proposed', 'proposed', 'proposed']);
+
+      await plans.confirm(two.id, version(two.id));
+      const revision = propose([{ key: 'a' }], two.taskId);
+      expect(revision.autoConfirmAt).toBeNull();
+      expect(decisions()).toEqual([]);
+    });
+
+    it('项目关掉「简单计划自动确认」后不自动确认', async () => {
+      await setup();
+      quick(30);
+      const ws = store.tasks.getWorkspace(workspaceId)!;
+      tasks.setAutoPolicy(ws.id, ws.version, { autoConfirmSimplePlans: false });
+      expect(store.tasks.getWorkspace(workspaceId)!.autoPolicy).toEqual({ skipReviewRoles: [], autoConfirmSimplePlans: false });
+      const plan = propose([{ key: 'a' }]);
+      expect(plan.autoConfirmAt).toBeNull();
+      await new Promise((r) => setTimeout(r, 100));
+      expect(store.plans.getPlan(plan.id)!.status).toBe('proposed');
+    });
+
+    it('撤回：计划留在待确认、记一条，之后不再自动确认；已确认的不能撤回', async () => {
+      await setup();
+      quick(200);
+      const plan = propose([{ key: 'a' }]);
+      plans.withdrawAutoConfirm(plan.id, version(plan.id));
+      expect(store.plans.getPlan(plan.id)).toMatchObject({ status: 'proposed', autoConfirmAt: null });
+      await new Promise((r) => setTimeout(r, 300));
+      expect(store.plans.getPlan(plan.id)!.status).toBe('proposed');
+      expect(decisions()).toEqual([{ kind: 'plan_auto_withdrawn', plan_id: plan.id }]);
+      expect(() => plans.withdrawAutoConfirm(plan.id, version(plan.id))).toThrow(/不能撤回/);
+
+      // 手动确认仍然可以；确认后撤回被拒
+      await plans.confirm(plan.id, version(plan.id));
+      expect(() => plans.withdrawAutoConfirm(plan.id, version(plan.id))).toThrow(/不能撤回/);
+    });
+
+    it('重启后：排定了、还没到点的重新排上，过了点的马上确认', async () => {
+      await setup();
+      quick(60_000);
+      const plan = propose([{ key: 'a' }]);
+      plans.stop();
+      // 新的服务实例，时间已经过了排定的点
+      quick(60_000, () => Date.now() + 120_000).start();
+      await until(() => store.plans.getPlan(plan.id)!.status, (s) => s === 'confirmed', '重启后自动确认');
+      expect(decisions()).toEqual([{ kind: 'plan_auto_confirmed', plan_id: plan.id }]);
+    });
+  });
 });

@@ -351,7 +351,7 @@ function autoSection(workspaces: WorkspaceRecord[], profiles: AgentSettings['age
     h(
       'p',
       { class: 'hint' },
-      '勾选的角色交付后，只要改动在交付范围内、检查命令通过，就不送审阅助手、直接合进任务集成分支；每次都记进「自动处理记录」。计划始终要你确认，没有跳过确认的选项。',
+      '勾选的角色交付后，只要改动在交付范围内、检查命令通过，就不送审阅助手、直接合进任务集成分支。简单计划（新任务、只有 1 个节点、不带检查命令）提出 30 秒后自动确认，这段时间里可以在对话页撤回；其他计划都要你确认。每次都记进「自动处理记录」。',
     ),
     workspaces.length === 0
       ? h('p', { class: 'empty' }, '还没有项目。')
@@ -362,7 +362,15 @@ function autoSection(workspaces: WorkspaceRecord[], profiles: AgentSettings['age
             h(
               'fieldset',
               {},
-              h('legend', { title: w.rootPath }, `${w.name}：这些角色跳过审阅`),
+              h('legend', { title: w.rootPath }, w.name),
+              (() => {
+                const box = h('input', { type: 'checkbox', checked: w.autoPolicy.autoConfirmSimplePlans, 'aria-label': `${w.name} 简单计划自动确认` }) as HTMLInputElement;
+                box.addEventListener('change', () => {
+                  void act(() => call('workspace.setAutoPolicy', { workspaceId: w.id, expectedVersion: w.version, policy: { skipReviewRoles: w.autoPolicy.skipReviewRoles, autoConfirmSimplePlans: box.checked } }))();
+                });
+                return h('label', { class: 'inline' }, box, ' 简单计划自动确认');
+              })(),
+              h('span', { class: 'hint' }, ' · 这些角色跳过审阅：'),
               ...roles.map((p) => {
                 const box = h('input', { type: 'checkbox', checked: w.autoPolicy.skipReviewRoles.includes(p.role), 'aria-label': `${w.name} 跳过${p.displayName}的审阅` }) as HTMLInputElement;
                 box.addEventListener('change', () => {
