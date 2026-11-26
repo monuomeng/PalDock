@@ -169,6 +169,29 @@ export class TaskRepository implements TaskStorePort {
     return this.db.all<WorkspaceRow>(SQL.selectWorkspaces).map(toWorkspace);
   }
 
+  setWorkspaceMode(id: string, expectedVersion: number, mode: 'current' | 'worktree'): Change<WorkspaceRecord> {
+    return this.db.transaction(() => {
+      const row = this.db.get<WorkspaceRow>(
+        `UPDATE workspaces SET workspace_mode = ?, version = version + 1 WHERE id = ? AND version = ? RETURNING ${COLUMNS.workspace()}`,
+        mode,
+        id,
+        expectedVersion,
+      );
+      if (!row) throw new CodedError(this.getWorkspace(id) ? 'conflict' : 'not_found', '项目已被修改，请刷新');
+      const record = toWorkspace(row);
+      return { record, events: [this.events.append(id, { type: 'workspace.mode_changed', payload: { mode, pausedReason: record.pausedReason } })] };
+    });
+  }
+
+  setPaused(id: string, reason: string | null): Change<WorkspaceRecord> {
+    return this.db.transaction(() => {
+      const row = this.db.get<WorkspaceRow>(`UPDATE workspaces SET paused_reason = ?, version = version + 1 WHERE id = ? RETURNING ${COLUMNS.workspace()}`, reason, id);
+      if (!row) throw new CodedError('not_found', '项目不存在');
+      const record = toWorkspace(row);
+      return { record, events: [this.events.append(id, { type: 'workspace.mode_changed', payload: { mode: record.workspaceMode, pausedReason: reason } })] };
+    });
+  }
+
   /** 远程审批等级只能在桌面修改（命令只对管理窗口开放）；先到者为准。 */
   setRemoteApprovalLevel(id: string, expectedVersion: number, level: RemoteApprovalLevel): Change<WorkspaceRecord> {
     return this.db.transaction(() => {

@@ -18,7 +18,7 @@ export interface IntegrationDeps {
   log(message: string): void;
   limits?: Partial<Pick<typeof P1_DEFAULTS, 'checkTimeoutMs' | 'checkOutputMaxBytes' | 'branchPrefix'>>;
   /** 只在测试里注入：在合并的关键点停住，模拟服务在这里被杀掉。 */
-  checkpoint?: (point: 'started' | 'candidate' | 'fast_forward') => Promise<void>;
+  checkpoint?: (point: 'started' | 'candidate' | 'checked' | 'fast_forward') => Promise<void>;
 }
 
 const commandText = (c: CheckCommand) => [c.executable, ...c.args].join(' ');
@@ -51,6 +51,8 @@ export class IntegrationService {
     const { store } = this.deps;
     const items: { targetId: string; outcome: string; detail: string | null }[] = [];
     const repos = new Set<string>();
+    // 先收集要重做的合并，清理完上次留下的临时 worktree 再启动（Codex 复审：否则清理会删掉刚建好的重试目录）
+    const retries: { subtaskId: string; sourceSha: string }[] = [];
     for (const op of store.merges.open()) {
       const subtask = store.tasks.getSubtask(op.subtaskId);
       const task = store.tasks.getTask(op.taskId);
@@ -59,7 +61,8 @@ export class IntegrationService {
       repos.add(repo);
       const head = await branchCommit(repo, task.integrationBranch).catch(() => undefined);
       const runId = store.runs.latestRun(subtask.id)?.id ?? subtask.id;
-      if (op.candidateSha && head === op.candidateSha) {
+      // 只有分支确实快进到了候选提交才补记：候选等于原分支（节点没有改动）时还要有检查通过的记录，否则重跑检查
+      if (op.candidateSha && head === op.candidateSha && (op.candidateSha !== op.targetOld || op.checkedAt)) {
         // 集成 worktree 可能还停在旧提交（快进到一半）：让它跟上分支
         if (task.integrationWorktree) await git(task.integrationWorktree, ['reset', '--keep', op.candidateSha]).catch(() => {});
         this.deps.publish(
@@ -71,7 +74,7 @@ export class IntegrationService {
         items.push({ targetId: op.id, outcome: '补记完成', detail: `集成分支已在候选提交 ${op.candidateSha.slice(0, 10)}` });
       } else if (head === op.targetOld) {
         store.merges.advance(op.id, 'check_failed', { detail: '服务重启，重做合并' });
-        if (subtask.status === 'review') void this.merge(subtask.id);
+        if (subtask.status === 'review') retries.push({ subtaskId: subtask.id, sourceSha: op.sourceSha });
         items.push({ targetId: op.id, outcome: '重做合并', detail: op.candidateSha ? '候选提交已出但没快进' : '只记了开始' });
       } else {
         const reason = '重启后发现集成分支被改动过（不是合并前的提交，也不是候选提交），请人工处理';
@@ -81,6 +84,8 @@ export class IntegrationService {
       }
     }
     items.push(...(await this.cleanLeftovers(repos)));
+    // 重做的合并用当时记下的源提交（就是验收过的那个），不改用节点分支后来的提交
+    for (const retry of retries) void this.merge(retry.subtaskId, { sha: retry.sourceSha });
     return items;
   }
 
@@ -127,11 +132,15 @@ export class IntegrationService {
   }
 
   /** 节点通过闸门后合进集成分支；没有集成分支的旧任务直接成功。按任务排队，返回这次合并结束的 Promise。 */
-  merge(subtaskId: string): Promise<void> {
+  /**
+   * 合进任务集成分支（同一任务串行）。source：reviewed（缺省，检查 / 审阅通过后的自动合并）只合交付证据里绑定的那个提交；
+   * head（你在桌面上「我已处理，重试合并」）合节点分支当前的提交；{ sha }（重启后重做）合当时记下的提交。
+   */
+  merge(subtaskId: string, source: MergeSource = 'reviewed'): Promise<void> {
     const subtask = this.deps.store.tasks.getSubtask(subtaskId);
     if (!subtask) return Promise.resolve();
     const previous = this.queues.get(subtask.taskId) ?? Promise.resolve();
-    const next = previous.then(() => this.mergeNow(subtaskId)).catch((error) => this.mergeFailed(subtaskId, error));
+    const next = previous.then(() => this.mergeNow(subtaskId, source)).catch((error) => this.mergeFailed(subtaskId, error));
     this.queues.set(subtask.taskId, next);
     void next.finally(() => {
       if (this.queues.get(subtask.taskId) === next) this.queues.delete(subtask.taskId);
@@ -156,7 +165,7 @@ export class IntegrationService {
     }
   }
 
-  private async mergeNow(subtaskId: string): Promise<void> {
+  private async mergeNow(subtaskId: string, from: MergeSource): Promise<void> {
     const { store } = this.deps;
     const subtask = store.tasks.getSubtask(subtaskId);
     // 排队期间可能已被取消或人工处理过
@@ -171,9 +180,15 @@ export class IntegrationService {
     }
 
     const repo = store.tasks.getWorkspace(task.workspaceId)!.rootPath;
-    // 节点分支当前的提交：通常就是交付时提交、检查和审阅过的那个；人工处理冲突后是你在节点 worktree 里新提交的
-    const source = subtask.worktreePath ? await headCommit(subtask.worktreePath) : work && store.runs.getResult(work.id)?.commitSha;
+    // 自动合并只合验收过的提交（交付证据里绑定的那个）；节点分支在那之后又有新提交时不自动合并，交给你（Codex 复审）
+    const reviewed = work ? store.runs.getResult(work.id)?.commitSha : null;
+    const head = subtask.worktreePath ? await headCommit(subtask.worktreePath) : reviewed;
+    const source = typeof from === 'object' ? from.sha : from === 'head' ? head : reviewed;
     if (!source) return this.handOver(subtask.id, { stage: 'merge', outcome: 'human', runId, reason: '找不到节点的交付提交' });
+    if (from === 'reviewed' && head && head !== source) {
+      const reason = `节点分支在验收之后又有新提交（验收的是 ${source.slice(0, 10)}，现在是 ${head.slice(0, 10)}），没有自动合并；确认后在桌面上「重试合并」`;
+      return this.handOver(subtask.id, { stage: 'merge', outcome: 'human', runId, reason });
+    }
     const oldHead = await branchCommit(repo, task.integrationBranch);
     const op = store.merges.start({ taskId: task.id, subtaskId: subtask.id, sourceSha: source, targetOld: oldHead });
     const title = nodeTitle(store, subtask);
@@ -197,6 +212,9 @@ export class IntegrationService {
         store.merges.advance(op.id, 'check_failed', { detail: failed });
         return this.handOver(subtask.id, { stage: 'merge', outcome: 'human', runId, reason: failed });
       }
+      // 检查通过的证据先落库再快进：重启后靠它判断这个候选提交是不是检查过的
+      store.merges.markChecked(op.id);
+      await this.deps.checkpoint?.('checked');
       // 推进前再确认：节点仍待验收（没被取消、没被别处处理），集成分支没被别人动过
       const fresh = store.tasks.getSubtask(subtask.id);
       if (fresh?.status !== 'review') return void store.merges.advance(op.id, 'check_failed', { detail: '合并期间节点已被取消或处理' });
@@ -277,3 +295,6 @@ export class IntegrationService {
     });
   }
 }
+
+/** 合并源：见 IntegrationService.merge。 */
+export type MergeSource = 'reviewed' | 'head' | { sha: string };

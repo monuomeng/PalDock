@@ -44,6 +44,10 @@ export interface WorkspaceRecord {
   prepareCommand: CheckCommand | null;
   /** 自动处理设置（默认全关）。 */
   autoPolicy: AutoPolicy;
+  /** current：所有助手共用项目目录（新项目默认，2026-11-26 已定）；worktree：每个子任务一个独立 worktree。 */
+  workspaceMode: 'current' | 'worktree';
+  /** 切了分支等原因暂停了写入（为空表示没暂停）。 */
+  pausedReason: string | null;
   version: number;
 }
 

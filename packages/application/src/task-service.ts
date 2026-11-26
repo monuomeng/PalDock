@@ -328,7 +328,8 @@ export class TaskService {
     // 计划节点人工通过（或冲突处理后重试）：和闸门通过一样合进任务集成分支，合并成功才算成功
     if (decision === 'accept' && subtask.planId && this.deps.integration) {
       this.publish(this.store.runs.addReview(run.id, 'accept', note ?? null).events);
-      return this.deps.integration.merge(subtaskId);
+      // 你在桌面上处理过（例如手动解决冲突后提交）：合节点分支当前的提交
+      return this.deps.integration.merge(subtaskId, 'head');
     }
     if (decision === 'accept') {
       this.committing.add(subtaskId);

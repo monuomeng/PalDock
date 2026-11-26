@@ -133,6 +133,8 @@ export interface MergeOpRecord {
   phase: MergePhase;
   conflictFiles: string[] | null;
   detail: string | null;
+  /** 集成检查通过的时间（没跑过或没通过为空）。 */
+  checkedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

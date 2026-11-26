@@ -103,7 +103,7 @@ let runtime: FakeRuntime;
 let live: Service | undefined;
 const logs: string[] = [];
 /** 只在第一次启动时生效：合并停在这一步，模拟服务在这里被杀。 */
-let pauseAt: 'started' | 'candidate' | 'fast_forward' | undefined;
+let pauseAt: 'started' | 'candidate' | 'checked' | 'fast_forward' | undefined;
 
 function prepareRepo() {
   root = mkdtempSync(join(tmpdir(), 'paldock-p3-restart-'));
@@ -200,14 +200,14 @@ async function until<T>(read: () => T, ok: (value: T) => boolean, what: string):
 }
 
 /** 提出并确认一份计划（协调助手的 Run 只是提出者，不需要在跑）。 */
-async function confirmPlan(service: Service, nodes: { key: string; dependsOn?: string[] }[]): Promise<string> {
+async function confirmPlan(service: Service, nodes: { key: string; dependsOn?: string[]; check?: { executable: string; args: string[] } }[]): Promise<string> {
   const ws = service.store.tasks.ensureWorkspace('repo', repo);
   const coord = service.store.tasks.createTask({ workspaceId: ws.id, title: 'c', goal: 'g', role: 'coordinator', checkCommand: null, checkConfirmed: false, idempotencyKey: `c-${Math.random()}` }).record;
   const proposer = service.store.runs.createRun({ subtaskId: coord.subtask.id, sessionId: coord.session.id, runtime: 'claude' }).record;
   const plan = service.plans.propose(proposer.id, {
     title: '记住我',
     goal: '加记住我',
-    nodes: nodes.map((n) => ({ key: n.key, role: 'developer', title: n.key, goal: `做 ${n.key}`, paths: [], dependsOn: n.dependsOn ?? [] })),
+    nodes: nodes.map((n) => ({ key: n.key, role: 'developer', title: n.key, goal: `做 ${n.key}`, paths: [], dependsOn: n.dependsOn ?? [], ...(n.check ? { check: n.check } : {}) })),
   });
   await service.plans.confirm(plan.id, service.store.plans.getPlan(plan.id)!.version);
   return plan.taskId;
@@ -326,6 +326,46 @@ describe('P3 重启恢复', () => {
       expect(git(repo, 'worktree', 'list')).not.toContain('merges');
     });
   }
+
+  it('没有改动的节点：候选提交等于原集成分支、检查还没跑完时被杀，重启后重跑检查；检查失败不放行下游（Codex 复审）', async () => {
+    prepareRepo();
+    pauseAt = 'candidate';
+    let s = await boot({ restart: false });
+    // 检查命令只在合并用的临时 worktree（分离 HEAD）里失败：节点自己的检查通过，集成检查不通过
+    const check = { executable: process.execPath, args: ['-e', "process.exit(require('child_process').execSync('git rev-parse --abbrev-ref HEAD').toString().trim() === 'HEAD' ? 1 : 0)"] };
+    const taskId = await confirmPlan(s, [{ key: 'a', check }, { key: 'b', dependsOn: ['a'] }]);
+    (await started('a')).succeed(); // 只跑了测试，没有改动
+    const op = await until(() => s.store.merges.latestOf(node(s, taskId, 'a').id), (o) => o?.phase === 'candidate', '候选已记录');
+    expect(op!.candidateSha).toBe(op!.targetOld);
+    await kill(s);
+
+    s = await boot({ restart: true });
+    expect(outcomes(s)).toContain('merge:重做合并');
+    await until(() => node(s, taskId, 'a').gateStage, (g) => g === 'human', '集成检查失败交给人');
+    expect(node(s, taskId, 'a').status).toBe('review');
+    expect(node(s, taskId, 'b').status).not.toBe('running');
+    expect(runtime.of('b')).toHaveLength(0);
+  });
+
+  it('两个任务的合并同时被打断：先清理上次的临时目录再重做，重做的不会被清理掉（Codex 复审）', async () => {
+    prepareRepo();
+    pauseAt = 'started';
+    let s = await boot({ restart: false });
+    const first = await confirmPlan(s, [{ key: 'a' }]);
+    const second = await confirmPlan(s, [{ key: 'a' }]);
+    const runs = await until(() => runtime.of('a'), (r) => r.length === 2, '两个节点都开始');
+    runs[0]!.succeed({ 'a1.txt': '1\n' });
+    runs[1]!.succeed({ 'a2.txt': '2\n' });
+    await until(() => [first, second].map((t) => s.store.merges.latestOf(node(s, t, 'a').id)?.phase), (p) => p.every((x) => x === 'started'), '两个合并都停住');
+    await kill(s);
+
+    s = await boot({ restart: true });
+    expect(outcomes(s).filter((o) => o === 'merge:重做合并')).toHaveLength(2);
+    for (const taskId of [first, second]) await until(() => node(s, taskId, 'a').status, (st) => st === 'succeeded', `${taskId} 合并完成`);
+    await s.integration.idle();
+    const merges = join(dataRoot, 'merges');
+    expect(existsSync(merges) ? readdirSync(merges) : []).toEqual([]);
+  });
 
   it('协调助手唤醒中被杀：唤醒放回队列，沿用原生会话重新处理', async () => {
     prepareRepo();

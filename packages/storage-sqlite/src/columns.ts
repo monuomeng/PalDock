@@ -17,7 +17,7 @@ const cols = (list: string) => (alias = '') =>
 export const COLUMNS = {
   workspace: cols(
     `id, name, root_path AS rootPath, remote_approval_level AS remoteApprovalLevel, prepare_command AS prepareCommand,
-     auto_policy AS autoPolicy, version`,
+     auto_policy AS autoPolicy, workspace_mode AS workspaceMode, paused_reason AS pausedReason, version`,
   ),
   task: cols(
     `id, workspace_id AS workspaceId, title, goal, status, check_command AS checkCommand,
@@ -78,7 +78,7 @@ export const COLUMNS = {
   autoDecision: cols(`id, workspace_id AS workspaceId, task_id AS taskId, plan_id AS planId, subtask_id AS subtaskId, kind, reason, created_at AS createdAt`),
   merge: cols(
     `id, task_id AS taskId, subtask_id AS subtaskId, source_sha AS sourceSha, target_old AS targetOld,
-     candidate_sha AS candidateSha, phase, conflict_files AS conflictFiles, detail, created_at AS createdAt, updated_at AS updatedAt`,
+     candidate_sha AS candidateSha, phase, conflict_files AS conflictFiles, detail, checked_at AS checkedAt, created_at AS createdAt, updated_at AS updatedAt`,
   ),
   wake: cols(
     `id, session_id AS sessionId, trigger, summary, status, run_id AS runId, requests, note, created_at AS createdAt,

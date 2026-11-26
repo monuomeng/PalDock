@@ -16,6 +16,7 @@ import type { MainSessionRecord, NoticeKind, NoticeRecord, SummaryRecord, WakeRe
 import type { AutoDecisionRecord, AutoPolicy, PlanNodeEdit, RecoveryItem } from './plans.js';
 import type { RoleSessionStorePort } from './role-sessions.js';
 import type { ProjectSettingsStorePort } from './project-settings.js';
+import type { GitStorePort } from './git-ops.js';
 import type { GateStage, GraphNode, MergeOpRecord, MergePhase, PlanNodeInput, PlanNodeRecord, PlanRecord } from './plans.js';
 import type {
   AgentOverrideRecord,
@@ -133,6 +134,10 @@ export interface TaskStorePort {
   /** 准备命令只能在桌面设置；null 为取消。 */
   setPrepareCommand(id: string, expectedVersion: number, command: CheckCommand | null): Change<WorkspaceRecord>;
   setAutoPolicy(id: string, expectedVersion: number, policy: AutoPolicy): Change<WorkspaceRecord>;
+  /** 工作区方式（current / worktree）；带版本。 */
+  setWorkspaceMode(id: string, expectedVersion: number, mode: 'current' | 'worktree'): Change<WorkspaceRecord>;
+  /** 暂停写入（原因）或恢复（null）；不带版本（由分支监视触发）。 */
+  setPaused(id: string, reason: string | null): Change<WorkspaceRecord>;
   /** 节点 worktree 已跑过准备命令（之后各次 Run 共用）。 */
   markPrepared(subtaskId: string): void;
   createTask(input: NewTask): Change<CreatedTask>;
@@ -200,6 +205,8 @@ export interface MergeStorePort {
   get(id: string): MergeOpRecord | undefined;
   /** 没结束的合并（started / candidate），按开始时间。 */
   open(): MergeOpRecord[];
+  /** 集成检查通过（快进之前记）：重启后据此判断候选提交是不是检查过的。 */
+  markChecked(id: string): void;
 }
 
 export interface NewWake {
@@ -450,6 +457,7 @@ export interface StorePort {
   inbox: InboxPort;
   roleSessions: RoleSessionStorePort;
   projectSettings: ProjectSettingsStorePort;
+  git: GitStorePort;
   /** 多个写入合成一个事务（内层用 SAVEPOINT）。 */
   transaction<T>(fn: () => T): T;
   interruptActiveWork(reason: string): RecoveryReport;

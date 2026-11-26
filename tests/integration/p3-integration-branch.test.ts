@@ -24,6 +24,9 @@ interface FakeRun {
 class FakeRuntime implements RuntimeAdapter {
   readonly name = 'claude';
   readonly runs: FakeRun[] = [];
+  /** 为真时审阅 Run 先不交结论，放进 held，由测试调用。 */
+  holdReviews = false;
+  readonly held: (() => void)[] = [];
   constructor(private readonly approve: (token: string) => void) {}
 
   async discover() {
@@ -53,8 +56,12 @@ class FakeRuntime implements RuntimeAdapter {
       onEvent({ type: 'thread', threadId: request.resumeThreadId ?? `thr_${request.runId}` });
       onEvent({ type: 'turn', turnId: `turn_${request.runId}` });
       if (review) {
-        this.approve(request.mcpServer!.env.PALDOCK_MCP_TOKEN!);
-        run.succeed();
+        const finish = () => {
+          this.approve(request.mcpServer!.env.PALDOCK_MCP_TOKEN!);
+          run.succeed();
+        };
+        if (this.holdReviews) this.held.push(finish);
+        else finish();
       }
     });
     return { cancel: async () => {}, respondApproval: () => {}, dispose: async () => {} };
@@ -262,6 +269,27 @@ describe('P3 任务集成分支', () => {
     await until(() => store.tasks.getTask(taskId)!.status, (s) => s === 'succeeded', '任务成功');
     expect(readFileSync(join(store.tasks.getTask(taskId)!.integrationWorktree!, 'README.md'), 'utf8')).toBe('# A + B\n');
     expect(store.merges.latestOf(node(taskId, 'b').id)).toMatchObject({ phase: 'done' });
+  });
+
+  it('审阅通过的是 A，审阅期间节点分支又多了 B：B 不会被自动合入，交给你；你确认后才合当前的提交（Codex 复审）', async () => {
+    await setup();
+    runtime.holdReviews = true;
+    const taskId = await confirmPlan([{ key: 'a', paths: ['src'] }]);
+    (await started('做 a')).succeed({ 'src/a.ts': 'a\n' });
+    await until(() => runtime.held.length, (n) => n === 1, '审阅开始');
+    const a = node(taskId, 'a');
+    // 审阅期间节点分支上多了一个没审过的提交
+    writeFileSync(join(a.worktreePath!, 'src', 'b.ts'), 'b\n');
+    git(a.worktreePath!, 'add', '-A');
+    git(a.worktreePath!, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'B');
+    runtime.held.shift()!();
+    await until(() => node(taskId, 'a').gateStage, (g) => g === 'human', '交给人');
+    expect(node(taskId, 'a').statusReason ?? '').toMatch(/验收之后又有新提交/);
+    expect(integrationHead(taskId)).toBe(initial);
+    // 你在桌面上确认：合节点分支当前的提交（含 B）
+    await tasks.decideReview(a.id, node(taskId, 'a').version, 'accept');
+    await until(() => node(taskId, 'a').status, (st) => st === 'succeeded', '你确认后合入');
+    expect(git(repo, 'ls-tree', '-r', '--name-only', integrationHead(taskId))).toContain('src/b.ts');
   });
 
   it('合并时出了不是冲突的 git 错误（快进被挡住）：操作记失败、节点交给人，不卡住', async () => {

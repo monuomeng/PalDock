@@ -25,6 +25,7 @@ const SQL = {
   get: `SELECT ${COLUMNS.merge()} FROM merge_ops WHERE id = ?`,
   // merge_ops_open，条件逐字一致
   open: `SELECT ${COLUMNS.merge()} FROM merge_ops WHERE ${OPEN} ORDER BY created_at`,
+  markChecked: `UPDATE merge_ops SET checked_at = ?2, updated_at = ?2 WHERE id = ?1`,
 } as const;
 
 /**
@@ -67,5 +68,9 @@ export class MergeRepository implements MergeStorePort {
   latestOf(subtaskId: string): MergeOpRecord | undefined {
     const row = this.db.get<MergeRow>(SQL.latestOf, subtaskId);
     return row && toMerge(row);
+  }
+
+  markChecked(id: string): void {
+    this.db.run(SQL.markChecked, id, this.clock.iso());
   }
 }
