@@ -15,14 +15,12 @@
 | [P1 本地最小产品](phases/p1-local-mvp/README.md) | 桌面 + 本地任务 + Codex | ✅ 完成 | 4 项全部完成 |
 | [P2 外部渠道](phases/p2-external-channels/README.md) | 飞书、Telegram 单聊与授权群聊 | 🟡 已合入，部分待实机 | 10 项：6 完成，3 待实机，1 部分完成 |
 | [P3 多助手协作](phases/p3-multi-assistant/README.md) | Codex + Claude 开发/测试/文档分工 | 🧪 待实机 | 12 项（P3-00…P3-11）2026-11-25 开发完成，待 Willem 实测与合并 |
-| [P4 桌宠体验](phases/p4-desktop-pet/README.md) | 桌宠动画、对话气泡、托盘、可访问性 | ⬜ 未开始 | |
+| [P4 桌宠体验](phases/p4-desktop-pet/README.md) | 桌宠动画、对话气泡、托盘、可访问性；对外 MCP 接口、渠道里切换会话 | ⬜ 未开始 | 已定待办 2 条（见下） |
 | [P5 稳定与生态](phases/p5-stability-ecosystem/README.md) | 更多渠道、模型、任务模板与扩展 | ⬜ 未开始 | |
 
 每个阶段的交付物和可验收退出条件写在该阶段的 `README.md`。
 
-### P3 之后的下一轮（编号待定）
-
-和 P3 计划里推迟的模式、触发器、提醒、向量与长期记忆同属这一轮，编号另行确认。2026-11-26 已定的待办：
+### P4 已定的待办（2026-11-26）
 
 1. **对外 MCP 接口转为正式功能**：让 Claude Desktop、claude CLI 等外部 MCP 客户端按工具规范读项目、会话、任务，给协调助手发话。试验在 `claude/external-mcp-spike` 分支的 `37617fa`，结论见 [P3 实测记录](phases/p3-multi-assistant/findings.md)「对外 MCP 接口试验」。正式做时要补：
    - 打包时把 `external-mcp.mjs` 放到 `asar` 外面（`asarUnpack`），装好的版本里也能用；

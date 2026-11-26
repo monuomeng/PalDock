@@ -105,7 +105,7 @@
 
 ## 对外 MCP 接口试验（2026-11-26，分支 `claude/external-mcp-spike`，Claude Code 2.1.325）
 
-Willem 的要求：「开放一些接口，让 Claude 按规范在 PalDock 中调用，可以测试一下」。结论：**可以实现，整条链路走通了。** 代码只在试验分支 `claude/external-mcp-spike` 的 `37617fa` 上，P3 分支只同步这一节文档；2026-11-26 你决定下一轮转为正式功能（见 [路线图](../../roadmap.md)）。
+Willem 的要求：「开放一些接口，让 Claude 按规范在 PalDock 中调用，可以测试一下」。结论：**可以实现，整条链路走通了。** 代码只在试验分支 `claude/external-mcp-spike` 的 `37617fa` 上，P3 分支只同步这一节文档；2026-11-26 你决定在 P4 转为正式功能（见 [路线图](../../roadmap.md)）。
 
 ### 做了什么（最小实现）
 
