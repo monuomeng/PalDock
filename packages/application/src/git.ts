@@ -1,5 +1,7 @@
-import { rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, rmSync } from 'node:fs';
 import { execFile } from 'node:child_process';
+import { join } from 'node:path';
 import { childEnv } from '@paldock/platform';
 
 /**
@@ -149,4 +151,29 @@ export async function dirtyFiles(repo: string): Promise<string[]> {
 /** 已跟踪文件相对 HEAD 的改动统计（不含未跟踪文件，它们单独列出）。只读。 */
 export async function workingDiffStat(repo: string): Promise<string> {
   return (await git(repo, ['diff', '--stat', 'HEAD'])).trimEnd();
+}
+
+/**
+ * 文件内容指纹（sha1；文件不存在记为 `-`）。「直接在项目目录里改」时，开始前记下工作区里已有改动的文件的内容，
+ * 结束时内容变了就算这次的改动（你自己改过、助手又改的文件也能分出来）。只读。
+ */
+export function fingerprints(repo: string, files: Iterable<string>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const file of files) {
+    try {
+      out.set(file, createHash('sha1').update(readFileSync(join(repo, file))).digest('hex'));
+    } catch {
+      out.set(file, '-');
+    }
+  }
+  return out;
+}
+
+/** 这次 Run 改了哪些文件：现在有改动、开始时没有的；开始时就有改动、内容变了（含被改回原样）的。 */
+export async function changedSince(repo: string, baseline: ReadonlyMap<string, string>): Promise<string[]> {
+  const dirty = await dirtyFiles(repo);
+  const candidates = new Set([...dirty, ...baseline.keys()]);
+  const now = fingerprints(repo, candidates);
+  const dirtyNow = new Set(dirty);
+  return [...candidates].filter((file) => (baseline.has(file) ? baseline.get(file) !== now.get(file) || !dirtyNow.has(file) : true)).sort();
 }

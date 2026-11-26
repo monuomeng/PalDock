@@ -5,7 +5,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { McpGateway, PlanService, RunSupervisor, TaskGraphScheduler } from '@paldock/application';
 import type { PersistentEvent, RunStartRequest, RuntimeAdapter, RuntimeEvent } from '@paldock/contracts';
 import { openStore, type Store } from '@paldock/storage-sqlite';
@@ -16,7 +16,8 @@ interface FakeRun {
   title: string;
   threadId: string;
   ended: boolean;
-  succeed(): void;
+  /** 交付：缺省写一个 `<标题>.txt`；给了 files 就写这些文件（相对工作目录）。 */
+  succeed(files?: Record<string, string>): void;
   /** 像 Claude 一样请求改文件 / 跑命令，返回宿主的决定（待审批时一直不返回）。 */
   ask(request: { kind: 'file_change'; path: string } | { kind: 'command'; command: string }): Promise<string>;
 }
@@ -53,10 +54,13 @@ class FakeRuntime implements RuntimeAdapter {
               : { nativeRequestId: id, kind: 'command' as const, summary: what.command, command: what.command };
           onEvent({ type: 'approval_request', request: req });
         }),
-      succeed: () => {
+      succeed: (files) => {
         if (run.ended) return;
         run.ended = true;
-        writeFileSync(join(request.cwd, `${title}.txt`), title);
+        for (const [path, content] of Object.entries(files ?? { [`${title}.txt`]: title })) {
+          mkdirSync(dirname(join(request.cwd, path)), { recursive: true });
+          writeFileSync(join(request.cwd, path), content);
+        }
         onEvent({ type: 'completed', finalMessage: `${title} 完成`, usage: { inputTokens: 100, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 } });
       },
     };
@@ -139,16 +143,21 @@ afterEach(async () => {
 });
 
 /** 协调助手经 MCP 提一份全是独立节点的计划并确认（多节点，不会自动确认）。 */
-async function runPlan(nodes: { key: string; role: string }[]): Promise<void> {
+async function runPlan(nodes: { key: string; role: string; dependsOn?: string[] }[]): Promise<void> {
+  await plans.confirm(...proposeOnly(nodes));
+}
+
+/** 只提出不确认：返回计划 ID 和版本。 */
+function proposeOnly(nodes: { key: string; role: string; dependsOn?: string[] }[]): [string, number] {
   const coordinator = store.tasks.createTask({ workspaceId, title: '协调', goal: 'g', role: 'coordinator', checkCommand: null, checkConfirmed: false, idempotencyKey: `c-${Math.random()}` }).record;
   const run = store.runs.createRun({ subtaskId: coordinator.subtask.id, sessionId: coordinator.session.id, runtime: 'claude' }).record;
   const caller = gateway.authenticate(gateway.issue(run.id, 'coordinator', 60_000))!;
   const { planId } = gateway.call(caller, 'propose_plan', {
     title: '计划',
     goal: '目标',
-    nodes: nodes.map((n) => ({ key: n.key, role: n.role, title: n.key, goal: `做 ${n.key}`, dependsOn: [] })),
+    nodes: nodes.map((n) => ({ key: n.key, role: n.role, title: n.key, goal: `做 ${n.key}`, dependsOn: n.dependsOn ?? [] })),
   }) as { planId: string };
-  await plans.confirm(planId, store.plans.getPlan(planId)!.version);
+  return [planId, store.plans.getPlan(planId)!.version];
 }
 
 async function until<T>(read: () => T, ok: (value: T) => boolean, what: string): Promise<T> {
@@ -350,5 +359,80 @@ describe('项目级助手设置（2026-11-26 已定）', () => {
     await until(pending, (p) => p.some((x) => x.risk_level === 'high'), '高风险要问');
     expect(auto()).toEqual(['allow:write_in_worktree', 'allow:run_command_in_worktree', 'allow:install_dependencies:high_only']);
     c.succeed();
+  });
+});
+
+describe('Codex 复审的修复（0.3.5）', () => {
+  const repo = () => store.tasks.getWorkspace(workspaceId)!.rootPath;
+  const setRole = (role: string, patch: Parameters<Store['projectSettings']['setRole']>[3]) =>
+    store.projectSettings.setRole(workspaceId, role, store.projectSettings.role(workspaceId, role).version, patch);
+
+  it('依赖两端一个直接改项目目录、一个用 worktree：提出时拒绝；提出后才改设置的，确认时拒绝', async () => {
+    await setup();
+    setRole('developer', { isolation: 'direct' });
+    expect(() => proposeOnly([{ key: 'd', role: 'developer' }, { key: 't', role: 'tester', dependsOn: ['d'] }])).toThrow(/拿不到上游的改动：d → t/);
+    // 没有依赖的可以混用
+    expect(() => proposeOnly([{ key: 'd', role: 'developer' }, { key: 't', role: 'tester' }])).not.toThrow();
+
+    setRole('developer', { isolation: 'worktree' });
+    const [planId, version] = proposeOnly([{ key: 'd', role: 'developer' }, { key: 't', role: 'tester', dependsOn: ['d'] }]);
+    setRole('developer', { isolation: 'direct' });
+    await expect(plans.confirm(planId, version)).rejects.toThrow(/拿不到上游的改动/);
+    setRole('tester', { isolation: 'direct' });
+    await expect(plans.confirm(planId, version)).resolves.toBeUndefined();
+  });
+
+  it('你改过的文件助手又改了：按内容比对，算进这次的交付并核对范围', async () => {
+    await setup({ maxRunsPerTask: 1 });
+    writeFileSync(join(repo(), 'config.ts'), 'export const a = 1;\n');
+    git(repo(), 'add', 'config.ts');
+    git(repo(), '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'config');
+    writeFileSync(join(repo(), 'config.ts'), 'export const a = 2; // 我自己的改动\n');
+    setRole('docs', { isolation: 'direct' });
+    await runPlan([
+      { key: 'g1', role: 'docs' },
+      { key: 'g2', role: 'docs' },
+    ]);
+    // 只改了文档：你原有的 config.ts 改动不算越界
+    const g1 = await started('g1');
+    g1.succeed({ 'docs/guide.md': '# 用法\n' });
+    await until(() => store.runs.getResult(g1.request.runId), (r) => r !== undefined, 'g1 交付');
+    expect(store.runs.getResult(g1.request.runId)).toMatchObject({ commitSha: null, outOfScope: [] });
+    // 又改了你改过的 config.ts：内容变了，算这次的改动，越出文档助手的交付范围
+    const g2 = await started('g2');
+    g2.succeed({ 'config.ts': 'export const a = 3;\n' });
+    await until(() => store.runs.getResult(g2.request.runId), (r) => r !== undefined, 'g2 交付');
+    expect(store.runs.getResult(g2.request.runId)!.outOfScope).toEqual(['config.ts']);
+  });
+
+  it('角色会话续用失败：强制新建会话，不借池里另一个空闲会话，首轮带角色说明', async () => {
+    await setup();
+    // 两个开发会话都空闲下来
+    await runPlan([
+      { key: 'p1', role: 'developer' },
+      { key: 'p2', role: 'developer' },
+    ]);
+    const [p1, p2] = await Promise.all([started('p1'), started('p2')]);
+    p1.succeed();
+    await new Promise((r) => setTimeout(r, 20));
+    p2.succeed();
+    await idle();
+    // 最近用过的（p2 的会话）会被优先续用：让它续不上
+    runtime.broken.add(p2.threadId);
+    await runPlan([{ key: 'q1', role: 'developer' }, { key: 'q2', role: 'tester' }]);
+    const q1 = await started('q1');
+    expect(q1.request.resumeThreadId).toBeUndefined();
+    expect(q1.request.instructions).toContain('你是 PalDock 的开发助手');
+    expect(q1.threadId).not.toBe(p1.threadId);
+    q1.succeed();
+    (await started('q2')).succeed();
+    await idle();
+    const developer = sessions().filter((x) => x.role === 'developer');
+    expect(developer.map((x) => [x.native_thread_id, x.status])).toEqual([
+      [p1.threadId, 'idle'],
+      [p2.threadId, 'retired'],
+      [q1.threadId, 'idle'],
+    ]);
+    logs.length = 0;
   });
 });

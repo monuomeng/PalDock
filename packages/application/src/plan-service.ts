@@ -48,6 +48,26 @@ export class PlanService {
     return new Set(this.deps.store.agents.listProfiles().map((p) => p.role).filter((role) => role !== 'coordinator'));
   }
 
+  /**
+   * 依赖两端的工作区要一样（Codex 复审 P1）：「直接在项目目录里改」的节点和用 worktree（或只读）的节点之间有依赖时，
+   * 下游拿不到上游的改动——直接写入的改动不进集成分支，worktree 节点的改动也不在你的工作区里。提出和确认时都查。
+   */
+  private assertSameWorkspace(workspaceId: string, nodes: readonly { key: string; role: string; dependsOn: readonly string[] }[]): void {
+    const direct = (role: string) => this.deps.store.projectSettings.role(workspaceId, role).isolation === 'direct';
+    const byKey = new Map(nodes.map((n) => [n.key, n]));
+    const crossing = nodes.flatMap((n) =>
+      n.dependsOn.flatMap((dep) => {
+        const upstream = byKey.get(dep);
+        return upstream && direct(upstream.role) !== direct(n.role) ? [`${dep} → ${n.key}`] : [];
+      }),
+    );
+    if (crossing.length === 0) return;
+    throw new CodedError(
+      'bad_request',
+      `这些依赖的两端一个直接在项目目录里改、一个用独立 worktree 或只读，下游拿不到上游的改动：${crossing.join('、')}。请让它们用同一种工作区（在「项目 → 助手」里改隔离方式），或去掉这些依赖`,
+    );
+  }
+
   /** 项目里没启用的角色不能派单（2026-11-26 已定，项目级助手设置）；提出和确认时都查。 */
   private assertEnabled(workspaceId: string, nodes: readonly { key: string; role: string }[]): void {
     const disabled = nodes.filter((n) => !this.deps.store.projectSettings.role(workspaceId, n.role).enabled);
@@ -68,6 +88,7 @@ export class PlanService {
     }
     validatePlan(args.nodes, this.specialistRoles());
     this.assertEnabled(task.workspaceId, args.nodes);
+    this.assertSameWorkspace(task.workspaceId, args.nodes.map((n) => ({ ...n, dependsOn: n.dependsOn ?? [] })));
     const { record, events } = store.plans.propose({
       workspaceId: task.workspaceId,
       title: args.title,
@@ -157,6 +178,7 @@ export class PlanService {
     validatePlan(store.plans.nodes(planId), this.specialistRoles());
     const task = store.tasks.getTask(plan.taskId)!;
     this.assertEnabled(task.workspaceId, store.plans.nodes(planId));
+    this.assertSameWorkspace(task.workspaceId, store.plans.nodes(planId));
     if (this.deps.integration && task.status === 'draft') await this.deps.integration.ensureBranch(task);
     const { record, events } = store.plans.confirm(planId, expectedVersion, note?.trim() || null, via);
     this.deps.publish(events);

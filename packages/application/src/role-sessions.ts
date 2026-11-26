@@ -53,6 +53,11 @@ export class RoleSessionPool {
     return { session: roleSessions.create(key), summaryTurn: false };
   }
 
+  /** 强制新建一个会话（续用失败后的回退用）：不借池里别的空闲会话，免得把按新会话拼的首轮提示送进旧会话。 */
+  createFresh(key: RoleSessionKey): RoleSessionLease {
+    return { session: this.deps.store.roleSessions.create(key), summaryTurn: false };
+  }
+
   /** 新会话首轮注入的摘要（同一组合最近换下的会话写的）。 */
   inheritedSummary(key: RoleSessionKey): string | null {
     return this.deps.store.roleSessions.latestSummary(key);

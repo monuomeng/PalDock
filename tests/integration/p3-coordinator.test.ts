@@ -23,11 +23,13 @@ interface FakeRun {
 }
 
 class FakeRuntime implements RuntimeAdapter {
-  readonly name = 'claude';
   readonly runs: FakeRun[] = [];
   /** 为真时，带 resumeThreadId 的启动直接失败（原生会话丢了）。 */
   failResume = false;
-  constructor(private readonly gateway: () => McpGateway) {}
+  constructor(
+    private readonly gateway: () => McpGateway,
+    readonly name = 'claude',
+  ) {}
 
   async discover() {
     const capabilities = { resume: true, streaming: true, approvals: true, cancel: true, workingDirectoryRestriction: false, attachments: false };
@@ -88,6 +90,7 @@ class FakeRuntime implements RuntimeAdapter {
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'core.longpaths=true', '-C', cwd, ...args], { encoding: 'utf8' }).trim();
 
 let root: string;
+let codex: FakeRuntime;
 let repo: string;
 let store: Store;
 let runtime: FakeRuntime;
@@ -99,7 +102,7 @@ let session: MainSessionRecord;
 const events: PersistentEvent[] = [];
 const logs: string[] = [];
 
-async function setup(limits: ConstructorParameters<typeof CoordinatorService>[0]['limits'] = {}) {
+async function setup(limits: ConstructorParameters<typeof CoordinatorService>[0]['limits'] = {}, withCodex = false) {
   root = mkdtempSync(join(tmpdir(), 'paldock-p3-coord-'));
   repo = join(root, 'repo');
   mkdirSync(repo);
@@ -121,7 +124,7 @@ async function setup(limits: ConstructorParameters<typeof CoordinatorService>[0]
   runtime = new FakeRuntime(() => gateway);
   supervisor = new RunSupervisor({
     store,
-    runtimes: { claude: runtime },
+    runtimes: withCodex ? { claude: runtime, codex: (codex = new FakeRuntime(() => gateway, 'codex')) } : { claude: runtime },
     mcp: { gateway, server: (token) => ({ name: 'paldock', command: 'node', args: [], env: { PALDOCK_MCP_TOKEN: token } }) },
     dataRoot: join(root, 'data'),
     publish,
@@ -420,5 +423,22 @@ describe('单人模式（项目级助手设置，2026-11-26 已定）', () => {
     review.reply('通过，改动合理');
     await until(() => store.coordinator.recentMessages(session.sessionId, 10).map((m) => m.body), (b) => b.includes('审阅助手：通过，改动合理'), '审阅结论进对话');
     expect(store.runs.getRun(review.request.runId)).toMatchObject({ purpose: 'review' });
+  });
+
+  it('单人用 Codex、审阅设为 Claude：改完后的审阅照审阅角色的设置，实际启动 Claude，只读（Codex 复审 P2）', async () => {
+    await setup({}, true);
+    store.agents.setOverride(session.workspaceId, 'reviewer', 'claude');
+    store.projectSettings.set(session.workspaceId, 0, { mode: 'solo', soloExecutor: 'codex', soloReview: true });
+    say('改一下 README');
+    const solo = await until(() => codex.runs[0], (r) => r !== undefined, '单人助手在 Codex 上开始');
+    expect(runtime.runs).toHaveLength(0);
+    writeFileSync(join(repo, 'README.md'), '# demo\n改了\n');
+    solo.reply('改好了');
+    const review = await until(() => runtime.runs[0], (r) => r !== undefined, '审阅在 Claude 上开始');
+    expect(review.request.prompt).toContain('请审阅单人助手');
+    expect(review.request.readOnly).toBe(true);
+    expect(codex.runs).toHaveLength(1);
+    review.reply('通过');
+    await until(() => store.coordinator.recentMessages(session.sessionId, 10).map((m) => m.body), (b) => b.includes('审阅助手：通过'), '审阅结论进对话');
   });
 });

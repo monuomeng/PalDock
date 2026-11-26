@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { AgentRole } from '@paldock/contracts';
 import type {
   CheckCommand,
@@ -26,7 +26,7 @@ import type {
 } from '@paldock/contracts';
 import { checkCapability, isAutoApproved, outOfScope, P1_DEFAULTS, taskKey } from '@paldock/domain';
 import { runCheck } from './check-runner.js';
-import { addWorktree, branchCommit, changedFiles, commitStaged, dirtyFiles, headCommit, stageAndDiffStat, workingDiffStat } from './git.js';
+import { addWorktree, branchCommit, changedFiles, changedSince, commitStaged, dirtyFiles, fingerprints, headCommit, stageAndDiffStat, workingDiffStat } from './git.js';
 import { accessOf, runPolicy, type RunPolicy } from './project-policy.js';
 import { redact } from './redact.js';
 import { operationOf, riskOf } from './risk.js';
@@ -100,8 +100,8 @@ interface LiveRun {
   lease: RoleSessionLease | undefined;
   /** 项目设置算出的隔离方式和审批严格度（2026-11-26 已定，项目级助手设置）。 */
   policy: RunPolicy;
-  /** 直接在项目目录里改时，开始前工作区里已经有改动的文件（不算这次的交付）。 */
-  directBaseline: Set<string> | undefined;
+  /** 直接在项目目录里改时，开始前工作区里已经有改动的文件和它们当时的内容指纹（内容没变的不算这次的交付）。 */
+  directBaseline: Map<string, string> | undefined;
 }
 
 /** 角色会话池的键和池大小（角色的 maxConcurrency）。 */
@@ -196,8 +196,21 @@ export class RunSupervisor {
     const subtask = store.tasks.getSubtask(subtaskId);
     const task = subtask && store.tasks.getTask(subtask.taskId);
     if (!subtask || !task) return undefined;
-    const mode = plan.review ? 'review' : task.kind === 'conversation' ? 'conversation' : 'work';
-    return runPolicy(store, task.workspaceId, plan.review?.role ?? subtask.role, mode).isolation === 'direct' ? task.workspaceId : undefined;
+    return this.policyOf(task, subtask, plan.review?.role ?? subtask.role, this.modeOf(task, plan)).isolation === 'direct' ? task.workspaceId : undefined;
+  }
+
+  private modeOf(task: TaskRecord, plan: RunPlan): LiveRun['mode'] {
+    return plan.review ? 'review' : task.kind === 'conversation' ? 'conversation' : 'work';
+  }
+
+  /**
+   * 这次 Run 的隔离与审批（项目设置）。「直接在项目目录里改」只用于计划节点和单人主会话：
+   * 旧入口的单子任务（新建任务、/new）始终在自己的 worktree 里，它们的继续 / 结束都靠那个 worktree。
+   */
+  private policyOf(task: TaskRecord, subtask: SubtaskRecord | null, role: string, mode: LiveRun['mode']): RunPolicy {
+    const policy = runPolicy(this.deps.store, task.workspaceId, role, mode);
+    const single = mode === 'work' && task.kind !== 'conversation' && !(subtask?.planId ?? null);
+    return single && policy.isolation === 'direct' ? { ...policy, isolation: 'worktree' } : policy;
   }
 
   /**
@@ -211,7 +224,7 @@ export class RunSupervisor {
     // 审阅（含单人模式改完后的审阅）都用审阅助手的角色会话；工作 Run 只有计划节点用
     if (!subtask || !task || (!plan.review && (task.kind === 'conversation' || !subtask.planId))) return undefined;
     const role = plan.review?.role ?? subtask.role;
-    const executor = this.executorOf(role, task, plan.review ? null : nodeOf(store, subtask)?.executor);
+    const executor = this.executorOf(role, task, this.modeOf(task, plan), plan.review ? null : nodeOf(store, subtask)?.executor);
     const parsed = AgentRole.safeParse(role);
     const max = (parsed.success && store.agents.getProfile(parsed.data)?.maxConcurrency) || 1;
     return { key: { workspaceId: task.workspaceId, role, executor: executor.name }, max };
@@ -309,19 +322,19 @@ export class RunSupervisor {
    * 子任务用哪个执行器：角色在项目里的执行器（项目覆盖优先）。只有一个适配器时直接用它。
    * 角色不在设置里（旧数据）时退回开发助手的设置。
    */
-  private executorOf(roleName: string, task: TaskRecord, override?: Executor | null): { name: string; access?: WorkspaceAccess; label: string } {
+  private executorOf(roleName: string, task: TaskRecord, mode: LiveRun['mode'], override?: Executor | null): { name: string; access?: WorkspaceAccess; label: string } {
     const adapters = Object.values(this.deps.runtimes);
     if (adapters.length === 1) return { name: adapters[0]!.name, label: roleName };
     const parsed = AgentRole.safeParse(roleName);
     const role = parsed.success ? parsed.data : 'developer';
     const profile = this.deps.store.agents.getProfile(role)!;
     // 计划节点上指定的执行器（确认前可改）优先，其次单人模式的执行器、项目覆盖，最后角色默认
-    const conversation = task.kind === 'conversation';
-    const settings = conversation ? this.deps.store.projectSettings.get(task.workspaceId) : undefined;
+    // 只有主会话本身用单人设置；单人模式改完后的审阅（挂在对话任务上）照审阅角色的设置走
+    const settings = mode === 'conversation' ? this.deps.store.projectSettings.get(task.workspaceId) : undefined;
     const solo = settings?.mode === 'solo';
     const name = override ?? (solo ? settings!.soloExecutor : null) ?? this.deps.store.agents.resolveExecutor(task.workspaceId, role) ?? profile.executor;
-    // 能力检查按项目设置的隔离方式（只读按只读检查，其余按可写）
-    const access = accessOf(runPolicy(this.deps.store, task.workspaceId, role, conversation ? 'conversation' : 'work').isolation);
+    // 能力检查按这次 Run 实际的隔离方式（只读按只读检查，其余按可写）
+    const access = accessOf(this.policyOf(task, null, role, mode).isolation);
     return { name, access, label: solo ? '单人助手' : profile.displayName };
   }
 
@@ -356,7 +369,7 @@ export class RunSupervisor {
       const taskEvents = detached ? [] : settleTask(store, moved.record.taskId);
       const task = store.tasks.getTask(moved.record.taskId)!;
       const role = plan.review?.role ?? moved.record.role;
-      executor = this.executorOf(role, task, plan.review ? null : nodeOf(store, moved.record)?.executor);
+      executor = this.executorOf(role, task, this.modeOf(task, plan), plan.review ? null : nodeOf(store, moved.record)?.executor);
       const run = store.runs.createRun({
         subtaskId,
         sessionId,
@@ -424,10 +437,10 @@ export class RunSupervisor {
         prompt: roleTurnPrompt({
           worktree: live.worktree!,
           packet: plan.prompt,
-          inheritedSummary: fresh ? this.pool.inheritedSummary(lease.session) : null,
-          writeSummary: lease.summaryTurn,
+          inheritedSummary: fresh ? this.pool.inheritedSummary(live.lease!.session) : null,
+          writeSummary: live.lease!.summaryTurn,
         }),
-        ...(fresh ? { instructions: roleInstructions({ name: live.role, displayName }, project) } : { resumeThreadId: lease.session.nativeThreadId! }),
+        ...(fresh ? { instructions: roleInstructions({ name: live.role, displayName }, project) } : { resumeThreadId: live.lease!.session.nativeThreadId! }),
       };
     };
     if (!lease.session.nativeThreadId) return start(turn(true));
@@ -439,10 +452,9 @@ export class RunSupervisor {
       this.publish([store.runs.addNotice(live.run.id, 'resume_failed', `角色会话续不上，换新会话：${errorText(error)}`)]);
       this.pool.abandon(lease);
       const slot = { workspaceId: lease.session.workspaceId, role: lease.session.role, executor: lease.session.executor };
-      live.lease = this.pool.acquire(slot);
+      live.lease = this.pool.createFresh(slot);
       live.run = store.runs.setRoleSession(live.run.id, live.lease.session.id, null);
-      const fresh = live.lease;
-      return start({ ...turn(true), ...(fresh.session.nativeThreadId ? { resumeThreadId: fresh.session.nativeThreadId } : {}) });
+      return start(turn(true));
     }
   }
 
@@ -466,7 +478,7 @@ export class RunSupervisor {
       policy: { isolation: 'worktree', approval: 'worktree_auto' },
       directBaseline: undefined,
     };
-    live.policy = runPolicy(this.deps.store, task.workspaceId, role, live.mode);
+    live.policy = this.policyOf(task, subtask, role, live.mode);
     this.live.set(subtask.id, live);
     return live;
   }
@@ -480,7 +492,7 @@ export class RunSupervisor {
     // 直接在项目目录里改（节点或单人主会话）：工作目录就是项目根目录，不建 worktree，也不把它记成 worktree
     // （记成 worktree 会被当成 PalDock 的目录清理）；记下开始前已有的改动，交付时不算进去
     if (live.policy.isolation === 'direct') {
-      live.directBaseline = new Set(await dirtyFiles(workspace.rootPath));
+      live.directBaseline = fingerprints(workspace.rootPath, await dirtyFiles(workspace.rootPath));
       return workspace.rootPath;
     }
     // 主会话（和单人模式改完后的审阅）：单人模式独立 worktree 时用那个长期的 worktree，其余在项目根目录里
@@ -767,17 +779,19 @@ export class RunSupervisor {
     const worktree = live.worktree!;
     const baseCommit = live.subtask.baseCommit ?? 'HEAD';
     const node = nodeOf(this.deps.store, live.subtask);
-    // 直接在项目目录里改：不暂存、不提交（那是用户自己的工作区），按这次新出现的改动核对交付范围
-    const direct = live.policy.isolation === 'direct' && node;
-    const base: Omit<NewRunResult, 'checkStatus'> = this.resultBase(live, finalMessage, direct ? await workingDiffStat(worktree) : await stageAndDiffStat(worktree, baseCommit));
+    // 工作目录就是项目根目录（直接在项目目录里改）：那是用户自己的工作区，不暂存、不提交，按内容变化核对这次的改动
+    const rootPath = this.deps.store.tasks.getWorkspace(live.task.workspaceId)!.rootPath;
+    const inProject = resolve(worktree).toLowerCase() === resolve(rootPath).toLowerCase();
+    const base: Omit<NewRunResult, 'checkStatus'> = this.resultBase(live, finalMessage, inProject ? await workingDiffStat(worktree) : await stageAndDiffStat(worktree, baseCommit));
     let check: { command: TaskRecord['checkCommand']; confirmed: boolean } = { command: live.task.checkCommand, confirmed: live.task.checkConfirmedAt !== null };
-    if (direct) {
-      const parsed = AgentRole.safeParse(live.subtask.role);
-      const roleScope = parsed.success ? (this.deps.store.agents.getProfile(parsed.data)?.deliveryScope ?? []) : [];
-      const changed = (await dirtyFiles(worktree)).filter((f) => !live.directBaseline?.has(f));
+    if (inProject) {
       base.commitSha = null;
-      base.outOfScope = outOfScope(changed, [...roleScope, ...node.paths]);
-      check = { command: node.checkCommand, confirmed: true };
+      if (node) {
+        const parsed = AgentRole.safeParse(live.subtask.role);
+        const roleScope = parsed.success ? (this.deps.store.agents.getProfile(parsed.data)?.deliveryScope ?? []) : [];
+        base.outOfScope = outOfScope(await changedSince(worktree, live.directBaseline ?? new Map()), [...roleScope, ...node.paths]);
+        check = { command: node.checkCommand, confirmed: true };
+      }
     } else if (node) {
       await commitStaged(worktree, `paldock: ${node.title}`);
       const sha = await headCommit(worktree);

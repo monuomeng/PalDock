@@ -442,3 +442,24 @@ describe('备份', () => {
     expect(readFileSync(join(path, 'artifacts', latest(reviewed).result!.checkOutputRef!), 'utf8')).toContain('ok');
   });
 });
+
+describe('项目设置成「直接在项目目录里改」时的旧入口单任务（Codex 复审 P1）', () => {
+  it('旧入口的单任务始终在自己的 worktree 里跑，收尾不动你的暂存区', async () => {
+    // 你自己的改动：一个已暂存、一个没暂存、一个未跟踪
+    writeFileSync(join(repo, 'staged.txt'), 'staged\n');
+    git(repo, 'add', 'staged.txt');
+    writeFileSync(join(repo, 'README.md'), '# demo\n我自己的改动\n');
+    writeFileSync(join(repo, 'untracked.txt'), 'mine\n');
+    const cachedBefore = git(repo, 'diff', '--cached');
+    const statusBefore = git(repo, 'status', '--porcelain');
+
+    const created = await create('做一点改动');
+    await call('project.setRole', { workspaceId: created.workspace.id, role: 'developer', expectedVersion: 0, isolation: 'direct', confirmDirect: true });
+    const second = await create('再做一点改动');
+    const done = await until(second.task.id, (d) => d.subtask.status === 'review');
+    expect(done.subtask.worktreePath).not.toBeNull();
+    expect(done.subtask.worktreePath).not.toBe(repo);
+    expect(git(repo, 'diff', '--cached')).toBe(cachedBefore);
+    expect(git(repo, 'status', '--porcelain')).toBe(statusBefore);
+  });
+});
