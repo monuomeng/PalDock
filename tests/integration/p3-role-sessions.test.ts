@@ -61,14 +61,20 @@ class FakeRuntime implements RuntimeAdapter {
           mkdirSync(dirname(join(request.cwd, path)), { recursive: true });
           writeFileSync(join(request.cwd, path), content);
         }
+        begin();
         onEvent({ type: 'completed', finalMessage: `${title} 完成`, usage: { inputTokens: 100, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 } });
       },
     };
     this.runs.push(run);
-    setImmediate(() => {
+    // 真实执行器总是先报 thread / turn 再报完成：测试先调 succeed 时也先补上，不靠 setImmediate 的时序
+    let begun = false;
+    const begin = () => {
+      if (begun) return;
+      begun = true;
       onEvent({ type: 'thread', threadId });
       onEvent({ type: 'turn', turnId: `turn_${request.runId}` });
-    });
+    };
+    setImmediate(begin);
     return {
       respondApproval: (id: string, decision: string) => decisions.get(id)?.(decision),
       cancel: async () => {

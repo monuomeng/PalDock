@@ -50,13 +50,21 @@ class FakeRuntime implements RuntimeAdapter {
           mkdirSync(dirname(join(request.cwd, path)), { recursive: true });
           writeFileSync(join(request.cwd, path), content);
         }
+        begin();
         onEvent({ type: 'completed', finalMessage: `${title} 完成` });
       },
     };
     this.runs.push(run);
-    setImmediate(() => {
+    // 真实执行器总是先报 thread / turn 再报完成：测试先调 succeed 时也先补上，不靠 setImmediate 的时序（macOS CI 上曾因此偶发失败）
+    let begun = false;
+    const begin = () => {
+      if (begun) return;
+      begun = true;
       onEvent({ type: 'thread', threadId: request.resumeThreadId ?? `thr_${request.runId}` });
       onEvent({ type: 'turn', turnId: `turn_${request.runId}` });
+    };
+    setImmediate(() => {
+      begin();
       if (review) {
         const finish = () => {
           this.approve(request.mcpServer!.env.PALDOCK_MCP_TOKEN!);

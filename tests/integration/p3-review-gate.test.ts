@@ -29,6 +29,9 @@ class FakeRuntime implements RuntimeAdapter {
     return { runtime: this.name, available: true, capabilities };
   }
 
+  /** thread / turn 事件晚到（macOS CI 慢时出现过）：用来回归「完成先于 thread 到达」。 */
+  lateThread = false;
+
   async start(request: RunStartRequest, onEvent: (event: RuntimeEvent) => void) {
     const reviewed = /请审阅子任务「(.+?)」/.exec(request.prompt)?.[1];
     const title = reviewed ? `审阅:${reviewed}` : (/你负责的子任务：(.+)/.exec(request.prompt)?.[1] ?? /子任务的目标：\n(.+)/.exec(request.prompt)?.[1] ?? '?');
@@ -43,14 +46,22 @@ class FakeRuntime implements RuntimeAdapter {
           mkdirSync(dirname(join(request.cwd, path)), { recursive: true });
           writeFileSync(join(request.cwd, path), content);
         }
+        begin();
         onEvent({ type: 'completed', finalMessage: `${title} 完成` });
       },
     };
     this.runs.push(run);
-    setImmediate(() => {
+    // 真实执行器总是先报 thread / turn 再报完成：测试先调 succeed 时也先补上，不靠 setImmediate 的时序（macOS CI 上曾因此偶发失败）
+    let begun = false;
+    const begin = () => {
+      if (begun) return;
+      begun = true;
       onEvent({ type: 'thread', threadId: request.resumeThreadId ?? `thr_${request.runId}` });
       onEvent({ type: 'turn', turnId: `turn_${request.runId}` });
-    });
+    };
+    // lateThread：模拟慢机器上 thread 事件晚到（测试在它之前就让 Run 完成）
+    if (this.lateThread) setTimeout(begin, 80);
+    else setImmediate(begin);
     return {
       cancel: async () => {
         if (run.ended) return;
@@ -228,8 +239,10 @@ describe('P3 验收闸门与审阅', () => {
     expect(view.gate).toMatchObject({ result: { commitSha: result.commitSha }, reviews: [{ decision: 'accept' }] });
   });
 
-  it('审阅退回 → 回到开发助手同一个会话按意见重做 → 再审通过', async () => {
+  for (const late of [false, true])
+  it(`审阅退回 → 回到开发助手同一个会话按意见重做 → 再审通过${late ? '（thread 事件晚到：慢机器上的时序）' : ''}`, async () => {
     await setup();
+    runtime.lateThread = late;
     const taskId = await confirmPlan();
     await waitRun('实现');
     const first = runtime.latest('实现');
